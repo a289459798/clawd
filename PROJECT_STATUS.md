@@ -1,45 +1,80 @@
 # clawx 项目状态文档
 
-> 最后更新：2026-04-17 17:50 GMT+8
-> 本文档用于记录项目当前状态，方便后续 AI 或开发者快速接手继续工作。
+> 最后更新：2026-04-21 12:30 GMT+8
+> 本文档只记录当前真实实现状态，方便后续继续开发。
 
 ---
 
-## 一、项目说明
+## 〇、最近进展（2026-04-21）
 
-### 1.1 项目定位
+### 2026-04-21 中午修复 — 消息 usage 显示与模型默认值
 
-**clawx** 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，目标是**把 OpenClaw 变成一个更顺手、更像常规桌面软件的工作台**。
+#### 消息 footer usage 修复
+- **根因**：JSONL 中的 input 值是累积的（包含完整上下文），output 值是单次回复的
+- 旧代码：直接取 JSONL 原始值，导致 input 显示异常大（如 `87.8K`），output 因非累积特性显示也不对
+- 修复后：input 取相邻 assistant 消息的差值（delta），output 取原始值（已是单次回复）
+- 同时新增 `cache_read_tokens` 和 `cache_write_tokens` 的 delta 计算
 
-核心定位：
-> **clawx = OpenClaw 的桌面工作台 / 管理壳，而不是另一个聊天机器人 UI。**
+#### 模型默认值修复
+- `resolveConversationDefaultModel` 的 useEffect 依赖项过多（`model`、`updatedAt`、`previewMessages`），导致不必要地频繁重置
+- 修复后：仅依赖 `activeConversation?.id` 和 `resolveConversationDefaultModel`
+- 优先级：1) 最后 assistant 消息的 model → 2) agent 配置 model → 3) 第一个选项
 
-### 1.2 解决的问题
+#### 类型补全
+- `PreviewMessage` 新增 `cache_write_tokens` 字段
+- `SessionMessage` Rust 结构同步新增 `cache_read_tokens` 和 `cache_write_tokens`
+- `SnapshotSession.preview_messages` 前端类型同步更新
 
-1. **切换对话窗口不够顺手**
-   - 多个会话并行时，需要频繁切换
-   - 很难像常规桌面软件一样总览当前工作状态
+### 2026-04-21 下午完成的改动
 
-2. **agent 和对话的关系不够直观**
-   - OpenClaw 可以配置多个 agent
-   - 每个 agent 下又可能有多个对话 / session
-   - 目前这种结构没有很好地体现在界面里
+#### 对话详情页 — 真实发送与流式更新
+- 详情页已接入真实消息发送（`gateway_chat_send`）
+- 发送后先插入本地占位消息，再用 `chat.delta` / `chat.final` 事件流式更新 assistant 回复
+- final 事件完成后会主动重新拉取历史，补齐 usage 数据
 
-3. **skills 和 channel 配置分散**
-   - skill 列表、channel 连接配置、统计信息分散在不同地方
-   - 不利于集中管理和快速查看
+#### 消息级模型展示与默认值
+- assistant 消息已接入 `model / provider / api` 展示
+- 模型默认值规则：有历史对话取上次 assistant 模型，新对话取 OpenClaw 默认模型
+- 每次发送显式携带当前选中的模型
 
-### 1.3 产品目标
+#### 消息 footer（类 webchat 用法展示）
+- 仅在最后一条 assistant 消息底部显示
+- 内容：`↑输出 ↓输入 R缓存 · 模型名 · 时间`
+- token 使用紧凑格式（例如 `21.7K`）
+- 进行中默认展开，完成后默认收起
 
-- 把 OpenClaw 的日常操作组织成更清晰的桌面工作流
-- 在一个界面里管理多个 agent 与多个对话
-- 让工作中的对话自动排到前面
-- 让已关闭的对话不占据主工作区，但仍然保留在左侧资源列表中
-- 可视化查看 skills
-- 可视化查看 channel 连接状态与配置入口
-- 提供一键打开本地 OpenClaw 网页入口
+#### 连续工具调用折叠
+- 提升到消息流层做分组：连续纯工具消息合并为一个工具组
+- 工具组展开后先列工具列表，再点单个工具看参数和结果
+- 解决了之前“工具调用 1 项”刷屏的问题
 
-### 1.4 技术栈
+#### Gateway 代理发送
+- 通过 Tauri Rust 后端代理 Gateway `chat.history` / `chat.send`
+- 不再依赖前端直连 Control UI websocket（规避 device identity / secure context 限制）
+- 发送参数：`sessionKey / message / idempotencyKey / model / thinking / deliver=false / inputProvenance.kind=external_user`
+- clawx 来源标识通过代理层请求头透传
+
+---
+
+## 一、项目定位
+
+**clawx** 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目,目标是把 **OpenClaw 变成更顺手的桌面工作台**。
+
+核心定位:
+
+> **clawx = OpenClaw 的桌面工作台 / 管理壳,不是另一个聊天 UI。**
+
+当前重点是:
+
+- 用桌面工作流组织 OpenClaw 的 agent / session / skill / channel
+- 提供更直观的对话列表与当前对话详情视图
+- 优先打通真实本地数据读取,再逐步接入真实发送与实时同步
+
+---
+
+## 二、当前真实实现
+
+### 2.1 技术栈
 
 | 层级 | 技术 |
 |------|------|
@@ -47,96 +82,120 @@
 | 语言 | TypeScript |
 | 构建工具 | Vite 7 |
 | 桌面端 | Tauri 2 |
-| Rust | Tauri 命令桥接 |
+| 后端桥接 | Rust / Tauri commands |
 
-### 1.5 目录结构
+### 2.2 当前界面结构
 
-```
-/Users/zhangzy/Workspace/clawx/
-├── src/                      # 前端代码
-│   ├── App.tsx              # 主界面入口
-│   ├── App.css              # 全局样式
-│   ├── main.tsx             # React 入口
-│   └── ...
-├── src-tauri/               # Tauri 后端
-│   ├── src/
-│   │   └── lib.rs          # Tauri 命令桥接
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── package.json
-├── tsconfig.json
-├── vite.config.ts
-└── README.md
-```
+#### 左侧一级导航
+当前有 3 个模块:
+
+- 对话
+- 技能
+- 连接
+
+左下角有一个入口按钮,可直接打开本地 OpenClaw 网页。
+
+#### 对话页
+对话页由两部分组成:
+
+1. **左侧资源区**
+   - 展示 agent + 会话树
+   - 每个会话显示标题、token、状态
+   - 支持将隐藏会话重新加入主工作区
+
+2. **主工作区**
+   - 默认显示对话卡片列表
+   - 点击卡片正文或右上角放大图标,进入当前对话详情页
+   - 点击关闭图标,可将该对话从主工作区隐藏
+
+#### 对话列表卡片当前展示内容
+
+- 对话标题
+- 所属 agent
+- 模型名
+- 累计 token 用量(例如 `19.4K`)
+- 状态徽章
+- 最后一条 assistant 回复摘要(优先)
+- 最近活跃时间
+
+当前列表规则:
+
+- **不展示工作目录**
+- 状态文案为:`进行中 / 已完成 / 空闲中`
+- 排序顺序为:`进行中 → 已完成 → 空闲中`
+
+当前状态判断规则:
+
+- 最新消息是 `user`,且 30 分钟内有交互 → `进行中`
+- 最新消息是 `assistant` / `toolResult`,且 30 分钟内有交互 → `已完成`
+- 超过 30 分钟无交互 → `空闲中`
+
+> 注意:这仍然是规则推断,不是 OpenClaw 明确返回的真实运行态字段。
+
+#### 对话详情页当前展示内容
+
+- 对话标题
+- agent / model
+- 工作目录
+- 最近活跃时间
+- token 统计拆分:
+  - 总量
+  - 输入
+  - 输出
+  - 缓存读取
+  - 缓存写入
+- 最近上下文预览
+- 可直接发送消息的输入区
+
+当前详情页是**主界面内详情页**,不是独立子窗口。
+
+#### 技能页
+当前展示:
+
+- skill 名称
+- 简短说明
+- 文件路径
+- 启用状态
+
+#### 连接页
+当前展示:
+
+- channel / connection 名称
+- 连接状态
+- 配置项位置
+- 最近活动信息
 
 ---
 
-## 二、已完成的工作
+## 三、真实数据接入情况
 
-### 2.1 基础架构
-
-- ✅ Tauri + React + TypeScript 项目骨架搭建
-- ✅ 常规桌面软件风格的布局结构
-- ✅ 顶部栏 / 左侧导航 / 资源区 / 主工作区
-- ✅ 构建流程通过（pnpm build + cargo check）
-
-### 2.2 界面结构
-
-#### 左侧导航
-- ✅ 三个导航模块：对话、技能、连接
-- ✅ 导航状态管理（activeNav）
-- ✅ 底部操作区（打开本地 OpenClaw 按钮）
-
-#### 对话页
-- ✅ 左侧资源区展示 agent + 对话树形关系
-- ✅ Agent 信息展示（状态、模型、配置文件路径、职责说明）
-- ✅ 对话树展示（标题、状态、token 数）
-- ✅ 新建对话按钮入口（每个 agent 下）
-- ✅ 对话可见性切换（显示/隐藏）
-- ✅ 对话展开/收起交互
-
-#### 主工作区（对话详情）
-- ✅ 单会话聚焦展示模式
-- ✅ 历史消息预览（从真实 session jsonl 读取）
-- ✅ 消息按 role 区分展示（User / Assistant / System）
-- ✅ 对话元信息展示（工作目录、模型、Token 数、最后活跃时间）
-- ✅ 发送消息输入框（位于底部）
-- ✅ 文件附件入口（左下角）
-- ✅ 发送按钮（右下角）
-- ✅ 消息发送后本地 UI 更新
-
-#### 技能页
-- ✅ Skill 列表展示
-- ✅ Skill 信息：名称、摘要、文件路径、启用状态
-
-#### 连接页
-- ✅ Channel/Connection 列表展示
-- ✅ 连接状态：已连接 / 需检查 / 未启用
-- ✅ 配置项位置和最近活动信息
-
-### 2.3 真实数据接入（Tauri 端）
-
-#### 已实现的 Tauri 命令
-
-| 命令 | 功能 | 状态 |
-|------|------|------|
-| `resolve_dashboard_url` | 调用 `openclaw dashboard --no-open` 获取真实 URL 并打开 | ✅ 完成 |
-| `load_openclaw_snapshot` | 读取本地 OpenClaw 配置和状态快照 | ✅ 完成 |
-
-#### 已接入的真实数据源
+### 3.1 已接入的数据源
 
 | 数据源 | 路径 | 状态 |
 |--------|------|------|
-| OpenClaw 主配置 | `~/.openclaw/openclaw.json` | ✅ 已读取 |
-| Agent 列表 | 从主配置解析 | ✅ 已读取 |
-| Session 元数据 | `~/.openclaw/agents/<agentId>/sessions/sessions.json` | ✅ 已读取 |
-| Session 消息预览 | `~/.openclaw/agents/<agentId>/sessions/*.jsonl` | ✅ 已读取（最后消息 + 最近 12 条） |
-| Skills 列表 | `~/Workspace/nodejs/clawdbot/skills` + `~/.agents/skills` | ✅ 已读取 |
-| Channels 列表 | 从主配置解析 | ✅ 已读取 |
+| OpenClaw 主配置 | `~/.openclaw/openclaw.json` | ✅ 已接入 |
+| Agent 列表 | 从主配置解析 | ✅ 已接入 |
+| Session 元数据 | `~/.openclaw/agents/<agentId>/sessions/sessions.json` | ✅ 已接入 |
+| Session 消息预览 | `~/.openclaw/agents/<agentId>/sessions/*.jsonl` | ✅ 已接入 |
+| Session token 用量 | `*.jsonl` 中的 `usage.*` | ✅ 已接入 |
+| Skills 列表 | `~/Workspace/nodejs/clawdbot/skills` + `~/.agents/skills` | ✅ 已接入 |
+| Channels 列表 | 从主配置解析 | ✅ 已接入 |
+| Dashboard URL | `openclaw dashboard --no-open` | ✅ 已接入 |
 
-#### load_openclaw_snapshot 返回结构
+### 3.2 当前 Tauri 命令
 
-```typescript
+| 命令 | 功能 | 状态 |
+|------|------|------|
+| `resolve_dashboard_url` | 获取本地 OpenClaw dashboard URL | ✅ |
+| `load_openclaw_snapshot` | 读取本地 OpenClaw 配置和会话快照 | ✅ |
+| `resolve_gateway_auth` | 读取本地 Gateway websocket 地址和 token | ✅ |
+| `gateway_status` | 获取 Tauri Gateway 代理连接状态 | ✅ |
+| `gateway_chat_history` | 通过 Tauri Gateway 代理拉取会话历史 | ✅ |
+| `gateway_chat_send` | 通过 Tauri Gateway 代理发送消息 | ✅ |
+
+### 3.3 当前快照结构
+
+```ts
 {
   agents: Array<{
     id: string;
@@ -155,7 +214,27 @@
     session_file?: string;
     last_message?: string;
     last_role?: string;
-    preview_messages: Array<{ role?: string; text: string }>;
+    latest_event_role?: string;
+    latest_event_type?: string;
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+    total_tokens?: number;
+    total_tokens_fresh?: boolean;
+    estimated_cost_usd?: number;
+    preview_messages: Array<{
+      role?: string;
+      text: string;
+      parts?: MessagePart[];
+      model?: string;
+      provider?: string;
+      api?: string;
+      timestamp?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_tokens?: number;
+    }>;
   }>;
   connections: Array<{
     id: string;
@@ -170,289 +249,137 @@
 }
 ```
 
-### 2.4 前端状态管理
+---
 
-- ✅ agents 状态（从 mock 逐步切换到真实数据）
-- ✅ skills 状态（从 fallback 切换到真实数据）
-- ✅ connections 状态（从 fallback 切换到真实数据）
-- ✅ expandedConversationId（当前展开的对话）
-- ✅ showResourceSidebar（左侧资源区展开/收起）
-- ✅ composerText（输入框文本）
-- ✅ selectedFiles（附件列表）
-- ✅ chatSearch（对话搜索关键词）
-- ✅ activeConversation（当前选中的会话）
+## 四、已完成的关键改动
 
-### 2.5 交互功能
-
-- ✅ 对话可见性切换（在工作区显示/隐藏）
-- ✅ 对话展开/收起
-- ✅ 左侧 Agent 树点击选中对话
-- ✅ 文本消息发送（本地 UI 更新）
-- ✅ 文件附件添加（mock）
-- ✅ 对话搜索（按标题、摘要、历史消息过滤）
-
-### 2.6 样式系统
-
-- ✅ 深色主题
-- ✅ 响应式布局（三栏：导航 92px + 资源区 320px + 工作区自适应）
-- ✅ 资源区展开/收起（320px ↔ 44px）
-- ✅ 卡片样式、按钮样式、输入框样式
-- ✅ 消息气泡样式（User / Assistant / System 区分）
-- ✅ 状态徽章（进行中 / 空闲 / 已完成）
+- ✅ 明确产品定位为 OpenClaw 桌面工作台
+- ✅ 修正对话列表"缩小/返回列表"逻辑
+- ✅ 对话列表摘要改为优先显示最后一条 assistant 回复
+- ✅ 去掉顶部对话工具栏中的搜索、新建对话、刷新历史入口
+- ✅ 调整列表响应式布局,避免小窗口重叠
+- ✅ 卡片标题与按钮布局收紧
+- ✅ 放弃不稳定的子窗口方案,改为主界面内详情页
+- ✅ 对话详情页骨架完成
+- ✅ 从真实 session jsonl 中解析最后回复摘要
+- ✅ 从真实 session jsonl 中累计 token 统计
+- ✅ 详情页展示 token 拆分统计
+- ✅ 列表页样式收敛,弱化摘要和时间视觉权重
+- ✅ README 与本状态文档已同步到当前实现
+- ✅ 列表页已接入基于本地 OpenClaw session transcript 的准实时增量刷新(状态、摘要、usage)
+- ✅ 对话详情页已接入真实发送能力,底层改为 Tauri Rust 后端代理 Gateway `chat.history` + `chat.send`
+- ✅ 发送参数已接入 `sessionKey / message / idempotencyKey / model / thinking / deliver=false / inputProvenance.kind=external_user`
+- ✅ clawx 来源标识已通过代理层请求头透传
+- ✅ assistant 消息级已接入 `model / provider / api` 展示
+- ✅ 模型默认值逻辑已接入,优先使用会话上次回复模型,否则回退到 OpenClaw 默认模型
+- ✅ 每次发送都会显式携带当前选中的模型
+- ✅ 发送后先插入本地占位消息，再用 chat delta/final 事件刷新 assistant 回复
+- ✅ final 完成后主动刷新历史，补齐 usage 数据到 footer
+- ✅ assistant 消息 footer 仅挂在最后一条回复底部，显示 `↑输出 ↓输入 R缓存 · 模型 · 时间`
+- ✅ token 数字使用紧凑格式（例如 `21.7K`）
+- ✅ 连续纯工具消息（多条连续消息）折叠为一个工具组，解决工具刷屏
+- ✅ 工具组内支持二级展开：先看工具列表，再点看单个工具的参数和结果
+- ✅ streaming 中默认展开工具组，完成后默认收起
+- ✅ 消息渲染保持原 transcript 顺序，不再重排
 
 ---
 
-## 三、未完成的工作
+## 五、当前未完成项
 
-### 3.1 高优先级（核心功能）
+### 5.1 高优先级
 
-#### 3.1.1 真实消息发送
-- ❌ 文本消息未接入真实 `chat.send`（目前仅本地 UI 更新）
-- ❌ 文件上传未实现（目前仅 mock 附件列表）
-- ❌ 语音功能已移除（按用户要求）
+#### 真实发送能力
+- ✅ 详情页已接入真实消息发送
+- ✅ 模型 / 思考模式已真正下发到 Gateway 发送参数
+- ✅ 流式更新（delta/final）已接入
+- ❌ 未接入文件上传
+- ❌ 未接入音频发送
 
-**需要对接的 OpenClaw 能力：**
-- Gateway WebSocket 连接
-- `chat.send` RPC 调用
-- 文件上传流程
-- 实时消息流接收
+#### 真实历史拉取
+- ✅ 当前详情页已接入 `chat.history`
+- ✅ final 后自动刷新补齐 usage
+- ❌ 未实现分页或增量加载
+- ⚠️ 部分消息的 usage 数据在某些场景下仍未正确显示（待对齐 webchat 用法计算逻辑）
 
-#### 3.1.2 真实历史拉取
-- ❌ 当前历史消息来自本地 jsonl 文件预览
-- ❌ 未接入真实 `chat.history`
-- ❌ 未实现增量加载/分页
+#### 新建对话
+- ❌ 左侧"新建对话"按钮还未接真实创建流程
+- ❌ 新建对话的默认模型取 OpenClaw 配置还没接
 
-**需要对接的 OpenClaw 能力：**
-- `chat.history` RPC 调用
-- 消息标准化处理（去除指令标签、tool-call XML 等）
+### 5.2 中优先级
 
-#### 3.1.3 新建对话
-- ❌ 左侧"新建对话"按钮未实现真实功能
-- ❌ 未接入 `sessions.create` 或 `/new` 命令
+#### 真实运行状态
+- ⚠️ 当前列表状态已支持准实时刷新，但仍基于 transcript 增量事件 + 本地规则推断
+- ❌ 还未接入 Gateway RPC 明确提供的标准运行态字段
 
-**需要对接的 OpenClaw 能力：**
-- `sessions.create` RPC
-- 或 `sessions_send` 到主会话执行 `/new`
+#### footer 对齐 webchat 用法条
+- ⚠️ 当前 footer 已接入 `↑输出 ↓输入 R缓存 · 模型 · 时间`
+- ❌ 尚未对齐 webchat 的 `0%`（缓存命中率）和 `ctx`（上下文占比）
+- ❌ 需要确认 webchat 的 ↑/↓ 究竟对应 usage 里哪个字段
 
-### 3.2 中优先级（体验优化）
-
-#### 3.2.1 实时状态同步
-- ❌ 对话状态（working/idle/completed）目前基于更新时间推断
-- ❌ 未接入真实运行状态
-- ❌ Token 统计目前是占位符
-
-#### 3.2.2 Agent 管理
+#### 管理能力
 - ❌ 新建 Agent 未实现
 - ❌ Agent 配置编辑未实现
-- ❌ Agent 删除未实现
+- ❌ Skill 启停与安装未实现
+- ❌ Connection 配置编辑与刷新未实现
 
-#### 3.2.3 Skill 管理
-- ❌ Skill 启用/禁用切换未实现
-- ❌ Skill 详情查看未实现
-- ❌ Skill 安装未实现
+### 5.3 低优先级
 
-#### 3.2.4 Connection 管理
-- ❌ Connection 配置编辑未实现
-- ❌ Connection 状态刷新未实现
-- ❌ QR 登录等能力未接入
+#### 代码结构整理
+- ❌ 当前主要逻辑仍集中在 `src/App.tsx`
+- ❌ 尚未拆分为组件 / feature 模块
 
-### 3.3 低优先级（辅助功能）
+建议未来拆分:
 
-#### 3.3.1 代码结构优化
-- ❌ 当前所有逻辑在单文件 `App.tsx`
-- ❌ 未拆分为组件/feature 模块
-- ❌ 类型定义分散
-
-**建议拆分：**
-```
+```txt
 src/
 ├── components/
-│   ├── PrimaryNav.tsx
-│   ├── ResourceSidebar.tsx
-│   ├── ConversationCard.tsx
-│   ├── Composer.tsx
-│   └── ...
 ├── features/
-│   ├── conversations/
-│   ├── skills/
-│   └── connections/
-├── types/
-│   └── index.ts
 ├── hooks/
-│   └── useOpenClawSnapshot.ts
+├── types/
 └── ...
 ```
 
-#### 3.3.2 Gateway 连接管理
-- ❌ WebSocket 连接状态未展示
-- ❌ 断线重连未实现
-- ❌ 认证管理未实现
+---
 
-#### 3.3.3 设置页
-- ❌ 设置页未创建
-- ❌ Gateway 地址配置未实现
-- ❌ 主题/外观设置未实现
+## 六、下一步建议
+
+### 第一优先级
+1. **footer 对齐 webchat** — 确认 ↑/↓/R/0%/ctx 与 usage 字段的对应关系
+2. **新建对话** — 打通真实创建流程，默认模型取自 OpenClaw 配置
+3. **接入文件上传** — 支持图片/文件发送到 Gateway
+
+### 第二优先级
+4. 接入音频发送
+5. 在 OpenClaw CLI 配置恢复后，进一步直接消费更完整的 Gateway RPC / 标准事件流，减少 transcript watcher 依赖
+6. 做详情页和列表页的进一步视觉收敛
+7. 拆分 `App.tsx` — 拆为组件 / feature 模块
+
+### 第三优先级
+8. 新建 Agent / Agent 配置编辑
+9. Skill 启停与安装
+10. Connection 配置编辑与刷新
+11. 历史消息分页 / 增量加载
 
 ---
 
-## 四、下一步工作建议
+## 七、关键文件
 
-### 4.1 最紧急（让对话真正可用）
-
-1. **接入 Gateway WebSocket**
-   - 在 Tauri 端实现 WebSocket 连接
-   - 或在前端直接连接 Gateway WS（需要处理认证）
-
-2. **实现 `chat.send`**
-   - 文本消息真实发送
-   - 接收并展示响应流
-
-3. **实现 `chat.history`**
-   - 拉取当前会话历史记录
-   - 替换当前本地 jsonl 预览
-
-### 4.2 次紧急（完善核心流程）
-
-4. **实现新建对话**
-   - 左侧"新建对话"按钮真实功能
-   - 创建后自动切换到新会话
-
-5. **实现文件上传**
-   - 选择文件
-   - 上传并发送
-
-### 4.3 后续优化
-
-6. **代码拆分重构**
-7. **Agent/Skill/Connection 管理功能**
-8. **设置页**
-9. **实时状态同步**
+- `/Users/zhangzy/Workspace/clawx/src/App.tsx`
+- `/Users/zhangzy/Workspace/clawx/src/App.css`
+- `/Users/zhangzy/Workspace/clawx/src/main.tsx`
+- `/Users/zhangzy/Workspace/clawx/src-tauri/src/lib.rs`
+- `/Users/zhangzy/Workspace/clawx/src-tauri/src/main.rs`
+- `/Users/zhangzy/Workspace/clawx/src-tauri/Cargo.toml`
+- `/Users/zhangzy/Workspace/clawx/src-tauri/tauri.conf.json`
+- `/Users/zhangzy/Workspace/clawx/README.md`
 
 ---
 
-## 五、OpenClaw 对接参考
-
-### 5.1 Gateway WebSocket
-
-**连接地址：**
-- 默认：`ws://127.0.0.1:18789`
-- 认证：通过 `gateway.auth.token` 或 Tailscale Serve identity
-
-**核心 RPC 方法：**
-
-| 方法 | 用途 |
-|------|------|
-| `chat.history` | 拉取会话历史 |
-| `chat.send` | 发送消息 |
-| `chat.abort` | 停止当前运行 |
-| `chat.inject` | 注入助手笔记（不触发运行） |
-| `sessions.list` | 列出会话 |
-| `sessions.create` | 创建新会话 |
-| `sessions.patch` | 更新会话元数据 |
-| `sessions.send` | 向会话发送消息 |
-
-### 5.2 参考文档
-
-- `/Users/zhangzy/Workspace/nodejs/clawdbot/docs/gateway/protocol.md`
-- `/Users/zhangzy/Workspace/nodejs/clawdbot/docs/web/control-ui.md`
-- `/Users/zhangzy/Workspace/nodejs/clawdbot/docs/web/webchat.md`
-- `/Users/zhangzy/Workspace/nodejs/clawdbot/docs/concepts/session-tool.md`
-
-### 5.3 当前已确认的真实入口
-
-| 功能 | 正确方式 |
-|------|----------|
-| 打开本地 OpenClaw | `openclaw dashboard --no-open` → 解析 Dashboard URL → 打开浏览器 |
-| 读取配置 | `~/.openclaw/openclaw.json` |
-| 读取会话元数据 | `~/.openclaw/agents/<agentId>/sessions/sessions.json` |
-| 读取会话消息 | `~/.openclaw/agents/<agentId>/sessions/*.jsonl` |
-| 读取 Skills | `~/Workspace/nodejs/clawdbot/skills` + `~/.agents/skills` |
-
----
-
-## 六、给后续 AI / 开发者的提示
-
-### 6.1 设计原则
-
-1. **顺手 > 炫酷**
-   - 不要改回 dashboard 风格
-   - 不要加大标题、英文副标题、品牌展示块
-
-2. **对话页是核心**
-   - `agent + conversation` 的树形关系必须保留
-   - 工作区只展示当前打开的对话
-   - 左侧资源树保留全部对话
-
-3. **隐藏 ≠ 删除**
-   - 隐藏只影响工作区显示
-   - 左侧仍然要能重新打开
-
-4. **clawx 是工作台，不是独立聊天工具**
-   - UI 围绕 OpenClaw 真实对象组织
-   - 不要做成单纯的大模型聊天壳
-
-### 6.2 当前已知问题
-
-1. **单文件原型**
-   - 所有逻辑在 `App.tsx`
-   - 后续需要拆分
-
-2. **mock 数据混合**
-   - 部分数据来自真实 OpenClaw
-   - 部分仍是 mock（如 conversations 的某些字段）
-   - 需要逐步统一
-
-3. **未接入真实发送**
-   - 文本发送目前仅更新本地 UI
-   - 未真正调用 OpenClaw
-
-### 6.3 快速上手命令
+## 八、当前验证命令
 
 ```bash
-# 安装依赖
-pnpm install
-
-# 开发模式
-pnpm tauri dev
-
-# 仅构建前端
 pnpm build
-
-# 检查 Rust 端
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-### 6.4 关键文件
-
-| 文件 | 用途 |
-|------|------|
-| `src/App.tsx` | 主界面逻辑 |
-| `src/App.css` | 全局样式 |
-| `src-tauri/src/lib.rs` | Tauri 命令桥接 |
-| `src-tauri/tauri.conf.json` | Tauri 配置 |
-| `package.json` | 前端依赖 |
-
----
-
-## 七、版本历史
-
-| 日期 | 版本 | 主要变更 |
-|------|------|----------|
-| 2026-04-17 | 原型 v1 | 初始骨架，mock 数据 |
-| 2026-04-17 | 原型 v2 | 接入真实 OpenClaw 配置读取 |
-| 2026-04-17 | 原型 v3 | 接入真实 session 元数据 |
-| 2026-04-17 | 原型 v4 | 接入真实 session 消息预览 |
-| 2026-04-17 | 原型 v5 | 对话页改造为聊天界面，发送区 + 历史消息 |
-| 2026-04-17 | 原型 v6 | 简化界面，移除搜索/统计，聚焦聊天区 |
-
----
-
-## 八、联系方式
-
-- 项目位置：`/Users/zhangzy/Workspace/clawx`
-- OpenClaw 文档：`/Users/zhangzy/Workspace/nodejs/clawdbot/docs`
-- OpenClaw 配置：`~/.openclaw/openclaw.json`
-
----
-
-*本文档会随项目进展持续更新。后续 AI 或开发者接手时，请优先阅读本文档 + README.md，然后查看 `src/App.tsx` 和 `src-tauri/src/lib.rs` 了解当前实现。*
+当前这两条验证命令可通过。
