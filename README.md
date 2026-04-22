@@ -4,6 +4,8 @@ clawx 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，�
 
 当前项目仍处于原型阶段，但方向已经明确：
 
+> 说明：当前界面已去掉演示性质的 mock 数据，页面只展示本机真实读取到的 OpenClaw 数据；如果本地没有数据，则展示空状态，而不是伪造内容。
+
 - 降低 OpenClaw 日常使用门槛
 - 减少频繁切换对话窗口的成本
 - 让 `agent / 对话 / skill / channel` 这些 OpenClaw 核心对象可视化
@@ -172,8 +174,7 @@ clawx 想解决的是以下几类需求：
 
 ### 尚未完成
 
-- 文件上传仍是占位
-- 新建对话 / 新建 Agent 的真实写入能力
+- 新建 Agent 的真实写入能力
 - agent 创建 / 删除 / 配置修改能力
 - 会话状态改为 OpenClaw 明确提供的真实运行态（当前仍为规则推断）
 
@@ -189,6 +190,9 @@ clawx 想解决的是以下几类需求：
 
 当前已实现：
 
+- 首次启动会先检查本机是否安装 OpenClaw；未安装时不进入主界面，并提示需先安装
+- 若已安装但 clawx 尚未绑定，会先征得用户同意，再把所需的 `gateway.controlUi.allowedOrigins` 配置写入 `~/.openclaw/openclaw.json`
+- 绑定完成后才进入主界面，避免出现“看得到 UI 但 Gateway 一直不可用”的假可用状态
 - 真实 agent 列表读取
 - 真实 channel / connection 列表读取
 - 真实 skill 列表读取
@@ -199,18 +203,26 @@ clawx 想解决的是以下几类需求：
 - 通过 Tauri 后端增量监听 session transcript 追加内容，实时刷新列表页状态、摘要和 usage
 - 详情页通过 Tauri Rust 后端代理调用 Gateway `chat.history` 拉取历史
 - 详情页通过 Tauri Rust 后端代理调用 Gateway `chat.send` 发送消息
-- 发送时会下发 `sessionKey / message / idempotencyKey / model / thinking / deliver=false / inputProvenance.kind=external_user`
+- 详情页通过 Tauri Rust 后端代理调用 Gateway `chat.abort` 停止生成
+- 左侧 agent 区已接入真实 `sessions.create`，支持新建对话
+- 发送时会下发 `sessionKey / message / idempotencyKey / model / thinking / attachments / deliver=false / inputProvenance.kind=external_user`
 - clawx 作为桌面端来源标识通过代理层请求头透传
 - 详情页会读取 assistant 消息中的 `model / provider / api` 并在消息级展示
-- 模型默认值逻辑已接入：新对话取 OpenClaw 默认模型，有历史对话则优先取上一次 assistant 使用的模型
+- 模型默认值逻辑已接入：已有对话优先取上一次 assistant 使用的模型，新建对话优先取 agent 默认模型，再回退全局默认模型
 - 每次发送都会显式携带当前选中的模型参数
 - 发送后会先本地插入 user / assistant 占位，再用 chat delta/final 事件更新回复内容
+- delta 阶段会持续拼接流式文本，并兼容工具 / 图片等结构化消息片段
 - final 完成后主动重新拉取历史，补齐 usage 数据到消息 footer
 - 消息 footer 仅挂在最后一条 assistant 消息底部，显示类 webchat 用法条：`↑输出 ↓输入 R缓存 · 模型 · 时间`
 - token 使用紧凑格式（例如 `21.7K`）
 - 连续纯工具消息（多条连续消息）会折叠为一个工具组，不再刷屏
 - 工具组支持二级展开：先看工具列表，再点看单个工具的参数和结果
 - streaming 中默认展开工具组，完成后默认收起
+- composer 已拆为独立组件 `src/components/ConversationComposer.tsx`
+- 详情页主体已拆为独立组件 `src/components/ConversationDetail.tsx`
+- 列表容器与卡片已拆为独立组件 `src/components/ConversationList.tsx`、`src/components/ConversationCard.tsx`
+- 对话共享类型已抽到 `src/types/conversation.ts`
+- 详情页消息状态推导已抽到 `src/lib/conversationDetailState.ts`
 
 也就是说，当前更准确的描述是：
 
@@ -402,8 +414,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ### 第一优先级
 1. **footer 对齐 webchat 用法条** — 确认 `↑/↓/R/0%/ctx` 与 usage 字段的精确对应关系
-2. **新建对话** — 打通真实创建流程，默认模型取自 OpenClaw 配置
-3. **接入文件上传** — 支持图片/文件发送到 Gateway
+2. **把上传从“图片可用”继续补到“文件能力完整”**
+3. **进一步压缩 App.tsx** — 把剩余消息状态/列表编排继续外移
 
 ### 第二优先级
 4. 接入音频发送

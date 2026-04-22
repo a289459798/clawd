@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -98,6 +99,20 @@ struct GatewayAuthInfo {
     token: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawxBootstrapStatus {
+    openclaw_installed: bool,
+    openclaw_path: Option<String>,
+    config_exists: bool,
+    config_path: String,
+    binding_configured: bool,
+    allowed_origins: Vec<String>,
+    recommended_origin: String,
+    gateway_port: Option<u64>,
+    binding_writes: Vec<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSessionPatch {
@@ -135,6 +150,10 @@ struct RealtimeState {
 fn openclaw_config_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
     Ok(PathBuf::from(home).join(".openclaw/openclaw.json"))
+}
+
+fn clawx_recommended_origin() -> String {
+    "tauri://localhost".to_string()
 }
 
 fn sessions_store_path(agent_id: &str) -> Result<PathBuf, String> {
@@ -862,6 +881,109 @@ fn load_openclaw_snapshot() -> Result<OpenClawSnapshot, String> {
 }
 
 #[tauri::command]
+fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
+    let config_path = openclaw_config_path()?;
+    let openclaw_path = Command::new("sh")
+        .arg("-lc")
+        .arg("command -v openclaw")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { None } else { Some(path) }
+        });
+
+    let config_exists = config_path.exists();
+    let mut binding_configured = false;
+    let mut allowed_origins = Vec::new();
+    let mut gateway_port = None;
+
+    if config_exists {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+        let json: Value = serde_json::from_str(&content)
+            .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?;
+        allowed_origins = json
+            .get("gateway")
+            .and_then(|gateway| gateway.get("controlUi"))
+            .and_then(|control_ui| control_ui.get("allowedOrigins"))
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default();
+        let recommended_origin = clawx_recommended_origin();
+        binding_configured = allowed_origins.iter().any(|item| item == &recommended_origin);
+        gateway_port = json.get("gateway").and_then(|gateway| gateway.get("port")).and_then(Value::as_u64);
+    }
+
+    let recommended_origin = clawx_recommended_origin();
+    Ok(ClawxBootstrapStatus {
+        openclaw_installed: openclaw_path.is_some(),
+        openclaw_path,
+        config_exists,
+        config_path: config_path.display().to_string(),
+        binding_configured,
+        allowed_origins,
+        recommended_origin: recommended_origin.clone(),
+        gateway_port,
+        binding_writes: vec![format!("gateway.controlUi.allowedOrigins += {recommended_origin}")],
+    })
+}
+
+#[tauri::command]
+fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
+    let config_path = openclaw_config_path()?;
+    let parent = config_path
+        .parent()
+        .ok_or_else(|| "invalid openclaw config path".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+
+    let mut json: Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+        serde_json::from_str(&content)
+            .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !json.is_object() {
+        json = serde_json::json!({});
+    }
+
+    let recommended_origin = clawx_recommended_origin();
+    let root = json.as_object_mut().ok_or_else(|| "invalid config root".to_string())?;
+    let gateway = root.entry("gateway".to_string()).or_insert_with(|| serde_json::json!({}));
+    if !gateway.is_object() {
+        *gateway = serde_json::json!({});
+    }
+    let gateway_obj = gateway.as_object_mut().ok_or_else(|| "invalid gateway config".to_string())?;
+    let control_ui = gateway_obj.entry("controlUi".to_string()).or_insert_with(|| serde_json::json!({}));
+    if !control_ui.is_object() {
+        *control_ui = serde_json::json!({});
+    }
+    let control_ui_obj = control_ui.as_object_mut().ok_or_else(|| "invalid controlUi config".to_string())?;
+    let allowed = control_ui_obj.entry("allowedOrigins".to_string()).or_insert_with(|| serde_json::json!([]));
+    if !allowed.is_array() {
+        *allowed = serde_json::json!([]);
+    }
+    let allowed_arr = allowed.as_array_mut().ok_or_else(|| "invalid allowedOrigins".to_string())?;
+    let already = allowed_arr.iter().any(|item| item.as_str() == Some(recommended_origin.as_str()));
+    if !already {
+        allowed_arr.push(Value::String(recommended_origin));
+    }
+
+    let pretty = serde_json::to_string_pretty(&json).map_err(|error| format!("failed to serialize config: {error}"))?;
+    fs::write(&config_path, format!("{pretty}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", config_path.display()))?;
+
+    get_clawx_bootstrap_status()
+}
+
+#[tauri::command]
 fn resolve_gateway_auth() -> Result<GatewayAuthInfo, String> {
     let config_path = openclaw_config_path()?;
     let content = fs::read_to_string(&config_path)
@@ -896,10 +1018,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             resolve_dashboard_url,
             load_openclaw_snapshot,
+            get_clawx_bootstrap_status,
+            ensure_clawx_binding,
             resolve_gateway_auth,
             gateway_proxy::gateway_status,
+            gateway_proxy::gateway_connect,
             gateway_proxy::gateway_chat_history,
             gateway_proxy::gateway_chat_send,
+            gateway_proxy::gateway_chat_abort,
+            gateway_proxy::gateway_sessions_create,
+            gateway_proxy::gateway_sessions_patch,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])

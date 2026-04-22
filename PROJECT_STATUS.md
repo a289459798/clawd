@@ -1,11 +1,56 @@
 # clawx 项目状态文档
 
-> 最后更新：2026-04-21 12:30 GMT+8
+> 最后更新：2026-04-22 10:14 GMT+8
 > 本文档只记录当前真实实现状态，方便后续继续开发。
 
 ---
 
+## 〇、最近进展（2026-04-22）
+
+### 2026-04-22 上午 — 新建对话、停止生成、图片发送与结构拆分
+
+#### Gateway 能力补齐
+- Rust 代理新增 `gateway_chat_abort`
+- Rust 代理新增 `gateway_sessions_create`
+- `gateway_chat_send` 新增 `attachments` 支持，目前已接入图片 base64 发送
+
+#### 对话能力补齐
+- 发送中状态下，发送按钮可切换为“停止”，并调用 `chat.abort`
+- composer 已支持图片选择、附件 chip 展示、删除附件、纯图片发送与图文混发
+- 左侧 agent 区的“＋”已接入真实 `sessions.create`，支持直接新建对话
+- 新建对话默认模型逻辑已优化为：优先 agent 默认模型，再回退全局默认模型
+
+#### 前端结构整理
+- 抽出 `buildAgentsFromSnapshot(...)` 与 `resolveAgentDefaultModel(...)`
+- 新增独立组件：
+  - `src/components/ConversationComposer.tsx`
+  - `src/components/ConversationDetail.tsx`
+  - `src/components/ConversationCard.tsx`
+  - `src/components/ConversationList.tsx`
+- 抽出共享类型：`src/types/conversation.ts`
+- 抽出详情页消息状态推导：`src/lib/conversationDetailState.ts`
+
+#### 验证
+- `cargo check --manifest-path src-tauri/Cargo.toml` ✅
+- `pnpm build` ✅
+
 ## 〇、最近进展（2026-04-21）
+
+### 2026-04-21 下午 — Gateway WebSocket 接入与真实消息发送
+
+#### Gateway WebSocket 代理
+- **根因**：旧代码使用 HTTP POST 到 `/gateway/rpc`，但该端点返回 404。Gateway 的 RPC 方法走 WebSocket 协议
+- 新实现：通过 `tungstenite` crate 建立 WebSocket 连接
+- 握手流程：连接 → 接收 `connect.challenge` → 发送 `auth` → 接收 `connect.auth_ok`
+- 事件监听：后台线程持续读取 WS 消息，分发 `clawx://gateway-chat`、`clawx://sessions-changed` 事件
+- RPC 请求：通过 WebSocket 发送 JSON-RPC 帧，同步等待响应
+- 连接管理：`gateway_connect` 命令初始化连接，`send_rpc` 复用连接
+- ping/pong：自动响应 Gateway 的 ping 消息
+- 断线处理：WS 断开时更新连接状态，唤醒所有等待中的 RPC
+
+#### 依赖变更
+- 新增：`tungstenite = "0.26"`（带 `rustls-tls-native-roots` 功能）
+- 移除：`reqwest` 的 blocking 客户端（但仍保留用于其他场景）
 
 ### 2026-04-21 中午修复 — 消息 usage 显示与模型默认值
 
@@ -192,6 +237,8 @@
 | `gateway_status` | 获取 Tauri Gateway 代理连接状态 | ✅ |
 | `gateway_chat_history` | 通过 Tauri Gateway 代理拉取会话历史 | ✅ |
 | `gateway_chat_send` | 通过 Tauri Gateway 代理发送消息 | ✅ |
+| `gateway_chat_abort` | 通过 Tauri Gateway 代理停止生成 | ✅ |
+| `gateway_sessions_create` | 通过 Tauri Gateway 代理新建对话 | ✅ |
 
 ### 3.3 当前快照结构
 
@@ -266,6 +313,9 @@
 - ✅ 详情页展示 token 拆分统计
 - ✅ 列表页样式收敛,弱化摘要和时间视觉权重
 - ✅ README 与本状态文档已同步到当前实现
+- ✅ 首次启动已增加 OpenClaw 环境检查与绑定确认流程，未安装 / 未绑定时不进入主界面
+- ✅ 用户同意后可自动写入 `~/.openclaw/openclaw.json` 的 `gateway.controlUi.allowedOrigins`
+- ✅ 已移除界面里的演示 mock 数据，列表/技能/连接页改为仅展示真实本地数据或空状态
 - ✅ 列表页已接入基于本地 OpenClaw session transcript 的准实时增量刷新(状态、摘要、usage)
 - ✅ 对话详情页已接入真实发送能力,底层改为 Tauri Rust 后端代理 Gateway `chat.history` + `chat.send`
 - ✅ 发送参数已接入 `sessionKey / message / idempotencyKey / model / thinking / deliver=false / inputProvenance.kind=external_user`
@@ -274,6 +324,7 @@
 - ✅ 模型默认值逻辑已接入,优先使用会话上次回复模型,否则回退到 OpenClaw 默认模型
 - ✅ 每次发送都会显式携带当前选中的模型
 - ✅ 发送后先插入本地占位消息，再用 chat delta/final 事件刷新 assistant 回复
+- ✅ delta 阶段已改为持续拼接流式文本，并兼容结构化工具 / 图片片段
 - ✅ final 完成后主动刷新历史，补齐 usage 数据到 footer
 - ✅ assistant 消息 footer 仅挂在最后一条回复底部，显示 `↑输出 ↓输入 R缓存 · 模型 · 时间`
 - ✅ token 数字使用紧凑格式（例如 `21.7K`）
@@ -292,7 +343,9 @@
 - ✅ 详情页已接入真实消息发送
 - ✅ 模型 / 思考模式已真正下发到 Gateway 发送参数
 - ✅ 流式更新（delta/final）已接入
-- ❌ 未接入文件上传
+- ✅ 已接入图片上传发送（base64 attachments）
+- ✅ 已接入停止生成
+- ❌ 未接入通用文件上传
 - ❌ 未接入音频发送
 
 #### 真实历史拉取
@@ -302,8 +355,8 @@
 - ⚠️ 部分消息的 usage 数据在某些场景下仍未正确显示（待对齐 webchat 用法计算逻辑）
 
 #### 新建对话
-- ❌ 左侧"新建对话"按钮还未接真实创建流程
-- ❌ 新建对话的默认模型取 OpenClaw 配置还没接
+- ✅ 左侧“新建对话”按钮已接真实创建流程
+- ✅ 新建对话默认模型已接为：agent 默认模型优先，其次全局默认模型
 
 ### 5.2 中优先级
 
@@ -325,8 +378,9 @@
 ### 5.3 低优先级
 
 #### 代码结构整理
-- ❌ 当前主要逻辑仍集中在 `src/App.tsx`
-- ❌ 尚未拆分为组件 / feature 模块
+- ⚠️ `src/App.tsx` 仍是主编排层，但已明显瘦身
+- ✅ 已拆出 composer / detail / list / card 组件
+- ✅ 已抽出共享类型与详情页消息状态推导
 
 建议未来拆分:
 

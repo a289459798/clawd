@@ -3,43 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ConversationComposer } from "./components/ConversationComposer";
+import { ConversationDetail } from "./components/ConversationDetail";
+import { ConversationList } from "./components/ConversationList";
+import { getConversationDetailState } from "./lib/conversationDetailState";
+import type { Conversation, ConversationStatus, MessagePart, PreviewMessage } from "./types/conversation";
 import type { RealtimeGatewayEvent } from "./realtime";
 import "./App.css";
 
 type NavKey = "conversations" | "skills" | "connections";
 type AgentStatus = "working" | "completed" | "idle";
-type ConversationStatus = "working" | "completed" | "idle";
-
-type MessagePart =
-  | { kind: "text"; text: string }
-  | { kind: "tool_call"; tool: string; args?: string }
-  | { kind: "tool_result"; tool?: string; text?: string }
-  | { kind: "image"; mime_type?: string; data: string; alt?: string };
-
-type PreviewMessage = { role?: string; text: string; parts?: MessagePart[]; model?: string; provider?: string; api?: string; timestamp?: number; input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number };
-
-type Conversation = {
-  id: string;
-  title: string;
-  status: ConversationStatus;
-  lastMessage: string;
-  lastTime: string;
-  updatedAt?: number;
-  tokens: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  totalTokens?: number;
-  model: string;
-  workspace: string;
-  visible: boolean;
-  pinned?: boolean;
-  lastRole?: string;
-  latestEventRole?: string;
-  latestEventType?: string;
-  previewMessages?: PreviewMessage[];
-};
 
 type Agent = {
   id: string;
@@ -105,6 +78,18 @@ type GatewayStatus = {
   error?: string | null;
 };
 
+type ClawxBootstrapStatus = {
+  openclawInstalled: boolean;
+  openclawPath?: string | null;
+  configExists: boolean;
+  configPath: string;
+  bindingConfigured: boolean;
+  allowedOrigins: string[];
+  recommendedOrigin: string;
+  gatewayPort?: number | null;
+  bindingWrites: string[];
+};
+
 type GatewayHistoryResult = {
   messages: GatewayMessage[];
 };
@@ -143,155 +128,23 @@ type GatewayChatEvent = {
   errorMessage?: string;
 };
 
-const agentsSeed: Agent[] = [
-  {
-    id: "master",
-    name: "Master Bot",
-    color: "#52f2c5",
-    status: "working",
-    model: "gpt-5.4",
-    mdFile: "master.md",
-    configPath: "~/.openclaw/bots/master/config.json",
-    summary: "负责主调度和工作区总览。",
-    conversations: [
-      {
-        id: "master-1",
-        title: "桌面端结构重做",
-        status: "working",
-        lastMessage: "正在把页面改成顶部栏 + 左侧导航 + 主工作区。",
-        lastTime: "刚刚",
-        tokens: "12.6K",
-        model: "gpt-5.4",
-        workspace: "/Users/zhangzy/Workspace/clawx",
-        visible: true,
-        pinned: true,
-      },
-      {
-        id: "master-2",
-        title: "OpenClaw 对话切换体验",
-        status: "idle",
-        lastMessage: "需要把 agent 和对话做成树形结构。",
-        lastTime: "18 分钟前",
-        tokens: "4.1K",
-        model: "gpt-5.4",
-        workspace: "/Users/zhangzy/Workspace/clawx",
-        visible: true,
-      },
-      {
-        id: "master-3",
-        title: "旧版统计面板",
-        status: "completed",
-        lastMessage: "已确认右侧常驻统计不适合作为主界面结构。",
-        lastTime: "今天 14:52",
-        tokens: "3.2K",
-        model: "gpt-5.4",
-        workspace: "/Users/zhangzy/Workspace/clawx",
-        visible: false,
-      },
-    ],
-  },
-  {
-    id: "coder",
-    name: "Coding Agent",
-    color: "#7aa2ff",
-    status: "working",
-    model: "claude-opus-4.6",
-    mdFile: "coding-agent.md",
-    configPath: "~/.openclaw/agents/coding-agent.json",
-    summary: "处理代码分析、改造和调试。",
-    conversations: [
-      {
-        id: "coder-1",
-        title: "clawx 页面改造",
-        status: "working",
-        lastMessage: "已经开始替换原来的 dashboard 结构。",
-        lastTime: "2 分钟前",
-        tokens: "18.8K",
-        model: "claude-opus-4.6",
-        workspace: "/Users/zhangzy/Workspace/clawx",
-        visible: true,
-        pinned: true,
-      },
-      {
-        id: "coder-2",
-        title: "adapter 接口草案",
-        status: "completed",
-        lastMessage: "需要补 listAgents、listSessions、openWebUi 这些方法。",
-        lastTime: "今天 10:11",
-        tokens: "6.3K",
-        model: "claude-opus-4.6",
-        workspace: "/Users/zhangzy/Workspace/clawx/docs",
-        visible: false,
-      },
-    ],
-  },
-  {
-    id: "investor",
-    name: "Investment Advisor",
-    color: "#f08b7d",
-    status: "idle",
-    model: "gpt-4.1",
-    mdFile: "investment_advisor.md",
-    configPath: "~/.openclaw/bots/investment_advisor/config.json",
-    summary: "负责市场分析和投资建议。",
-    conversations: [
-      {
-        id: "investor-1",
-        title: "A 股收盘复盘",
-        status: "idle",
-        lastMessage: "等待新的市场数据输入。",
-        lastTime: "35 分钟前",
-        tokens: "5.7K",
-        model: "gpt-4.1",
-        workspace: "/Users/zhangzy/clawd",
-        visible: false,
-      },
-    ],
-  },
-];
+type ComposerAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+  previewUrl?: string;
+};
 
-const fallbackSkills: Skill[] = [
-  {
-    id: "coding-agent",
-    name: "coding-agent",
-    summary: "把较大的编码任务委托给 Codex / Claude Code / Pi。",
-    location: "skills/coding-agent/SKILL.md",
-    enabled: true,
-  },
-  {
-    id: "taskflow",
-    name: "taskflow",
-    summary: "适合做任务流梳理和结构化推进。",
-    location: "skills/taskflow/SKILL.md",
-    enabled: true,
-  },
-  {
-    id: "weather",
-    name: "weather",
-    summary: "查询天气并生成适合当前场景的提醒。",
-    location: "skills/weather/SKILL.md",
-    enabled: true,
-  },
-];
+type GatewayCreateSessionResult = {
+  key?: string;
+  sessionId?: string;
+  ok?: boolean;
+};
 
-const fallbackConnections: ChannelConnection[] = [
-  {
-    id: "webchat",
-    name: "Webchat",
-    status: "connected",
-    detail: "当前控制台会话来源",
-    config: "channels.webchat",
-    activity: "刚刚活跃",
-  },
-  {
-    id: "discord",
-    name: "Discord",
-    status: "connected",
-    detail: "Bot 已配置，可发送消息和管理线程",
-    config: "channels.discord.token",
-    activity: "今天有 14 条消息",
-  },
-];
+const agentsSeed: Agent[] = [];
+const fallbackSkills: Skill[] = [];
+const fallbackConnections: ChannelConnection[] = [];
 
 const statusLabel: Record<AgentStatus, string> = {
   working: "进行中",
@@ -762,7 +615,78 @@ const MODEL_OPTIONS = [
   { value: "moonshot/kimi-k2-turbo-preview", label: "Kimi-K2-Turbo" },
 ];
 
+function buildAgentsFromSnapshot(snapshot: OpenClawSnapshot, currentAgentSnapshots: Agent[]): Agent[] {
+  const colors = ["#52f2c5", "#7aa2ff", "#f08b7d", "#c08bff", "#f3bf63"];
+  return snapshot.agents.map((agent, index) => {
+    const existing = currentAgentSnapshots.find((item) => item.id === agent.id);
+    const realSessions = snapshot.sessions
+      .filter((session) => session.agent_id === agent.id)
+      .slice(0, 8)
+      .map((session, sessionIndex) => {
+        const latestRole = (session.last_role ?? session.preview_messages[session.preview_messages.length - 1]?.role)?.toLowerCase();
+        const latestAssistantMessage = [...session.preview_messages]
+          .reverse()
+          .find((message) => (message.role?.toLowerCase() ?? "") === "assistant");
+
+        return {
+          id: session.key,
+          title: session.title,
+          status: deriveConversationStatus(session.updated_at, latestRole, session.latest_event_type),
+          lastMessage:
+            latestAssistantMessage?.text ??
+            session.last_message ??
+            "暂无回复内容",
+          previewMessages: session.preview_messages,
+          lastRole: latestRole,
+          latestEventRole: session.latest_event_role?.toLowerCase(),
+          latestEventType: session.latest_event_type?.toLowerCase(),
+          lastTime: session.updated_at ? new Date(session.updated_at).toLocaleString("zh-CN") : "未知时间",
+          updatedAt: session.updated_at,
+          tokens: formatTokenCount(session.total_tokens),
+          inputTokens: session.input_tokens,
+          outputTokens: session.output_tokens,
+          cacheReadTokens: session.cache_read_tokens,
+          cacheWriteTokens: session.cache_write_tokens,
+          totalTokens: session.total_tokens,
+          model: agent.model ?? existing?.model ?? "未配置",
+          workspace: agent.workspace ?? "/Users/zhangzy/clawd",
+          visible: sessionIndex < 3,
+          pinned: sessionIndex === 0,
+        };
+      });
+
+    return {
+      id: agent.id,
+      name: agent.name,
+      color: existing?.color ?? colors[index % colors.length],
+      status: existing?.status ?? "idle",
+      model: agent.model ?? existing?.model ?? "未配置",
+      mdFile: existing?.mdFile ?? `${agent.id}.md`,
+      configPath: agent.agent_dir ?? existing?.configPath ?? `agents.list.${index}`,
+      summary: existing?.summary ?? "来自本地 OpenClaw 配置。",
+      conversations: realSessions.length > 0 ? realSessions : existing?.conversations ?? [],
+    } as Agent;
+  });
+}
+
+function resolveAgentDefaultModel(agents: Agent[], agentId: string) {
+  const agent = agents.find((item) => item.id === agentId);
+  if (!agent) {
+    return MODEL_OPTIONS[0]?.value ?? "";
+  }
+  if (agent.model && agent.model !== "未配置") {
+    return agent.model;
+  }
+  return MODEL_OPTIONS[0]?.value ?? "";
+}
+
 function App() {
+  const [bootstrapStatus, setBootstrapStatus] = useState<ClawxBootstrapStatus | null>(null);
+  const [bootstrapLoading, setBootstrapLoading] = useState(true);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [bindingInProgress, setBindingInProgress] = useState(false);
+  const [bootstrapStep, setBootstrapStep] = useState<"detect" | "install" | "bind" | "connect_test" | "ready">("detect");
+  const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
   const [agents, setAgents] = useState(agentsSeed);
   const [expandedConversationId, setExpandedConversationId] = useState("");
@@ -774,7 +698,9 @@ function App() {
   const [composerValue, setComposerValue] = useState("");
   const [composerModel, setComposerModel] = useState(MODEL_OPTIONS[0]?.value ?? "");
   const [composerThinking, setComposerThinking] = useState("off");
+  const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [sending, setSending] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
@@ -784,96 +710,113 @@ function App() {
   const shouldStickToBottomRef = useRef(true);
   const gatewayEventUnlistenRef = useRef<null | (() => void)>(null);
 
+  const loadBootstrapStatus = useCallback(async () => {
+    setBootstrapLoading(true);
+    setBootstrapError(null);
+    try {
+      const status = await invoke<ClawxBootstrapStatus>("get_clawx_bootstrap_status");
+      setBootstrapStatus(status);
+      setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
+    } catch (error) {
+      console.error("Failed to load clawx bootstrap status", error);
+      setBootstrapError(error instanceof Error ? error.message : "读取 OpenClaw 状态失败");
+    } finally {
+      setBootstrapLoading(false);
+    }
+  }, []);
+
+  const bindOpenClaw = useCallback(async () => {
+    setBindingInProgress(true);
+    setBootstrapError(null);
+    setBootstrapConnectError(null);
+    try {
+      const status = await invoke<ClawxBootstrapStatus>("ensure_clawx_binding");
+      setBootstrapStatus(status);
+      setBootstrapStep(status.bindingConfigured ? "connect_test" : "bind");
+    } catch (error) {
+      console.error("Failed to bind OpenClaw config", error);
+      setBootstrapError(error instanceof Error ? error.message : "写入 OpenClaw 配置失败");
+    } finally {
+      setBindingInProgress(false);
+    }
+  }, []);
+
   useEffect(() => {
+    void loadBootstrapStatus();
+  }, [loadBootstrapStatus]);
+
+  useEffect(() => {
+    if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured) {
+      return;
+    }
+
+    if (bootstrapStep === "connect_test") {
+      let cancelled = false;
+      void (async () => {
+        setBootstrapConnectError(null);
+        try {
+          await invoke("gateway_connect");
+          if (!cancelled) {
+            setBootstrapStep("ready");
+          }
+        } catch (error) {
+          console.error("Gateway connect test failed", error);
+          if (!cancelled) {
+            setBootstrapConnectError(error instanceof Error ? error.message : "Gateway 连接测试失败");
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (bootstrapStep !== "ready") {
+      return;
+    }
+
     let cancelled = false;
+
+    // Ensure gateway connection on app startup (binding may already be configured).
+    // gateway_connect returns "already connected" if previously established, so this is safe.
+    void (async () => {
+      try {
+        await invoke("gateway_connect");
+      } catch {
+        // Ignore errors here; connection status will be reported by refreshGatewayStatus.
+      }
+    })();
 
     const loadSnapshot = async () => {
       try {
+        const currentAgentSnapshots = agents;
         const snapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
         if (cancelled) {
           return;
         }
 
-        if (snapshot.agents.length > 0) {
-          const colors = ["#52f2c5", "#7aa2ff", "#f08b7d", "#c08bff", "#f3bf63"];
-          setAgents(
-            snapshot.agents.map((agent, index) => {
-              const existing = agentsSeed.find((item) => item.id === agent.id);
-              const realSessions = snapshot.sessions
-                .filter((session) => session.agent_id === agent.id)
-                .slice(0, 8)
-                .map((session, sessionIndex) => {
-                  const latestRole = (session.last_role ?? session.preview_messages[session.preview_messages.length - 1]?.role)?.toLowerCase();
-                  const latestAssistantMessage = [...session.preview_messages]
-                    .reverse()
-                    .find((message) => (message.role?.toLowerCase() ?? "") === "assistant");
+        setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots));
 
-                  return {
-                    id: session.key,
-                    title: session.title,
-                    status: deriveConversationStatus(session.updated_at, latestRole, session.latest_event_type),
-                    lastMessage:
-                      latestAssistantMessage?.text ??
-                      session.last_message ??
-                      "暂无回复内容",
-                    previewMessages: session.preview_messages,
-                    lastRole: latestRole,
-                    latestEventRole: session.latest_event_role?.toLowerCase(),
-                    latestEventType: session.latest_event_type?.toLowerCase(),
-                    lastTime: session.updated_at ? new Date(session.updated_at).toLocaleString("zh-CN") : "未知时间",
-                    updatedAt: session.updated_at,
-                    tokens: formatTokenCount(session.total_tokens),
-                    inputTokens: session.input_tokens,
-                    outputTokens: session.output_tokens,
-                    cacheReadTokens: session.cache_read_tokens,
-                    cacheWriteTokens: session.cache_write_tokens,
-                    totalTokens: session.total_tokens,
-                    model: agent.model ?? existing?.model ?? "未配置",
-                    workspace: agent.workspace ?? "/Users/zhangzy/clawd",
-                    visible: sessionIndex < 3,
-                    pinned: sessionIndex === 0,
-                  };
-                });
+        setSkills(
+          snapshot.skills.map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            summary: "来自本地 OpenClaw skill 目录。",
+            location: skill.location,
+            enabled: true,
+          })),
+        );
 
-              return {
-                id: agent.id,
-                name: agent.name,
-                color: existing?.color ?? colors[index % colors.length],
-                status: existing?.status ?? "idle",
-                model: agent.model ?? existing?.model ?? "未配置",
-                mdFile: existing?.mdFile ?? `${agent.id}.md`,
-                configPath: agent.agent_dir ?? existing?.configPath ?? `agents.list.${index}`,
-                summary: existing?.summary ?? "来自本地 OpenClaw 配置。",
-                conversations: realSessions.length > 0 ? realSessions : existing?.conversations ?? [],
-              } as Agent;
-            }),
-          );
-        }
-
-        if (snapshot.skills.length > 0) {
-          setSkills(
-            snapshot.skills.map((skill) => ({
-              id: skill.id,
-              name: skill.name,
-              summary: "来自本地 OpenClaw skill 目录。",
-              location: skill.location,
-              enabled: true,
-            })),
-          );
-        }
-
-        if (snapshot.connections.length > 0) {
-          setConnections(
-            snapshot.connections.map((connection) => ({
-              id: connection.id,
-              name: connection.name,
-              status: connection.enabled ? "connected" : "disabled",
-              detail: connection.enabled ? "已从本地 OpenClaw 配置读取" : "当前未启用",
-              config: `channels.${connection.id}`,
-              activity: connection.enabled ? "配置已启用" : "配置关闭",
-            })),
-          );
-        }
+        setConnections(
+          snapshot.connections.map((connection) => ({
+            id: connection.id,
+            name: connection.name,
+            status: connection.enabled ? "connected" : "disabled",
+            detail: connection.enabled ? "已从本地 OpenClaw 配置读取" : "当前未启用",
+            config: `channels.${connection.id}`,
+            activity: connection.enabled ? "配置已启用" : "配置关闭",
+          })),
+        );
       } catch (error) {
         console.error("Failed to load OpenClaw snapshot", error);
       }
@@ -888,9 +831,12 @@ function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep]);
 
   useEffect(() => {
+    if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured || bootstrapStep !== "ready") {
+      return;
+    }
     let cancelled = false;
     let cleanup: (() => void) | undefined;
 
@@ -931,7 +877,10 @@ function App() {
                   totalTokens: nextTotalTokens,
                   tokens: formatTokenCount(nextTotalTokens),
                   model: payload.session.model ?? conversation.model,
-                  previewMessages: payload.session.previewMessages ?? conversation.previewMessages,
+                  // Don't overwrite previewMessages from session_patch.
+                  // Preview messages are managed by the WebSocket delta/final handler.
+                  // Session patches from the realtime subscription may carry stale preview data.
+                  previewMessages: conversation.previewMessages,
                 };
               }),
             })),
@@ -955,7 +904,7 @@ function App() {
       cancelled = true;
       cleanup?.();
     };
-  }, []);
+  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep]);
 
   const refreshGatewayStatus = useCallback(async () => {
     try {
@@ -981,6 +930,9 @@ function App() {
   };
 
   useEffect(() => {
+    if (bootstrapStep !== "ready") {
+      return;
+    }
     let mounted = true;
     let dispose: (() => void) | undefined;
 
@@ -990,13 +942,14 @@ function App() {
         const { listen } = await import("@tauri-apps/api/event");
         const unlisten = await listen<GatewayChatEvent>("clawx://gateway-chat", (event) => {
           const chat = event.payload;
-          if (!mounted || !chat?.sessionKey || chat.sessionKey !== activeConversationId) {
+          if (!mounted || !chat?.sessionKey) {
             return;
           }
 
           if (chat.state === "delta") {
             const deltaText = extractTextFromGatewayMessage(chat.message);
-            if (!deltaText) return;
+            const deltaParts = mapGatewayContentToParts(chat.message);
+            if (!deltaText && deltaParts.length === 0) return;
             setAgents((current) => current.map((agent) => ({
               ...agent,
               conversations: agent.conversations.map((conversation) => {
@@ -1004,19 +957,23 @@ function App() {
                 const nextMessages = [...(conversation.previewMessages ?? [])];
                 const last = nextMessages[nextMessages.length - 1];
                 if (last?.role === "assistant" && last.text.startsWith("__streaming__")) {
-                  last.text = `__streaming__${deltaText}`;
-                  last.parts = [{ kind: "text", text: deltaText }];
+                  const previousText = last.text.replace(/^__streaming__/, "");
+                  const mergedText = deltaText ? `${previousText}${deltaText}` : previousText;
+                  last.text = `__streaming__${mergedText}`;
+                  last.parts = deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: mergedText }];
                   last.model = chat.message?.model ?? last.model;
+                  last.provider = chat.message?.provider ?? last.provider;
+                  last.api = chat.message?.api ?? last.api;
                   last.timestamp = chat.message?.timestamp ?? last.timestamp;
                   Object.assign(last, extractUsageFromGatewayMessage(chat.message));
                 } else {
-                  nextMessages.push({ role: "assistant", text: `__streaming__${deltaText}`, parts: [{ kind: "text", text: deltaText }], model: chat.message?.model, timestamp: chat.message?.timestamp, ...extractUsageFromGatewayMessage(chat.message) });
+                  nextMessages.push({ role: "assistant", text: `__streaming__${deltaText}`, parts: deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: deltaText }], model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: chat.message?.timestamp, ...extractUsageFromGatewayMessage(chat.message) });
                 }
                 return {
                   ...conversation,
                   status: "working",
                   lastRole: "assistant",
-                  lastMessage: deltaText,
+                  lastMessage: deltaText || conversation.lastMessage,
                   previewMessages: nextMessages,
                   updatedAt: Date.now(),
                   lastTime: new Date().toLocaleString("zh-CN"),
@@ -1027,6 +984,7 @@ function App() {
           }
 
           if (chat.state === "final" || chat.state === "aborted") {
+            setActiveRunId(null);
             const finalText = extractTextFromGatewayMessage(chat.message);
             const finalParts = mapGatewayContentToParts(chat.message);
             setSending(false);
@@ -1063,11 +1021,19 @@ function App() {
               }),
             })));
             void refreshGatewayStatus();
-            void openConversationDetail(chat.sessionKey);
+            // Wait a moment for the gateway to persist the message, then refetch history
+            // to ensure we have the complete message data (usage, parts, etc.)
+            const sessionKey = chat.sessionKey;
+            if (sessionKey) {
+              setTimeout(() => {
+                void openConversationDetail(sessionKey);
+              }, 1000);
+            }
             return;
           }
 
           if (chat.state === "error") {
+            setActiveRunId(null);
             setSending(false);
             setGatewayError(chat.errorMessage ?? "发送失败");
             setGatewayStatusText(`Gateway 请求失败: ${chat.errorMessage ?? "发送失败"}`);
@@ -1090,7 +1056,7 @@ function App() {
       mounted = false;
       dispose?.();
     };
-  }, [activeConversationId, refreshGatewayStatus]);
+  }, [activeConversationId, refreshGatewayStatus, bootstrapStep]);
 
   const visibleConversations = useMemo(() => {
     return agents
@@ -1142,6 +1108,55 @@ function App() {
     setComposerModel(resolveConversationDefaultModel(activeConversation));
   }, [activeConversation?.id, resolveConversationDefaultModel]);
 
+  const handleCreateConversation = useCallback(async (agentId: string) => {
+    try {
+      setGatewayError(null);
+      await invoke("gateway_connect");
+      const defaultModel = resolveAgentDefaultModel(agents, agentId);
+      const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
+        params: {
+          agentId,
+          label: "新对话",
+          model: defaultModel || null,
+          message: "",
+        },
+      });
+      const newKey = result.key;
+      if (!newKey) {
+        throw new Error("创建会话失败，未返回 session key");
+      }
+      const now = Date.now();
+      setAgents((current) => current.map((agent) => {
+        if (agent.id !== agentId) return agent;
+        const nextConversation: Conversation = {
+          id: newKey,
+          title: "新对话",
+          status: "idle",
+          lastMessage: "",
+          lastTime: new Date().toLocaleString("zh-CN"),
+          updatedAt: now,
+          tokens: "--",
+          model: resolveAgentDefaultModel(current, agentId) || "未配置",
+          workspace: agent.summary || "",
+          visible: true,
+          previewMessages: [],
+        };
+        return {
+          ...agent,
+          conversations: [nextConversation, ...agent.conversations],
+        };
+      }));
+      setExpandedConversationId(newKey);
+      setActiveConversationId(newKey);
+      await refreshGatewayStatus();
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setGatewayError(messageText);
+      setGatewayConnected(false);
+      setGatewayStatusText(`新建对话失败: ${messageText}`);
+    }
+  }, [agents, refreshGatewayStatus]);
+
   const toggleConversationVisibility = (agentId: string, conversationId: string, visible: boolean) => {
     setAgents((current) =>
       current.map((agent) =>
@@ -1167,25 +1182,62 @@ function App() {
     setActiveConversationId(conversationId);
     setUserExpanded(false);
     try {
+      // Ensure gateway is connected first
+      await invoke("gateway_connect");
       const result = await invoke<GatewayHistoryResult>("gateway_chat_history", { params: { sessionKey: conversationId, limit: 200 } });
       await refreshGatewayStatus();
       if (Array.isArray(result?.messages)) {
+        const mappedMessages = result.messages.map((message) => ({
+          role: message.role,
+          text: extractTextFromGatewayMessage(message),
+          parts: mapGatewayContentToParts(message),
+          model: message.model,
+          provider: message.provider,
+          api: message.api,
+          timestamp: message.timestamp,
+          ...extractUsageFromGatewayMessage(message),
+        }));
+        // If the last assistant message might still be streaming (recent update, assistant role last),
+        // mark it with __streaming__ prefix so the delta handler appends to it correctly.
+        const lastMsg = mappedMessages[mappedMessages.length - 1];
+        const lastAssistant = [...mappedMessages].reverse().find(m => m.role === "assistant");
+        const isPotentiallyStreaming = lastMsg?.role?.toLowerCase() === "assistant" || 
+          (lastMsg?.role?.toLowerCase() === "user" && lastAssistant && Date.now() - (lastAssistant.timestamp || 0) < 300000);
+        if (isPotentiallyStreaming && lastAssistant && !lastAssistant.text.startsWith("__streaming__")) {
+          lastAssistant.text = `__streaming__${lastAssistant.text}`;
+          if (lastAssistant.parts && lastAssistant.parts.length > 0) {
+            const firstTextPart = lastAssistant.parts.find(p => p.kind === "text");
+            if (firstTextPart && "text" in firstTextPart) {
+              (firstTextPart as any).text = `__streaming__${(firstTextPart as any).text}`;
+            }
+          }
+        }
+        // Calculate total tokens from mapped messages
+        const totalInput = mappedMessages.reduce((sum, m) => sum + (m.input_tokens || 0), 0);
+        const totalOutput = mappedMessages.reduce((sum, m) => sum + (m.output_tokens || 0), 0);
+        const totalCacheRead = mappedMessages.reduce((sum, m) => sum + (m.cache_read_tokens || 0), 0);
+        const totalCacheWrite = mappedMessages.reduce((sum, m) => sum + (m.cache_write_tokens || 0), 0);
+        const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite;
+        // Get last assistant message info
+        const lastAssistant = [...mappedMessages].reverse().find(m => m.role === "assistant");
+        const lastRole = mappedMessages.length > 0 ? (mappedMessages[mappedMessages.length - 1].role || "user") : undefined;
         setAgents((current) => current.map((agent) => ({
           ...agent,
           conversations: agent.conversations.map((conversation) => {
             if (conversation.id !== conversationId) return conversation;
             return {
               ...conversation,
-              previewMessages: result.messages!.map((message) => ({
-                role: message.role,
-                text: extractTextFromGatewayMessage(message),
-                parts: mapGatewayContentToParts(message),
-                model: message.model,
-                provider: message.provider,
-                api: message.api,
-                timestamp: message.timestamp,
-                ...extractUsageFromGatewayMessage(message),
-              })),
+              previewMessages: mappedMessages,
+              status: "idle" as ConversationStatus,
+              lastRole,
+              lastMessage: lastAssistant?.text || conversation.lastMessage,
+              model: lastAssistant?.model || conversation.model,
+              inputTokens: totalInput,
+              outputTokens: totalOutput,
+              cacheReadTokens: totalCacheRead,
+              cacheWriteTokens: totalCacheWrite,
+              totalTokens,
+              tokens: formatTokenCount(totalTokens),
             };
           }),
         })));
@@ -1231,10 +1283,66 @@ function App() {
     activeConversation?.updatedAt,
   ]);
 
+  const handleComposerFiles = useCallback(async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
+    if (files.length === 0) {
+      setGatewayError("当前只支持上传图片");
+      return;
+    }
+    const next = await Promise.all(files.map(async (file) => {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(reader.error ?? new Error("读取图片失败"));
+        reader.readAsDataURL(file);
+      });
+      return {
+        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name,
+        mimeType: file.type || "image/png",
+        dataUrl,
+        previewUrl: dataUrl,
+      } satisfies ComposerAttachment;
+    }));
+    setComposerAttachments((current) => [...current, ...next]);
+  }, []);
+
+  const removeComposerAttachment = useCallback((attachmentId: string) => {
+    setComposerAttachments((current) => current.filter((item) => item.id !== attachmentId));
+  }, []);
+
+  const handleAbort = useCallback(async () => {
+    if (!activeConversationId || !sending) return;
+    try {
+      await invoke("gateway_connect");
+      await invoke("gateway_chat_abort", {
+        sessionKey: activeConversationId,
+        runId: activeRunId,
+      });
+      setGatewayError(null);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setGatewayError(messageText);
+      setGatewayStatusText(`停止失败: ${messageText}`);
+    }
+  }, [activeConversationId, activeRunId, sending]);
+
   const handleSend = useCallback(async () => {
     if (!activeConversationId || sending) return;
     const message = composerValue.trim();
-    if (!message) return;
+    if (!message && composerAttachments.length === 0) return;
+
+    const optimisticUserParts: MessagePart[] = [];
+    if (message) {
+      optimisticUserParts.push({ kind: "text", text: message });
+    }
+    optimisticUserParts.push(...composerAttachments.map((item) => ({
+      kind: "image" as const,
+      data: item.dataUrl,
+      mime_type: item.mimeType,
+      alt: item.name,
+    })));
 
     setGatewayError(null);
     setSending(true);
@@ -1247,28 +1355,44 @@ function App() {
           ...conversation,
           status: "working",
           lastRole: "user",
-          lastMessage: message,
+          lastMessage: message || (composerAttachments.length > 0 ? `[图片] ${composerAttachments.map((item) => item.name).join(", ")}` : conversation.lastMessage),
           updatedAt: Date.now(),
           lastTime: new Date().toLocaleString("zh-CN"),
           previewMessages: [
             ...(conversation.previewMessages ?? []),
-            { role: "user", text: message, parts: [{ kind: "text", text: message }] },
+            { role: "user", text: message || composerAttachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
             { role: "assistant", text: "__streaming__", parts: [{ kind: "text", text: "" }] },
           ],
         };
       }),
     })));
 
+    const pendingAttachments = composerAttachments;
     setComposerValue("");
+    setComposerAttachments([]);
 
     try {
+      await invoke("gateway_connect");
+      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setActiveRunId(runId);
+      
+      // 如果选择了不同的模型，先 patch 会话
+      if (composerModel && composerModel !== activeConversation?.model) {
+        await invoke("gateway_sessions_patch", {
+          params: {
+            sessionKey: activeConversationId,
+            model: composerModel,
+          },
+        });
+      }
+      
       await invoke("gateway_chat_send", {
         params: {
           sessionKey: activeConversationId,
           message,
-          idempotencyKey: `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          model: composerModel || null,
+          idempotencyKey: runId,
           thinking: composerThinking === "off" ? null : composerThinking,
+          attachments: pendingAttachments.map((item) => ({ dataUrl: item.dataUrl, mimeType: item.mimeType })),
         },
       });
       await refreshGatewayStatus();
@@ -1277,9 +1401,123 @@ function App() {
       setGatewayError(messageText);
       setGatewayStatusText(`Gateway 请求失败: ${messageText}`);
       setSending(false);
+      setActiveRunId(null);
+      setComposerAttachments(pendingAttachments);
       await refreshGatewayStatus();
     }
-  }, [activeConversationId, composerModel, composerThinking, composerValue, refreshGatewayStatus, sending]);
+  }, [activeConversationId, composerAttachments, composerModel, composerThinking, composerValue, refreshGatewayStatus, sending]);
+
+  if (bootstrapLoading) {
+    return (
+      <main className="bootstrap-screen">
+        <div className="bootstrap-card">
+          <strong>欢迎使用 clawx</strong>
+          <p>首次启动会先检查本机 OpenClaw 环境，并确认是否允许 clawx 访问本地 Gateway。</p>
+          <div className="bootstrap-meta">
+            <span>步骤 1/3，检测本机 OpenClaw</span>
+            <span>当前阶段: {bootstrapStep === "detect" ? "环境检测" : bootstrapStep}</span>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (bootstrapError) {
+    return (
+      <main className="bootstrap-screen">
+        <div className="bootstrap-card danger">
+          <strong>读取 OpenClaw 状态失败</strong>
+          <p>{bootstrapError}</p>
+          <div className="bootstrap-actions">
+            <button className="ghost-button" type="button" onClick={() => void loadBootstrapStatus()}>
+              重试
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!bootstrapStatus?.openclawInstalled) {
+    return (
+      <main className="bootstrap-screen">
+        <div className="bootstrap-card">
+          <strong>先安装 OpenClaw，才能继续使用 clawx</strong>
+          <p>clawx 本身不托管模型会话，它依赖本机 OpenClaw 提供 Gateway、配置和会话数据。所以第一次使用前，需要先完成 OpenClaw 安装。</p>
+          <div className="bootstrap-meta">
+            <span>步骤 2/3，等待安装 OpenClaw</span>
+            <span>期望配置路径: {bootstrapStatus?.configPath ?? "~/.openclaw/openclaw.json"}</span>
+          </div>
+          <div className="bootstrap-actions">
+            <button className="ghost-button" type="button" onClick={() => void loadBootstrapStatus()}>
+              我已安装，重新检测
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!bootstrapStatus?.bindingConfigured) {
+    return (
+      <main className="bootstrap-screen">
+        <div className="bootstrap-card">
+          <strong>连接 OpenClaw</strong>
+          <p>为了让 clawx 正常读取会话、发消息并接收流式回复，需要先授权它接入本机 OpenClaw Gateway。你确认后，clawx 会把下面这些配置写入你的 openclaw.json。</p>
+          <div className="bootstrap-meta">
+            <span>步骤 3/3，绑定本机 OpenClaw</span>
+            <span>OpenClaw: {bootstrapStatus.openclawPath ?? "已安装"}</span>
+            <span>配置文件: {bootstrapStatus.configPath}</span>
+            <span>Gateway 端口: {bootstrapStatus.gatewayPort ?? 18789}</span>
+          </div>
+          <div className="code-block-shell">
+            <div className="code-block-toolbar">
+              <span className="code-block-language">将写入的配置</span>
+            </div>
+            <pre className="tool-entry-body code terminal-block">{bootstrapStatus.bindingWrites.join("\n")}</pre>
+          </div>
+          <div className="bootstrap-actions">
+            <button className="ghost-button" type="button" onClick={() => void loadBootstrapStatus()} disabled={bindingInProgress}>
+              刷新状态
+            </button>
+            <button className="primary-button" type="button" onClick={() => void bindOpenClaw()} disabled={bindingInProgress}>
+              {bindingInProgress ? "正在写入并绑定..." : "同意并继续"}
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (bootstrapStep === "connect_test" || bootstrapConnectError) {
+    return (
+      <main className="bootstrap-screen">
+        <div className={`bootstrap-card ${bootstrapConnectError ? "danger" : ""}`}>
+          <strong>{bootstrapConnectError ? "OpenClaw 连接测试失败" : "正在验证 OpenClaw 连接"}</strong>
+          <p>
+            {bootstrapConnectError
+              ? "配置已经写入，但 clawx 还没能成功连上本机 Gateway。你可以重试，或者先检查 OpenClaw Gateway 是否正在运行。"
+              : "clawx 正在测试 Gateway 连接与流式能力，确认通过后才会进入主界面。"}
+          </p>
+          <div className="bootstrap-meta">
+            <span>当前阶段: 连接测试</span>
+            <span>Gateway 端口: {bootstrapStatus.gatewayPort ?? 18789}</span>
+            {bootstrapConnectError ? <span>错误: {bootstrapConnectError}</span> : null}
+          </div>
+          {bootstrapConnectError ? (
+            <div className="bootstrap-actions">
+              <button className="ghost-button" type="button" onClick={() => void loadBootstrapStatus()}>
+                重新检测环境
+              </button>
+              <button className="primary-button" type="button" onClick={() => setBootstrapStep("connect_test")}>
+                重试连接
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -1366,7 +1604,7 @@ function App() {
                           <strong className="agent-name">{agent.name}</strong>
                         </div>
                         <div className="agent-inline-actions">
-                          <button className="icon-only-button" title="新建对话" type="button">
+                          <button className="icon-only-button" title="新建对话" type="button" onClick={() => void handleCreateConversation(agent.id)}>
                             ＋
                           </button>
                         </div>
@@ -1414,244 +1652,76 @@ function App() {
 
             <section className="workspace-area chat-workspace-area">
               {activeConversation ? (
-                <div className="conversation-detail-shell">
-                  {/* Fixed top status bar */}
-                  <div className="conversation-detail-statusbar">
-                    <button
-                      className="back-icon-button"
-                      onClick={() => { setActiveConversationId(null); setUserExpanded(false); }}
-                      type="button"
-                      title="返回列表"
-                    >
-                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M12.5 15L7.5 10L12.5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </button>
-                    <span className="statusbar-agent">
-                      {visibleConversations.find((conversation) => conversation.id === activeConversation.id)?.agentName ?? "未知 Agent"}
-                    </span>
-                    <span className="statusbar-divider">·</span>
-                    <span className="statusbar-title">{activeConversation.title}</span>
-                    <span className="statusbar-divider">·</span>
-                    <span className="statusbar-tokens">总: {activeConversation.tokens}</span>
-                    <span className="statusbar-divider">·</span>
-                    <span className={`statusbar-badge ${activeConversation.status}`}>
-                      {statusLabel[activeConversation.status]}
-                    </span>
-                  </div>
-
-                  <div className="conversation-detail-scroll">
-                    <div className="conversation-window-page in-app">
-                        <section className="conversation-turn-section">
-                        {/* Last user message (fixed at top) */}
-                        {(() => {
-                          const msgs = activeConversation.previewMessages ?? [];
-                          const lastUserMsg = [...msgs].reverse().find(m => m.role?.toLowerCase() === "user");
-                          const rawText = lastUserMsg?.text ?? "";
-                          const { label, time, cleanText } = parseSenderMeta(rawText);
-                          const imageParts = (lastUserMsg?.parts ?? []).filter((part) => part.kind === "image") as Array<Extract<MessagePart, { kind: "image" }>>;
-                          const shouldShowExpand = cleanText.length > 120 || cleanText.split("\n").length > 3;
-                          return (
-                            <div className="last-user-message">
-                              <div className="last-user-header">
-                                <span className="message-role-label">User</span>
-                                <div className="message-meta-right">
-                                  {label && <span className="message-source-badge">{label}</span>}
-                                  {time && <span className="message-time-badge">{time}</span>}
-                                </div>
-                              </div>
-                              <div className={`last-user-text ${userExpanded ? "expanded" : "clamped"}`}>
-                                <MarkdownBlock content={cleanText} className="markdown-body" />
-                              </div>
-                              {imageParts.length > 0 && (
-                                <div className="message-image-grid">
-                                  {imageParts.map((part, index) => {
-                                    const src = normalizeImageSrc(part.data, part.mime_type);
-                                    return (
-                                      <button className="message-image-card" type="button" key={`user-image-${index}`} onClick={() => setPreviewImageSrc(src)}>
-                                        <img className="message-image" src={src} alt={part.alt ?? `用户图片 ${index + 1}`} />
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                              {shouldShowExpand && !userExpanded && (
-                                <button className="expand-btn" type="button" onClick={() => setUserExpanded(true)}>
-                                  展开
-                                </button>
-                              )}
-                              {shouldShowExpand && userExpanded && (
-                                <button className="expand-btn" type="button" onClick={() => setUserExpanded(false)}>
-                                  收起
-                                </button>
-                              )}
+                <>
+                  <ConversationDetail
+                    activeConversation={activeConversation}
+                    agentName={visibleConversations.find((conversation) => conversation.id === activeConversation.id)?.agentName ?? "未知 Agent"}
+                    statusLabel={statusLabel}
+                    userExpanded={userExpanded}
+                    onUserExpandedChange={setUserExpanded}
+                    onBack={() => { setActiveConversationId(null); setUserExpanded(false); }}
+                    onOpenImage={setPreviewImageSrc}
+                    aiResponseScrollRef={aiResponseScrollRef}
+                    parseSenderMeta={parseSenderMeta}
+                    normalizeImageSrc={normalizeImageSrc}
+                    conversationMessageList={(() => {
+                      const detailState = getConversationDetailState(activeConversation.previewMessages ?? [], activeConversation.lastRole);
+                      if (detailState.isWaitingReply) {
+                        return (
+                          <div className="message-bubble assistant assistant-thinking" role="status" aria-live="polite">
+                            <span className="message-role">Assistant</span>
+                            <div className="thinking-dots" aria-hidden="true">
+                              <span />
+                              <span />
+                              <span />
                             </div>
-                          );
-                        })()}
-                        {/* AI response (scrollable) */}
-                        <div className="ai-response-scroll" ref={aiResponseScrollRef}>
-                          {(() => {
-                            const msgs = activeConversation.previewMessages ?? [];
-                            const lastUserIdx = [...msgs].reverse().findIndex(m => m.role?.toLowerCase() === "user");
-                            const userPos = lastUserIdx >= 0 ? msgs.length - 1 - lastUserIdx : -1;
-                            const afterUser = userPos >= 0 ? msgs.slice(userPos + 1) : [];
-                            const hasRenderableContent = afterUser.some((m) => (m.text ?? "").trim().length > 0);
-                            const isWaitingReply = !hasRenderableContent && activeConversation.lastRole === "user";
-                            if (isWaitingReply) {
-                              return (
-                                <div className="message-bubble assistant assistant-thinking" role="status" aria-live="polite">
-                                  <span className="message-role">Assistant</span>
-                                  <div className="thinking-dots" aria-hidden="true">
-                                    <span />
-                                    <span />
-                                    <span />
-                                  </div>
-                                </div>
-                              );
-                            }
-                            if (!hasRenderableContent) return <p className="ai-empty-hint">暂无回复内容</p>;
-                            const isStillStreaming = false;
-                            return (
-                              <>
-                                <ConversationMessageList messages={afterUser.map((m) => m.text.startsWith("__streaming__") ? { ...m, text: m.text.replace(/^__streaming__/, "") } : m)} conversationId={activeConversation.id} onOpenImage={setPreviewImageSrc} />
-                                {isStillStreaming && (
-                                  <div className="message-bubble assistant assistant-thinking trailing" role="status" aria-live="polite">
-                                    <span className="message-role">Assistant</span>
-                                    <div className="thinking-dots" aria-hidden="true">
-                                      <span />
-                                      <span />
-                                      <span />
-                                    </div>
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-                      </section>
-                    </div>
-                  </div>
+                          </div>
+                        );
+                      }
+                      if (!detailState.hasRenderableContent) return <p className="ai-empty-hint">暂无回复内容</p>;
+                      return (
+                        <>
+                          <ConversationMessageList messages={detailState.normalizedMessages} conversationId={activeConversation.id} onOpenImage={setPreviewImageSrc} />
+                          {detailState.isStillStreaming && (
+                            <div className="message-bubble assistant assistant-thinking trailing" role="status" aria-live="polite">
+                              <span className="message-role">Assistant</span>
+                              <div className="thinking-dots" aria-hidden="true">
+                                <span />
+                                <span />
+                                <span />
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  />
 
-                  {/* Fixed bottom composer bar */}
-                  <div className={`conversation-composer ${composerFocused ? "focused" : ""}`}>
-                    <div
-                      className="composer-input-wrap"
-                      tabIndex={-1}
-                      onFocus={() => setComposerFocused(true)}
-                      onBlur={(e) => {
-                        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                          setComposerFocused(false);
-                        }
-                      }}
-                    >
-                      <textarea
-                        className="composer-input"
-                        placeholder="输入消息…"
-                        onChange={(e) => setComposerValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            void handleSend();
-                          }
-                        }}
-                        value={composerValue}
-                      />
-                      <div className="composer-bar">
-                        <button className="composer-file-btn" type="button" title="发送文件">
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M14 10V13C14 13.55 13.55 14 13 14H3C2.45 14 2 13.55 2 13V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M6 10V6C6 4.89 6.89 4 8 4C9.11 4 10 4.89 10 6V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M8 7V11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                          </svg>
-                        </button>
-                        <select className="composer-select" value={composerModel} onChange={(e) => setComposerModel(e.target.value)} title="模型">
-                          {MODEL_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
-                        <select className="composer-select" value={composerThinking} onChange={(e) => setComposerThinking(e.target.value)} title="思考模式">
-                          <option value="" disabled>思考</option>
-                          <option value="off">Off</option>
-                          <option value="low">Low</option>
-                          <option value="high">High</option>
-                        </select>
-                        <div style={{ flex: 1 }} />
-                        <button className="composer-send-btn" type="button" title="发送" disabled={composerValue.trim().length === 0 || sending} onClick={() => void handleSend()}>
-                          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                            <path d="M3 9H15M15 9L10.5 4.5M15 9L10.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                  <ConversationComposer
+                    focused={composerFocused}
+                    value={composerValue}
+                    model={composerModel}
+                    thinking={composerThinking}
+                    sending={sending}
+                    attachments={composerAttachments}
+                    modelOptions={MODEL_OPTIONS}
+                    onFocusChange={setComposerFocused}
+                    onValueChange={setComposerValue}
+                    onModelChange={setComposerModel}
+                    onThinkingChange={setComposerThinking}
+                    onFilesSelected={handleComposerFiles}
+                    onRemoveAttachment={removeComposerAttachment}
+                    onSend={handleSend}
+                    onAbort={handleAbort}
+                  />
+                </>
               ) : (
-              <div className="conversation-grid chat-layout-single">
-                {filteredVisibleConversations.map((conversation) => {
-                  const expanded = false;
-
-  return (
-                    <article
-                      className={`conversation-card ${expanded ? "expanded" : "compact"} ${conversation.status}`}
-                      key={conversation.id}
-                    >
-                      <div className="conversation-card-head">
-                        <div className="conversation-card-title-block">
-                          <div className="card-row">
-                            <strong className="conversation-card-title">{conversation.title}</strong>
-                          </div>
-                          <div className="conversation-card-subline">
-                            <span>{conversation.agentName} · {conversation.model} · {conversation.tokens}</span>
-                            <span className={`status-badge ${conversation.status}`}>{statusLabel[conversation.status]}</span>
-                          </div>
-                        </div>
-                        <div className="card-actions">
-                          <button
-                            className="icon-only-button subtle conversation-open-button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openConversationDetail(conversation.id);
-                            }}
-                            title="打开当前对话"
-                            type="button"
-                          >
-                            ⤢
-                          </button>
-                          {!expanded ? (
-                            <button
-                              className="icon-only-button subtle"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                toggleConversationVisibility(conversation.agentId, conversation.id, false);
-                              }}
-                              title="隐藏"
-                              type="button"
-                            >
-                              ✕
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      <button
-                        className="conversation-card-body-button"
-                        onClick={() => {
-                          openConversationDetail(conversation.id);
-                        }}
-                        type="button"
-                      >
-                      <div className="conversation-summary">
-                        <p>{conversation.lastMessage}</p>
-                        <div className="summary-meta compact-time-row">
-                          <span>{conversation.lastTime}</span>
-                        </div>
-                      </div>
-                      </button>
-
-                    </article>
-                  );
-                })}
-              </div>
+              <ConversationList
+                conversations={filteredVisibleConversations}
+                statusLabel={statusLabel}
+                onOpen={openConversationDetail}
+                onHide={(agentId, conversationId) => toggleConversationVisibility(agentId, conversationId, false)}
+              />
               )}
               {!activeConversation && filteredVisibleConversations.length === 0 ? (
                 <div className="empty-chat-state">
