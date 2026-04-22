@@ -1219,7 +1219,6 @@ function App() {
         const totalCacheWrite = mappedMessages.reduce((sum, m) => sum + (m.cache_write_tokens || 0), 0);
         const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite;
         // Get last assistant message info
-        const lastAssistant = [...mappedMessages].reverse().find(m => m.role === "assistant");
         const lastRole = mappedMessages.length > 0 ? (mappedMessages[mappedMessages.length - 1].role || "user") : undefined;
         setAgents((current) => current.map((agent) => ({
           ...agent,

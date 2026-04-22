@@ -409,8 +409,8 @@ fn gateway_event_loop(
                         let client_id = "gateway-client";
                         let client_mode = "backend";
                         let role = "operator";
-                        let scopes = ["operator.read", "operator.write", "operator.admin"];
-                        let client_platform = "macos";
+                        let scopes = ["operator.admin"];
+                        let client_platform = std::env::consts::OS;
                         let client_device_family: Option<&str> = None;
                         let signature = sign_connect_payload_v3(
                             &device_identity,
@@ -433,8 +433,9 @@ fn gateway_event_loop(
                                 "maxProtocol": 3,
                                 "client": {
                                     "id": client_id,
-                                    "version": "clawx",
+                                    "version": env!("CARGO_PKG_VERSION"),
                                     "platform": client_platform,
+                                    "deviceFamily": client_device_family,
                                     "mode": client_mode
                                 },
                                 "role": role,
@@ -443,8 +444,6 @@ fn gateway_event_loop(
                                 "auth": {
                                     "token": token
                                 },
-                                "userAgent": "clawx-tauri",
-                                "locale": "zh-CN",
                                 "device": {
                                     "id": device_identity.device_id,
                                     "publicKey": device_identity.public_key,
