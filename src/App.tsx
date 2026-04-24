@@ -7,7 +7,7 @@ import { ConversationComposer } from "./components/ConversationComposer";
 import { ConversationDetail } from "./components/ConversationDetail";
 import { ConversationList } from "./components/ConversationList";
 import { getConversationDetailState } from "./lib/conversationDetailState";
-import type { Conversation, ConversationStatus, MessagePart, PreviewMessage } from "./types/conversation";
+import type { Conversation, ConversationRuntime, MessagePart, PreviewMessage } from "./types/conversation";
 import type { RealtimeGatewayEvent } from "./realtime";
 import "./App.css";
 
@@ -159,8 +159,11 @@ const connectionLabel: Record<ChannelConnection["status"], string> = {
 };
 
 const formatTokenCount = (value?: number) => {
-  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) {
-    return "--";
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "-";
+  }
+  if (value === 0) {
+    return "0";
   }
   if (value >= 1_000_000) {
     return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
@@ -177,17 +180,14 @@ function parseSenderMeta(text: string): { label?: string; time?: string; cleanTe
   let time: string | undefined;
   let cleanText = text;
 
-  // Extract timestamp from header: [Mon 2026-04-20 16:43 GMT+8]
   const timeRegex = /\[([A-Za-z]+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*GMT[+-]\d+)\]\s*\n?/;
   const timeMatch = cleanText.match(timeRegex);
   if (timeMatch) {
     const raw = timeMatch[1];
-    // Format to just date+time
     time = raw.replace(/\s*GMT[+-]\d+/, "").replace(/^([A-Za-z]+\s+)(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})$/, "$2");
     cleanText = cleanText.replace(timeRegex, "");
   }
 
-  // Extract sender metadata block
   const metaRegex = /Sender\s+\(untrusted\s+metadata\):\s*\n\s*```json\n([\s\S]*?)\n\s*```\n?/;
   const match = cleanText.match(metaRegex);
   if (match) {
@@ -201,7 +201,6 @@ function parseSenderMeta(text: string): { label?: string; time?: string; cleanTe
     return { label, time, cleanText };
   }
 
-  // Try inline JSON form
   const inlineRegex = /Sender\s+\(untrusted\s+metadata\):\s*\n\s*\{[\s\S]*?\n\s*\}\n?/;
   const inlineMatch = cleanText.match(inlineRegex);
   if (inlineMatch) {
@@ -272,170 +271,121 @@ function normalizeImageSrc(data: string, mimeType?: string) {
   return `data:${mime};base64,${data}`;
 }
 
+function MessageBubbleWithCopy({
+  text,
+  imageVariant,
+}: {
+  text: string;
+  imageVariant: "user" | "assistant" | "tool";
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [text]);
+
+  const isAssistant = imageVariant !== "user";
+
+  return (
+    <div className={`message-bubble ${imageVariant === "user" ? "user" : "assistant"}`}>
+      {isAssistant ? (
+        <div className="message-bubble-content">
+          <MarkdownBlock content={text} className="markdown-body" />
+          <button
+            className={`message-copy-button ${copied ? "copied" : ""}`}
+            type="button"
+            onClick={handleCopy}
+            title={copied ? "已复制" : "复制内容"}
+          >
+            {copied ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
+        </div>
+      ) : (
+        <MarkdownBlock content={text} className="markdown-body" />
+      )}
+    </div>
+  );
+}
+
 function StructuredMessageContent({
   parts,
   conversationId,
   onOpenImage,
   imageVariant = "assistant",
-  toolsExpandedByDefault = false,
 }: {
   parts: MessagePart[];
   conversationId: string;
   onOpenImage: (src: string) => void;
   imageVariant?: "user" | "assistant" | "tool";
-  toolsExpandedByDefault?: boolean;
 }) {
-  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(() => toolsExpandedByDefault ? new Set([0]) : new Set());
-  const [expandedToolItems, setExpandedToolItems] = useState<Set<string>>(new Set());
+  const [toolsExpanded, setToolsExpanded] = useState(false);
+  const textBlocks: string[] = [];
+  const imageBlocks: Array<Extract<MessagePart, { kind: "image" }>> = [];
+  const toolCalls: Array<{ tool: string; args?: string }> = [];
 
-  useEffect(() => {
-    setExpandedGroups(toolsExpandedByDefault ? new Set([0]) : new Set());
-    setExpandedToolItems(new Set());
-  }, [conversationId, toolsExpandedByDefault]);
-
-  const toggleGroup = useCallback((index: number) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  }, []);
-
-  const toggleToolItem = useCallback((key: string) => {
-    setExpandedToolItems((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-
-  const isCodeLike = (text?: string) => {
-    if (!text) return false;
-    return /```|^\s*(import |export |const |let |var |function |class |<\w+|#include|SELECT |INSERT |UPDATE |DELETE )/m.test(text);
-  };
-
-  const summarize = (text?: string) => {
-    if (!text) return "无结果";
-    const oneLine = text.replace(/\s+/g, " ").trim();
-    return oneLine.length > 72 ? `${oneLine.slice(0, 72)}…` : oneLine;
-  };
-
-  type ToolItem = { tool: string; args?: string; resultText?: string };
-  const blocks: Array<
-    | { kind: "text"; text: string }
-    | { kind: "image"; part: Extract<MessagePart, { kind: "image" }> }
-    | { kind: "tool_group"; items: ToolItem[] }
-  > = [];
-
-  let pendingToolItems: ToolItem[] = [];
-  const flushTools = () => {
-    if (pendingToolItems.length > 0) {
-      blocks.push({ kind: "tool_group", items: pendingToolItems });
-      pendingToolItems = [];
-    }
-  };
-
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
+  for (const part of parts) {
     if (part.kind === "tool_call") {
-      const next = parts[index + 1];
-      if (next?.kind === "tool_result" && (next.tool ?? part.tool) === part.tool) {
-        pendingToolItems.push({ tool: part.tool, args: part.args, resultText: next.text });
-        index += 1;
-        continue;
-      }
-      pendingToolItems.push({ tool: part.tool, args: part.args });
+      toolCalls.push({ tool: part.tool, args: part.args });
       continue;
     }
     if (part.kind === "tool_result") {
-      pendingToolItems.push({ tool: part.tool ?? "tool", resultText: part.text });
       continue;
     }
-
-    flushTools();
-
     if (part.kind === "image") {
-      blocks.push({ kind: "image", part });
+      imageBlocks.push(part);
       continue;
     }
-    blocks.push({ kind: "text", text: part.text });
+    textBlocks.push(part.text);
   }
-  flushTools();
-
-  let toolGroupCounter = 0;
 
   return (
     <>
-      {blocks.map((block, index) => {
-        if (block.kind === "text") {
-          return (
-            <div className="message-bubble assistant" key={`${conversationId}-text-${index}`}>
-              <span className="message-role">Assistant</span>
-              <MarkdownBlock content={block.text} className="markdown-body" />
+      {toolCalls.length > 0 ? (
+        <div className="tool-call-box" key={`${conversationId}-tools`}>
+          <button className="tool-call-summary" type="button" onClick={() => setToolsExpanded((v) => !v)}>
+            <span className="tool-call-summary-label">已执行 {toolCalls.length} 项操作</span>
+            <span className="tool-call-summary-items">{Array.from(new Set(toolCalls.map((item) => item.tool))).slice(0, 3).join(" · ")}</span>
+            <span className="tool-call-summary-toggle">{toolsExpanded ? "收起" : "展开"}</span>
+          </button>
+          {toolsExpanded ? (
+            <div className="tool-call-detail-list">
+              {toolCalls.map((item, index) => (
+                <div className="tool-call-detail" key={`${conversationId}-tool-${index}`}>
+                  <div className="tool-call-detail-name">{item.tool}</div>
+                  {item.args ? <pre className="tool-call-detail-args">{item.args}</pre> : null}
+                </div>
+              ))}
             </div>
-          );
-        }
-        if (block.kind === "image") {
-          const src = normalizeImageSrc(block.part.data, block.part.mime_type);
-          return (
-            <button className={`message-image-card ${imageVariant}`} key={`${conversationId}-image-${index}`} type="button" onClick={() => onOpenImage(src)}>
-              <img className="message-image" src={src} alt={block.part.alt ?? "图片内容"} />
-              <span className="message-image-badge">{imageVariant === "tool" ? "工具图片" : imageVariant === "user" ? "用户图片" : "图片"}</span>
-            </button>
-          );
-        }
+          ) : null}
+        </div>
+      ) : null}
 
-        const groupIndex = toolGroupCounter++;
-        const groupKey = `${conversationId}-tool-group-${groupIndex}`;
-        const expanded = expandedGroups.has(groupIndex);
+      {textBlocks.map((text, index) => (
+        <MessageBubbleWithCopy
+          key={`${conversationId}-text-${index}`}
+          text={text}
+          imageVariant={imageVariant}
+        />
+      ))}
+
+      {imageBlocks.map((part, index) => {
+        const src = normalizeImageSrc(part.data, part.mime_type);
         return (
-          <div className="tool-group" key={groupKey}>
-            <button className="tool-group-header" type="button" onClick={() => toggleGroup(groupIndex)}>
-              <span className="tool-icon">⚡</span>
-              <span className="tool-name">工具调用 {block.items.length} 项</span>
-              <span className="tool-summary">{block.items.map((item) => item.tool).join(" · ")}</span>
-              <span className="tool-toggle">{expanded ? "▲" : "▼"}</span>
-            </button>
-            {expanded ? (
-              <div className="tool-group-list">
-                {block.items.map((item, itemIndex) => {
-                  const itemKey = `${groupKey}-item-${itemIndex}`;
-                  const itemExpanded = expandedToolItems.has(itemKey);
-                  return (
-                    <div className="tool-entry grouped nested" key={itemKey}>
-                      <button className="tool-entry-header" type="button" onClick={() => toggleToolItem(itemKey)}>
-                        <span className="tool-icon">⚡</span>
-                        <span className="tool-name">{item.tool}</span>
-                        <span className="tool-entry-kind">#{itemIndex + 1}</span>
-                        <span className="tool-summary">{summarize(item.resultText ?? item.args)}</span>
-                        <span className="tool-toggle">{itemExpanded ? "▲" : "▼"}</span>
-                      </button>
-                      {itemExpanded ? (
-                        <div className="tool-entry-stack">
-                          {item.args ? (
-                            <div className="tool-entry-section">
-                              <div className="tool-entry-section-label">调用参数</div>
-                              <pre className="tool-entry-body">{item.args}</pre>
-                            </div>
-                          ) : null}
-                          {item.resultText ? (
-                            <div className="tool-entry-section">
-                              <div className="tool-entry-section-label">工具结果</div>
-                              {isCodeLike(item.resultText)
-                                ? <CodeBlock code={item.resultText} language={item.resultText.match(/```([\w-]+)/)?.[1] ?? "text"} />
-                                : <MarkdownBlock content={item.resultText} className="tool-entry-body markdown-body" />}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
+          <button className={`message-image-card ${imageVariant}`} key={`${conversationId}-image-${index}`} type="button" onClick={() => onOpenImage(src)}>
+            <img className="message-image" src={src} alt={part.alt ?? "图片内容"} />
+            <span className="message-image-badge">{imageVariant === "user" ? "用户图片" : "图片"}</span>
+          </button>
         );
       })}
     </>
@@ -451,103 +401,132 @@ function ConversationMessageList({
   conversationId: string;
   onOpenImage: (src: string) => void;
 }) {
-  const lastAssistantIndex = [...messages].map((message, index) => ({ message, index })).reverse().find((entry) => entry.message.role?.toLowerCase() === "assistant")?.index;
-  const isStreaming = lastAssistantIndex != null && messages[lastAssistantIndex]?.text?.startsWith("__streaming__");
+  const { rows, lastAssistantMessage } = useMemo(() => {
+    const normalizedMessages = messages
+      .filter((message) => {
+        const role = message.role?.toLowerCase();
+        if (role === "user" || role === "toolresult" || role === "tool_result") return false;
+        const text = (message.text ?? "").trim().toLowerCase();
+        if (text.startsWith("tool_result:") || text.startsWith("toolresult:")) return false;
+        return true;
+      })
+      .map((message) => ({
+        ...message,
+        parts: (message.parts ?? []).filter((part) => part.kind !== "tool_result"),
+      }));
 
-  const rows: Array<
-    | { kind: "message"; message: PreviewMessage; index: number }
-    | { kind: "tool_group"; items: Array<{ message: PreviewMessage; index: number }> }
-  > = [];
+    const rows: Array<
+      | { kind: "message"; message: PreviewMessage; index: number }
+      | { kind: "tool_group"; items: Array<{ message: PreviewMessage; index: number }> }
+    > = [];
 
-  let pendingToolMessages: Array<{ message: PreviewMessage; index: number }> = [];
-  const isToolLikeMessage = (message: PreviewMessage) => {
-    const parts = message.parts ?? [];
-    return parts.length > 0 && parts.every((part) => part.kind === "tool_call" || part.kind === "tool_result");
-  };
-  const flushToolMessages = () => {
-    if (pendingToolMessages.length > 0) {
-      rows.push({ kind: "tool_group", items: pendingToolMessages });
-      pendingToolMessages = [];
-    }
-  };
+    let pendingToolMessages: Array<{ message: PreviewMessage; index: number }> = [];
+    const isToolOnlyMessage = (message: PreviewMessage) => {
+      const parts = message.parts ?? [];
+      // A message is considered "tool-only" if it contains tool_calls
+      // (even if it also has text content, we extract tool_calls for display)
+      return parts.some((part) => part.kind === "tool_call");
+    };
+    const flushToolMessages = () => {
+      if (pendingToolMessages.length > 0) {
+        rows.push({ kind: "tool_group", items: pendingToolMessages });
+        pendingToolMessages = [];
+      }
+    };
 
-  messages.forEach((message, index) => {
-    if (isToolLikeMessage(message)) {
-      pendingToolMessages.push({ message, index });
-      return;
-    }
+    normalizedMessages.forEach((message, index) => {
+      if (isToolOnlyMessage(message)) {
+        pendingToolMessages.push({ message, index });
+        return;
+      }
+      flushToolMessages();
+      rows.push({ kind: "message", message, index });
+    });
     flushToolMessages();
-    rows.push({ kind: "message", message, index });
-  });
-  flushToolMessages();
+
+    // Find the last assistant message that has actual content (not just tool calls)
+    // and contains token data for display
+    const lastAssistantMessage = [...normalizedMessages]
+      .reverse()
+      .find((m) => {
+        const role = m.role?.toLowerCase();
+        if (role !== "assistant") return false;
+        // Skip messages that only contain tool calls (no text content)
+        const parts = m.parts ?? [];
+        const hasTextContent = parts.some((p) => p.kind === "text" && p.text?.trim());
+        const hasImageContent = parts.some((p) => p.kind === "image");
+        return hasTextContent || hasImageContent || (!parts.length && m.text?.trim());
+      });
+
+    return { rows, lastAssistantMessage };
+  }, [messages]);
 
   return (
     <>
-      {rows.map((row, rowIndex) => {
+      {rows.map((row, index) => {
         if (row.kind === "tool_group") {
+          const mergedParts = row.items.flatMap((item) => item.message.parts ?? []);
           return (
-            <StructuredMessageContent
-              key={`${conversationId}-tool-group-${rowIndex}`}
-              parts={row.items.flatMap((item) => item.message.parts ?? [])}
-              conversationId={`${conversationId}-tool-group-${rowIndex}`}
-              onOpenImage={onOpenImage}
-              imageVariant="tool"
-              toolsExpandedByDefault={Boolean(isStreaming && row.items.some((item) => item.index === lastAssistantIndex))}
-            />
+            <div className="message-stack tool-stack" key={`${conversationId}-tool-group-${index}`}>
+              <StructuredMessageContent
+                parts={mergedParts}
+                conversationId={`${conversationId}-tool-group-${index}`}
+                onOpenImage={onOpenImage}
+                imageVariant="tool"
+              />
+            </div>
           );
         }
 
-        const { message, index } = row;
+        const { message } = row;
         const parts = message.parts?.length ? message.parts : [{ kind: "text", text: message.text } as MessagePart];
-        const isAssistant = message.role?.toLowerCase() === "assistant";
-        const showFooter = isAssistant && index === lastAssistantIndex && Boolean(message.model);
         return (
           <div className="message-stack" key={`${conversationId}-message-${index}`}>
             <StructuredMessageContent
               parts={parts}
               conversationId={`${conversationId}-${index}`}
               onOpenImage={onOpenImage}
-              imageVariant={message.role?.toLowerCase() === "toolresult" ? "tool" : message.role?.toLowerCase() === "user" ? "user" : "assistant"}
-              toolsExpandedByDefault={false}
+              imageVariant={message.role?.toLowerCase() === "user" ? "user" : "assistant"}
             />
-            {showFooter ? (
-              <div className="assistant-message-footer">
-                <span>↑{formatTokenCount(message.output_tokens)}</span>
-                <span>↓{formatTokenCount(message.input_tokens)}</span>
-                <span>R{formatTokenCount(message.cache_read_tokens)}</span>
-                <span className="assistant-message-footer-divider">·</span>
-                <span className="assistant-message-footer-model">{message.model}</span>
-                {message.timestamp ? (
-                  <>
-                    <span className="assistant-message-footer-divider">·</span>
-                    <span>{new Date(message.timestamp).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
           </div>
         );
       })}
+
+      {lastAssistantMessage?.model ? (
+        <div className="conversation-model-footer" key={`${conversationId}-model-footer`}>
+          <span className="conversation-model-name">{lastAssistantMessage.model}</span>
+          <span className="conversation-model-divider">·</span>
+          <span className="conversation-model-tokens">
+            <span className="token-item">↑{formatTokenCount(lastAssistantMessage.output_tokens)}</span>
+            <span className="token-item">↓{formatTokenCount(lastAssistantMessage.input_tokens)}</span>
+            <span className="token-item">R{formatTokenCount(lastAssistantMessage.cache_read_tokens)}</span>
+          </span>
+        </div>
+      ) : null}
     </>
   );
 }
 
 /** AI message renderer that separates text, tool calls, and tool results */
-const deriveConversationStatus = (updatedAt?: number, lastRole?: string, latestEventType?: string) => {
-  const normalizedRole = lastRole?.toLowerCase();
-  const normalizedEventType = latestEventType?.toLowerCase();
+const COMPLETED_RECENT_WINDOW_MS = 10 * 60 * 1000;
+
+const deriveConversationStatus = (runtime?: ConversationRuntime) => {
   const now = Date.now();
-  const isIdle = Boolean(updatedAt && now - updatedAt > 1000 * 60 * 30);
-  if (isIdle) {
-    return "idle" as const;
-  }
-  const hasActiveEvent = normalizedEventType
-    ? ["message", "assistant_stream", "assistant_delta", "tool_call", "tool_result", "agent_turn", "turn_running"].includes(normalizedEventType)
-    : false;
-  if (normalizedRole === "user" || hasActiveEvent) {
+  if (runtime?.activeRunId) {
     return "working" as const;
   }
-  return "completed" as const;
+  if (runtime?.lastTerminalAt && now - runtime.lastTerminalAt <= COMPLETED_RECENT_WINDOW_MS) {
+    return "completed" as const;
+  }
+  return "idle" as const;
+};
+
+const patchConversation = (conversation: Conversation, updater: (conversation: Conversation) => Conversation): Conversation => {
+  const next = updater(conversation);
+  return {
+    ...next,
+    status: deriveConversationStatus(next.runtime),
+  };
 };
 
 function extractUsageFromGatewayMessage(message?: GatewayMessage | null) {
@@ -559,15 +538,26 @@ function extractUsageFromGatewayMessage(message?: GatewayMessage | null) {
   };
 }
 
+function stripInboundWrapperText(text: string) {
+  return text
+    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*```json\n[\s\S]*?\n\s*```\n?/g, "")
+    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*\{[\s\S]*?\n\s*\}\n?/g, "")
+    .replace(/^\[[A-Za-z]+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*GMT[+-]\d+\]\s*/gm, "")
+    .trim();
+}
+
 function extractTextFromGatewayMessage(message?: GatewayMessage | null) {
   if (!message) return "";
-  if (typeof message.text === "string") return message.text;
-  if (typeof message.content === "string") return message.content;
+  if (typeof message.text === "string") {
+    return stripInboundWrapperText(message.text);
+  }
+  if (typeof message.content === "string") {
+    return stripInboundWrapperText(message.content);
+  }
   if (Array.isArray(message.content)) {
     return message.content
       .map((part) => {
-        if (part.type === "text") return part.text;
-        if (part.type === "toolresult") return part.text ?? "";
+        if (part.type === "text") return part.text ?? "";
         return "";
       })
       .join("\n")
@@ -579,18 +569,20 @@ function extractTextFromGatewayMessage(message?: GatewayMessage | null) {
 function mapGatewayContentToParts(message?: GatewayMessage | null): MessagePart[] {
   if (!message) return [];
   if (typeof message.content === "string") {
-    return message.content.trim() ? [{ kind: "text", text: message.content }] : [];
+    const cleaned = stripInboundWrapperText(message.content);
+    return cleaned.trim() ? [{ kind: "text", text: cleaned }] : [];
   }
   if (Array.isArray(message.content)) {
     return message.content.flatMap<MessagePart>((part) => {
       if (part.type === "text") {
-        return part.text?.trim() ? [{ kind: "text", text: part.text }] : [];
+        const cleaned = stripInboundWrapperText(part.text ?? "");
+        return cleaned.trim() ? [{ kind: "text", text: cleaned }] : [];
       }
       if (part.type === "toolcall") {
         return [{ kind: "tool_call", tool: part.name ?? "tool", args: typeof part.arguments === "string" ? part.arguments : JSON.stringify(part.arguments ?? {}, null, 2) }];
       }
       if (part.type === "toolresult") {
-        return [{ kind: "tool_result", tool: part.name, text: part.text }];
+        return [];
       }
       if (part.type === "image" || part.type === "input_image" || part.type === "image_url") {
         const src = part.data ?? part.url ?? part.image_url?.url;
@@ -599,8 +591,9 @@ function mapGatewayContentToParts(message?: GatewayMessage | null): MessagePart[
       return [];
     });
   }
-  if (typeof message.text === "string" && message.text.trim()) {
-    return [{ kind: "text", text: message.text }];
+  if (typeof message.text === "string") {
+    const cleaned = stripInboundWrapperText(message.text);
+    return cleaned.trim() ? [{ kind: "text", text: cleaned }] : [];
   }
   return [];
 }
@@ -615,7 +608,11 @@ const MODEL_OPTIONS = [
   { value: "moonshot/kimi-k2-turbo-preview", label: "Kimi-K2-Turbo" },
 ];
 
-function buildAgentsFromSnapshot(snapshot: OpenClawSnapshot, currentAgentSnapshots: Agent[]): Agent[] {
+function buildAgentsFromSnapshot(
+  snapshot: OpenClawSnapshot,
+  currentAgentSnapshots: Agent[],
+  options?: { preserveExistingConversations?: boolean; activeConversationId?: string | null },
+): Agent[] {
   const colors = ["#52f2c5", "#7aa2ff", "#f08b7d", "#c08bff", "#f3bf63"];
   return snapshot.agents.map((agent, index) => {
     const existing = currentAgentSnapshots.find((item) => item.id === agent.id);
@@ -628,15 +625,35 @@ function buildAgentsFromSnapshot(snapshot: OpenClawSnapshot, currentAgentSnapsho
           .reverse()
           .find((message) => (message.role?.toLowerCase() ?? "") === "assistant");
 
+        const existingConversation = existing?.conversations.find((item) => item.id === session.key);
+        const runtime: ConversationRuntime = existingConversation?.runtime ?? {
+          activeRunId: undefined,
+          activeStartedAt: undefined,
+          lastEventAt: session.updated_at,
+          lastTerminalAt: latestRole === "assistant" ? session.updated_at : undefined,
+          lastTerminalReason: latestRole === "assistant" ? "completed" : undefined,
+        };
+        // Merge previewMessages: use session messages as base, but preserve token data from existing messages
+        const existingPreviewMessages = existingConversation?.previewMessages;
+        const sessionMessages = session.preview_messages || [];
+        // Create a map of existing messages by index for quick lookup
+        const existingMessagesMap = new Map<number, PreviewMessage>();
+        if (existingPreviewMessages) {
+          existingPreviewMessages.forEach((msg, idx) => existingMessagesMap.set(idx, msg));
+        }
+        // Use session messages directly - they come from the backend snapshot
+        // Note: When entering a conversation, openConversationDetail will fetch
+        // full message history via gateway_chat_history and update previewMessages
+        const mergedPreviewMessages = sessionMessages as PreviewMessage[];
         return {
           id: session.key,
           title: session.title,
-          status: deriveConversationStatus(session.updated_at, latestRole, session.latest_event_type),
+          status: deriveConversationStatus(runtime),
           lastMessage:
             latestAssistantMessage?.text ??
             session.last_message ??
             "暂无回复内容",
-          previewMessages: session.preview_messages,
+          previewMessages: mergedPreviewMessages,
           lastRole: latestRole,
           latestEventRole: session.latest_event_role?.toLowerCase(),
           latestEventType: session.latest_event_type?.toLowerCase(),
@@ -652,6 +669,7 @@ function buildAgentsFromSnapshot(snapshot: OpenClawSnapshot, currentAgentSnapsho
           workspace: agent.workspace ?? "/Users/zhangzy/clawd",
           visible: sessionIndex < 3,
           pinned: sessionIndex === 0,
+          runtime,
         };
       });
 
@@ -664,7 +682,17 @@ function buildAgentsFromSnapshot(snapshot: OpenClawSnapshot, currentAgentSnapsho
       mdFile: existing?.mdFile ?? `${agent.id}.md`,
       configPath: agent.agent_dir ?? existing?.configPath ?? `agents.list.${index}`,
       summary: existing?.summary ?? "来自本地 OpenClaw 配置。",
-      conversations: realSessions.length > 0 ? realSessions : existing?.conversations ?? [],
+      // If preserveExistingConversations is true, merge realSessions with existing conversations
+      // Keep existing conversations that are not in the snapshot (active conversations)
+      conversations: (() => {
+        if (options?.preserveExistingConversations && existing?.conversations) {
+          const sessionIds = new Set(realSessions.map((s) => s.id));
+          const existingNotInSnapshot = existing.conversations.filter((c) => !sessionIds.has(c.id));
+          const merged = [...realSessions, ...existingNotInSnapshot];
+          return merged.length > 0 ? merged : existing?.conversations ?? [];
+        }
+        return realSessions.length > 0 ? realSessions : existing?.conversations ?? [];
+      })(),
     } as Agent;
   });
 }
@@ -701,14 +729,25 @@ function App() {
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
-  const [userExpanded, setUserExpanded] = useState(false);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
+  const [userExpanded, setUserExpanded] = useState(false);
   const aiResponseScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const gatewayEventUnlistenRef = useRef<null | (() => void)>(null);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    activeRunIdRef.current = activeRunId;
+  }, [activeRunId]);
 
   const loadBootstrapStatus = useCallback(async () => {
     setBootstrapLoading(true);
@@ -795,7 +834,15 @@ function App() {
           return;
         }
 
-        setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots));
+        // Skip updating if there's an active run in progress to avoid overwriting runtime state
+        const hasActiveRun = currentAgentSnapshots.some((agent) =>
+          agent.conversations.some((conv) => conv.runtime?.activeRunId),
+        );
+        if (hasActiveRun) {
+          return;
+        }
+
+        setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots, { preserveExistingConversations: true }));
 
         setSkills(
           snapshot.skills.map((skill) => ({
@@ -822,14 +869,12 @@ function App() {
       }
     };
 
+    // Load snapshot only once on startup
+    // Polling removed to avoid overwriting frontend state (token data, streaming messages, tools)
     void loadSnapshot();
-    const interval = window.setInterval(() => {
-      void loadSnapshot();
-    }, 8000);
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
     };
   }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep]);
 
@@ -861,27 +906,31 @@ function App() {
                 const nextLastRole = payload.session.lastRole?.toLowerCase() ?? conversation.lastRole;
                 const nextLatestEventType = payload.session.latestEventType?.toLowerCase() ?? conversation.latestEventType;
                 const nextTotalTokens = payload.session.totalTokens ?? conversation.totalTokens;
-                return {
-                  ...conversation,
-                  status: deriveConversationStatus(nextUpdatedAt, nextLastRole, nextLatestEventType),
-                  lastMessage: payload.session.lastMessage ?? conversation.lastMessage,
+                return patchConversation(conversation, (currentConversation) => ({
+                  ...currentConversation,
+                  lastMessage: payload.session.lastMessage ?? currentConversation.lastMessage,
                   lastRole: nextLastRole,
-                  latestEventRole: payload.session.latestEventRole?.toLowerCase() ?? conversation.latestEventRole,
+                  latestEventRole: payload.session.latestEventRole?.toLowerCase() ?? currentConversation.latestEventRole,
                   latestEventType: nextLatestEventType,
                   updatedAt: nextUpdatedAt,
-                  lastTime: nextUpdatedAt ? new Date(nextUpdatedAt).toLocaleString("zh-CN") : conversation.lastTime,
-                  inputTokens: payload.session.inputTokens ?? conversation.inputTokens,
-                  outputTokens: payload.session.outputTokens ?? conversation.outputTokens,
-                  cacheReadTokens: payload.session.cacheReadTokens ?? conversation.cacheReadTokens,
-                  cacheWriteTokens: payload.session.cacheWriteTokens ?? conversation.cacheWriteTokens,
+                  lastTime: nextUpdatedAt ? new Date(nextUpdatedAt).toLocaleString("zh-CN") : currentConversation.lastTime,
+                  inputTokens: payload.session.inputTokens ?? currentConversation.inputTokens,
+                  outputTokens: payload.session.outputTokens ?? currentConversation.outputTokens,
+                  cacheReadTokens: payload.session.cacheReadTokens ?? currentConversation.cacheReadTokens,
+                  cacheWriteTokens: payload.session.cacheWriteTokens ?? currentConversation.cacheWriteTokens,
                   totalTokens: nextTotalTokens,
                   tokens: formatTokenCount(nextTotalTokens),
-                  model: payload.session.model ?? conversation.model,
-                  // Don't overwrite previewMessages from session_patch.
-                  // Preview messages are managed by the WebSocket delta/final handler.
-                  // Session patches from the realtime subscription may carry stale preview data.
-                  previewMessages: conversation.previewMessages,
-                };
+                  model: payload.session.model ?? currentConversation.model,
+                  previewMessages: currentConversation.previewMessages,
+                  // Preserve existing runtime state from frontend; session_patch doesn't include runtime info
+                  runtime: currentConversation.runtime ?? {
+                    activeRunId: undefined,
+                    activeStartedAt: undefined,
+                    lastEventAt: nextUpdatedAt,
+                    lastTerminalAt: nextLastRole === "assistant" ? nextUpdatedAt : undefined,
+                    lastTerminalReason: nextLastRole === "assistant" ? "completed" : undefined,
+                  },
+                }));
               }),
             })),
           );
@@ -912,11 +961,49 @@ function App() {
       setGatewayConnected(status.connected);
       setGatewayStatusText(status.statusText || (status.connected ? "Gateway 已连接" : "Gateway 未连接"));
       setGatewayError(status.error ?? null);
+      if (!status.connected) {
+        const disconnectedAt = Date.now();
+        setAgents((current) => current.map((agent) => ({
+          ...agent,
+          conversations: agent.conversations.map((conversation) => {
+            if (!conversation.runtime?.activeRunId) return conversation;
+            return patchConversation(conversation, (currentConversation) => ({
+              ...currentConversation,
+              runtime: {
+                ...currentConversation.runtime,
+                activeRunId: undefined,
+                activeStartedAt: undefined,
+                lastEventAt: disconnectedAt,
+                lastTerminalAt: disconnectedAt,
+                lastTerminalReason: "interrupted",
+              },
+            }));
+          }),
+        })));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const disconnectedAt = Date.now();
       setGatewayConnected(false);
       setGatewayStatusText(`Gateway 状态获取失败: ${message}`);
       setGatewayError(message);
+      setAgents((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) => {
+          if (!conversation.runtime?.activeRunId) return conversation;
+          return patchConversation(conversation, (currentConversation) => ({
+            ...currentConversation,
+            runtime: {
+              ...currentConversation.runtime,
+              activeRunId: undefined,
+              activeStartedAt: undefined,
+              lastEventAt: disconnectedAt,
+              lastTerminalAt: disconnectedAt,
+              lastTerminalReason: "interrupted",
+            },
+          }));
+        }),
+      })));
     }
   }, []);
 
@@ -946,6 +1033,11 @@ function App() {
             return;
           }
 
+          const eventTimestamp = chat.message?.timestamp ?? Date.now();
+          const eventLastTime = new Date(eventTimestamp).toLocaleString("zh-CN");
+          const isCurrentConversation = activeConversationIdRef.current === chat.sessionKey;
+          const isCurrentRun = !chat.runId || !activeRunIdRef.current || chat.runId === activeRunIdRef.current;
+
           if (chat.state === "delta") {
             const deltaText = extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
@@ -954,89 +1046,145 @@ function App() {
               ...agent,
               conversations: agent.conversations.map((conversation) => {
                 if (conversation.id !== chat.sessionKey) return conversation;
-                const nextMessages = [...(conversation.previewMessages ?? [])];
-                const last = nextMessages[nextMessages.length - 1];
-                if (last?.role === "assistant" && last.text.startsWith("__streaming__")) {
-                  const previousText = last.text.replace(/^__streaming__/, "");
-                  const mergedText = deltaText ? `${previousText}${deltaText}` : previousText;
-                  last.text = `__streaming__${mergedText}`;
-                  last.parts = deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: mergedText }];
-                  last.model = chat.message?.model ?? last.model;
-                  last.provider = chat.message?.provider ?? last.provider;
-                  last.api = chat.message?.api ?? last.api;
-                  last.timestamp = chat.message?.timestamp ?? last.timestamp;
-                  Object.assign(last, extractUsageFromGatewayMessage(chat.message));
-                } else {
-                  nextMessages.push({ role: "assistant", text: `__streaming__${deltaText}`, parts: deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: deltaText }], model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: chat.message?.timestamp, ...extractUsageFromGatewayMessage(chat.message) });
-                }
-                return {
-                  ...conversation,
-                  status: "working",
-                  lastRole: "assistant",
-                  lastMessage: deltaText || conversation.lastMessage,
-                  previewMessages: nextMessages,
-                  updatedAt: Date.now(),
-                  lastTime: new Date().toLocaleString("zh-CN"),
-                };
+                return patchConversation(conversation, (currentConversation) => {
+                  const nextMessages = [...(currentConversation.previewMessages ?? [])];
+                  const streamingMarker = chat.runId ? `__streaming__${chat.runId}__` : "__streaming__";
+                  const lastIndex = nextMessages.length - 1;
+                  const last = nextMessages[lastIndex];
+                  if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
+                    const usage = extractUsageFromGatewayMessage(chat.message);
+                    nextMessages[lastIndex] = {
+                      ...last,
+                      text: `${streamingMarker}${deltaText || last.text.replace(streamingMarker, "")}`,
+                      parts: deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: deltaText }],
+                      model: chat.message?.model ?? last.model,
+                      provider: chat.message?.provider ?? last.provider,
+                      api: chat.message?.api ?? last.api,
+                      timestamp: eventTimestamp,
+                      input_tokens: usage.input_tokens ?? last.input_tokens,
+                      output_tokens: usage.output_tokens ?? last.output_tokens,
+                      cache_read_tokens: usage.cache_read_tokens ?? last.cache_read_tokens,
+                      cache_write_tokens: usage.cache_write_tokens ?? last.cache_write_tokens,
+                    };
+                  } else {
+                    if (deltaParts.length > 0 || deltaText) {
+                      nextMessages.push({ role: "assistant", text: `${streamingMarker}${deltaText}`, parts: deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: deltaText }], model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: eventTimestamp, ...extractUsageFromGatewayMessage(chat.message) });
+                    }
+                  }
+                  return {
+                    ...currentConversation,
+                    lastRole: "assistant",
+                    latestEventType: "assistant_stream",
+                    lastMessage: deltaText || currentConversation.lastMessage,
+                    previewMessages: nextMessages,
+                    updatedAt: eventTimestamp,
+                    lastTime: eventLastTime,
+                    runtime: {
+                      ...currentConversation.runtime,
+                      activeRunId: chat.runId ?? currentConversation.runtime?.activeRunId,
+                      activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
+                      lastEventAt: eventTimestamp,
+                    },
+                  };
+                });
               }),
             })));
+            if (isCurrentConversation && isCurrentRun) {
+              setSending(true);
+            }
             return;
           }
 
           if (chat.state === "final" || chat.state === "aborted") {
-            setActiveRunId(null);
             const finalText = extractTextFromGatewayMessage(chat.message);
             const finalParts = mapGatewayContentToParts(chat.message);
-            setSending(false);
+            const terminalEventType = chat.state === "aborted" ? "aborted" : "turn_completed";
+            if (isCurrentConversation && isCurrentRun) {
+              setActiveRunId(null);
+              setSending(false);
+            }
             setAgents((current) => current.map((agent) => ({
               ...agent,
               conversations: agent.conversations.map((conversation) => {
                 if (conversation.id !== chat.sessionKey) return conversation;
-                const nextMessages = [...(conversation.previewMessages ?? [])];
-                const last = nextMessages[nextMessages.length - 1];
-                if (last?.role === "assistant" && last.text.startsWith("__streaming__")) {
-                  if (finalText || finalParts.length > 0) {
-                    last.text = finalText || last.text.replace(/^__streaming__/, "");
-                    last.parts = finalParts.length > 0 ? finalParts : [{ kind: "text", text: finalText || last.text.replace(/^__streaming__/, "") }];
-                  } else {
-                    last.text = last.text.replace(/^__streaming__/, "");
+                return patchConversation(conversation, (currentConversation) => {
+                  const nextMessages = [...(currentConversation.previewMessages ?? [])];
+                  const streamingMarker = chat.runId ? `__streaming__${chat.runId}__` : "__streaming__";
+                  const lastIndex = nextMessages.length - 1;
+                  const last = nextMessages[lastIndex];
+                  if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
+                    const usage = extractUsageFromGatewayMessage(chat.message);
+                    const newText = finalText || last.text.replace(streamingMarker, "");
+                    nextMessages[lastIndex] = {
+                      ...last,
+                      text: newText,
+                      parts: finalParts.length > 0 ? finalParts : [{ kind: "text", text: newText }],
+                      model: chat.message?.model ?? last.model,
+                      provider: chat.message?.provider ?? last.provider,
+                      api: chat.message?.api ?? last.api,
+                      timestamp: eventTimestamp,
+                      input_tokens: usage.input_tokens ?? last.input_tokens,
+                      output_tokens: usage.output_tokens ?? last.output_tokens,
+                      cache_read_tokens: usage.cache_read_tokens ?? last.cache_read_tokens,
+                      cache_write_tokens: usage.cache_write_tokens ?? last.cache_write_tokens,
+                    };
+                  } else if (finalText || finalParts.length > 0) {
+                    nextMessages.push({ role: "assistant", text: finalText, parts: finalParts.length > 0 ? finalParts : [{ kind: "text", text: finalText }], model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: eventTimestamp, ...extractUsageFromGatewayMessage(chat.message) });
                   }
-                  last.model = chat.message?.model ?? last.model;
-                  last.provider = chat.message?.provider ?? last.provider;
-                  last.api = chat.message?.api ?? last.api;
-                  last.timestamp = chat.message?.timestamp ?? last.timestamp;
-                  Object.assign(last, extractUsageFromGatewayMessage(chat.message));
-                } else if (finalText || finalParts.length > 0) {
-                  nextMessages.push({ role: "assistant", text: finalText, parts: finalParts, model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: chat.message?.timestamp, ...extractUsageFromGatewayMessage(chat.message) });
-                }
-                return {
-                  ...conversation,
-                  status: "completed",
-                  lastRole: "assistant",
-                  lastMessage: finalText || conversation.lastMessage,
-                  previewMessages: nextMessages,
-                  updatedAt: Date.now(),
-                  lastTime: new Date().toLocaleString("zh-CN"),
-                };
+                  return {
+                    ...currentConversation,
+                    lastRole: "assistant",
+                    latestEventType: terminalEventType,
+                    lastMessage: finalText || currentConversation.lastMessage,
+                    previewMessages: nextMessages,
+                    updatedAt: eventTimestamp,
+                    lastTime: eventLastTime,
+                    runtime: {
+                      ...currentConversation.runtime,
+                      activeRunId: undefined,
+                      activeStartedAt: undefined,
+                      lastEventAt: eventTimestamp,
+                      lastTerminalAt: eventTimestamp,
+                      lastTerminalReason: chat.state === "aborted" ? "aborted" : "completed",
+                    },
+                  };
+                });
               }),
             })));
             void refreshGatewayStatus();
-            // Wait a moment for the gateway to persist the message, then refetch history
-            // to ensure we have the complete message data (usage, parts, etc.)
-            const sessionKey = chat.sessionKey;
-            if (sessionKey) {
+            if (isCurrentConversation) {
               setTimeout(() => {
-                void openConversationDetail(sessionKey);
+                void openConversationDetail(chat.sessionKey!);
               }, 1000);
             }
             return;
           }
 
           if (chat.state === "error") {
-            setActiveRunId(null);
-            setSending(false);
-            setGatewayError(chat.errorMessage ?? "发送失败");
-            setGatewayStatusText(`Gateway 请求失败: ${chat.errorMessage ?? "发送失败"}`);
+            if (isCurrentConversation && isCurrentRun) {
+              setActiveRunId(null);
+              setSending(false);
+              setGatewayError(chat.errorMessage ?? "发送失败");
+              setGatewayStatusText(`Gateway 请求失败: ${chat.errorMessage ?? "发送失败"}`);
+            }
+            setAgents((current) => current.map((agent) => ({
+              ...agent,
+              conversations: agent.conversations.map((conversation) => {
+                if (conversation.id !== chat.sessionKey) return conversation;
+                return patchConversation(conversation, (currentConversation) => ({
+                  ...currentConversation,
+                  latestEventType: "error",
+                  runtime: {
+                    ...currentConversation.runtime,
+                    activeRunId: undefined,
+                    activeStartedAt: undefined,
+                    lastEventAt: Date.now(),
+                    lastTerminalAt: Date.now(),
+                    lastTerminalReason: "error",
+                  },
+                }));
+              }),
+            })));
           }
         });
         gatewayEventUnlistenRef.current = unlisten;
@@ -1072,8 +1220,6 @@ function App() {
       )
       .sort((left, right) => {
         const statusRank = { working: 0, completed: 1, idle: 2 };
-        const pinnedRank = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
-        if (pinnedRank !== 0) return pinnedRank;
         const byStatus = statusRank[left.status] - statusRank[right.status];
         if (byStatus !== 0) return byStatus;
         return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
@@ -1082,9 +1228,10 @@ function App() {
 
   const filteredVisibleConversations = visibleConversations;
 
+  // Always get activeConversation from agents to ensure we have the latest data
+  // (including previewMessages updated by gateway_chat_history)
   const activeConversation = activeConversationId
-    ? filteredVisibleConversations.find((conversation) => conversation.id === activeConversationId)
-      ?? agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === activeConversationId)
+    ? agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === activeConversationId)
       ?? null
     : null;
 
@@ -1197,21 +1344,7 @@ function App() {
           timestamp: message.timestamp,
           ...extractUsageFromGatewayMessage(message),
         }));
-        // If the last assistant message might still be streaming (recent update, assistant role last),
-        // mark it with __streaming__ prefix so the delta handler appends to it correctly.
-        const lastMsg = mappedMessages[mappedMessages.length - 1];
         const lastAssistant = [...mappedMessages].reverse().find(m => m.role === "assistant");
-        const isPotentiallyStreaming = lastMsg?.role?.toLowerCase() === "assistant" || 
-          (lastMsg?.role?.toLowerCase() === "user" && lastAssistant && Date.now() - (lastAssistant.timestamp || 0) < 300000);
-        if (isPotentiallyStreaming && lastAssistant && !lastAssistant.text.startsWith("__streaming__")) {
-          lastAssistant.text = `__streaming__${lastAssistant.text}`;
-          if (lastAssistant.parts && lastAssistant.parts.length > 0) {
-            const firstTextPart = lastAssistant.parts.find(p => p.kind === "text");
-            if (firstTextPart && "text" in firstTextPart) {
-              (firstTextPart as any).text = `__streaming__${(firstTextPart as any).text}`;
-            }
-          }
-        }
         // Calculate total tokens from mapped messages
         const totalInput = mappedMessages.reduce((sum, m) => sum + (m.input_tokens || 0), 0);
         const totalOutput = mappedMessages.reduce((sum, m) => sum + (m.output_tokens || 0), 0);
@@ -1224,20 +1357,26 @@ function App() {
           ...agent,
           conversations: agent.conversations.map((conversation) => {
             if (conversation.id !== conversationId) return conversation;
-            return {
-              ...conversation,
+            return patchConversation(conversation, (currentConversation) => ({
+              ...currentConversation,
               previewMessages: mappedMessages,
-              status: "idle" as ConversationStatus,
               lastRole,
-              lastMessage: lastAssistant?.text || conversation.lastMessage,
-              model: lastAssistant?.model || conversation.model,
+              lastMessage: lastAssistant?.text || currentConversation.lastMessage,
+              model: lastAssistant?.model || currentConversation.model,
               inputTokens: totalInput,
               outputTokens: totalOutput,
               cacheReadTokens: totalCacheRead,
               cacheWriteTokens: totalCacheWrite,
               totalTokens,
               tokens: formatTokenCount(totalTokens),
-            };
+              runtime: currentConversation.runtime ?? {
+                activeRunId: undefined,
+                activeStartedAt: undefined,
+                lastEventAt: currentConversation.updatedAt,
+                lastTerminalAt: lastAssistant ? currentConversation.updatedAt : undefined,
+                lastTerminalReason: lastAssistant ? "completed" : undefined,
+              },
+            }));
           }),
         })));
       }
@@ -1255,9 +1394,13 @@ function App() {
 
     const handleScroll = () => {
       const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      shouldStickToBottomRef.current = distanceToBottom < 80;
+      const shouldStick = distanceToBottom < 80;
+      shouldStickToBottomRef.current = shouldStick;
+      setShowJumpToBottom(!shouldStick);
     };
 
+    shouldStickToBottomRef.current = true;
+    setShowJumpToBottom(false);
     handleScroll();
     container.addEventListener("scroll", handleScroll);
     return () => container.removeEventListener("scroll", handleScroll);
@@ -1271,10 +1414,14 @@ function App() {
     if (!container) {
       return;
     }
-    if (!shouldStickToBottomRef.current) {
-      return;
-    }
-    container.scrollTop = container.scrollHeight;
+    const raf = window.requestAnimationFrame(() => {
+      if (!shouldStickToBottomRef.current) {
+        return;
+      }
+      container.scrollTop = container.scrollHeight;
+      setShowJumpToBottom(false);
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [
     activeConversation?.id,
     activeConversation?.previewMessages?.length,
@@ -1360,7 +1507,6 @@ function App() {
           previewMessages: [
             ...(conversation.previewMessages ?? []),
             { role: "user", text: message || composerAttachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
-            { role: "assistant", text: "__streaming__", parts: [{ kind: "text", text: "" }] },
           ],
         };
       }),
@@ -1374,6 +1520,21 @@ function App() {
       await invoke("gateway_connect");
       const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       setActiveRunId(runId);
+      setAgents((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) => {
+          if (conversation.id !== activeConversationId) return conversation;
+          return patchConversation(conversation, (currentConversation) => ({
+            ...currentConversation,
+            runtime: {
+              ...currentConversation.runtime,
+              activeRunId: runId,
+              activeStartedAt: Date.now(),
+              lastEventAt: Date.now(),
+            },
+          }));
+        }),
+      })));
       
       // 如果选择了不同的模型，先 patch 会话
       if (composerModel && composerModel !== activeConversation?.model) {
@@ -1405,6 +1566,8 @@ function App() {
       await refreshGatewayStatus();
     }
   }, [activeConversationId, composerAttachments, composerModel, composerThinking, composerValue, refreshGatewayStatus, sending]);
+
+
 
   if (bootstrapLoading) {
     return (
@@ -1656,34 +1819,42 @@ function App() {
                     activeConversation={activeConversation}
                     agentName={visibleConversations.find((conversation) => conversation.id === activeConversation.id)?.agentName ?? "未知 Agent"}
                     statusLabel={statusLabel}
+                    onBack={(resetUserExpanded) => { setActiveConversationId(null); resetUserExpanded(); }}
+                    resetUserExpanded={() => setUserExpanded(false)}
+                    parseSenderMeta={parseSenderMeta}
                     userExpanded={userExpanded}
                     onUserExpandedChange={setUserExpanded}
-                    onBack={() => { setActiveConversationId(null); setUserExpanded(false); }}
-                    onOpenImage={setPreviewImageSrc}
                     aiResponseScrollRef={aiResponseScrollRef}
-                    parseSenderMeta={parseSenderMeta}
-                    normalizeImageSrc={normalizeImageSrc}
+                    showJumpToBottom={showJumpToBottom}
+                    onJumpToBottom={() => {
+                      const container = aiResponseScrollRef.current;
+                      if (!container) return;
+                      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+                      shouldStickToBottomRef.current = true;
+                      setShowJumpToBottom(false);
+                    }}
                     conversationMessageList={(() => {
-                      const detailState = getConversationDetailState(activeConversation.previewMessages ?? [], activeConversation.lastRole);
-                      if (detailState.isWaitingReply) {
-                        return (
-                          <div className="message-bubble assistant assistant-thinking" role="status" aria-live="polite">
-                            <span className="message-role">Assistant</span>
-                            <div className="thinking-dots" aria-hidden="true">
-                              <span />
-                              <span />
-                              <span />
-                            </div>
-                          </div>
-                        );
-                      }
-                      if (!detailState.hasRenderableContent) return <p className="ai-empty-hint">暂无回复内容</p>;
+                      const detailState = getConversationDetailState(
+                        activeConversation.previewMessages ?? [],
+                        activeConversation.lastRole,
+                        false,
+                      );
+                      const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isWaitingReply || detailState.isStillStreaming;
+                      if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
+                      
+                      const messagesToShow = detailState.normalizedMessages;
+                      
                       return (
                         <>
-                          <ConversationMessageList messages={detailState.normalizedMessages} conversationId={activeConversation.id} onOpenImage={setPreviewImageSrc} />
-                          {detailState.isStillStreaming && (
-                            <div className="message-bubble assistant assistant-thinking trailing" role="status" aria-live="polite">
-                              <span className="message-role">Assistant</span>
+                          {detailState.hasRenderableContent ? (
+                            <ConversationMessageList
+                              messages={messagesToShow}
+                              conversationId={activeConversation.id}
+                              onOpenImage={setPreviewImageSrc}
+                            />
+                          ) : null}
+                          {shouldShowInProgress && (
+                            <div className="thinking-indicator-fixed" role="status" aria-live="polite">
                               <div className="thinking-dots" aria-hidden="true">
                                 <span />
                                 <span />

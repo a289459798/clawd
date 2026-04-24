@@ -94,6 +94,13 @@ struct OpenClawSnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionRecordResult {
+    session_file: String,
+    messages: Vec<SessionMessage>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GatewayAuthInfo {
     url: String,
     token: String,
@@ -881,6 +888,50 @@ fn load_openclaw_snapshot() -> Result<OpenClawSnapshot, String> {
 }
 
 #[tauri::command]
+fn load_session_record(session_key: String) -> Result<SessionRecordResult, String> {
+    let config_path = openclaw_config_path()?;
+    let content = fs::read_to_string(&config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let json: Value = serde_json::from_str(&content)
+        .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?;
+
+    let agents = json
+        .get("agents")
+        .and_then(|agents| agents.get("list"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for agent in agents {
+        let Some(agent_id) = agent.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for session in read_sessions_for_agent(agent_id) {
+            if session.key == session_key {
+                let session_file = session
+                    .session_file
+                    .ok_or_else(|| format!("session_file missing for {session_key}"))?;
+                let (
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    messages,
+                ) = read_session_preview(&session_file);
+                return Ok(SessionRecordResult { session_file, messages });
+            }
+        }
+    }
+
+    Err(format!("session not found: {session_key}"))
+}
+
+#[tauri::command]
 fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
     let openclaw_path = Command::new("sh")
@@ -1018,6 +1069,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             resolve_dashboard_url,
             load_openclaw_snapshot,
+            load_session_record,
             get_clawx_bootstrap_status,
             ensure_clawx_binding,
             resolve_gateway_auth,

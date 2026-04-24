@@ -1,18 +1,21 @@
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tungstenite::stream::MaybeTlsStream;
 use tungstenite::client::IntoClientRequest;
-use tungstenite::{connect, Message, WebSocket};
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket, connect};
 use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,6 +29,7 @@ pub struct GatewayClientConfig {
 struct DeviceIdentity {
     device_id: String,
     public_key: String,
+    signing_key: SigningKey,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -193,48 +197,109 @@ fn raw_stream_mut(stream: &mut MaybeTlsStream<TcpStream>) -> Result<&mut TcpStre
     }
 }
 
+fn normalize_device_metadata_for_auth(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn signing_key_from_pem(pem: &str) -> Result<SigningKey, String> {
+    let body = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect::<String>();
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(body.as_bytes())
+        .map_err(|error| format!("invalid PEM base64: {error}"))?;
+
+    const PKCS8_PREFIX: &[u8] = &[
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
+        0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+    ];
+    if der.len() < PKCS8_PREFIX.len() + 32 || &der[..PKCS8_PREFIX.len()] != PKCS8_PREFIX {
+        return Err("unsupported private key PEM format".to_string());
+    }
+    let key_bytes: [u8; 32] = der[PKCS8_PREFIX.len()..PKCS8_PREFIX.len() + 32]
+        .try_into()
+        .map_err(|_| "invalid private key length in PEM".to_string())?;
+    Ok(SigningKey::from_bytes(&key_bytes))
+}
+
 fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
     let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
     let dir = PathBuf::from(&home).join(".openclaw/clawx");
     fs::create_dir_all(&dir).map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
+    let identity_path = dir.join("device_identity.json");
 
-    let script = r#"
-const home = process.env.HOME;
-const identityPath = `${home}/.openclaw/clawx/device_identity.json`;
-const mod = await import(`file://${home}/.nvm/versions/node/v24.4.1/lib/node_modules/openclaw/dist/device-identity-TBOlRcQx.js`);
-const loadOrCreateDeviceIdentity = mod.n;
-const publicKeyRawBase64UrlFromPem = mod.i;
-const identity = loadOrCreateDeviceIdentity(identityPath);
-process.stdout.write(JSON.stringify({
-  deviceId: identity.deviceId,
-  publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem)
-}));
-"#;
-
-    let output = Command::new("node")
-        .env("HOME", &home)
-        .arg("--input-type=module")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|error| format!("failed to run node for device identity: {error}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "failed to load device identity: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    #[derive(Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StoredDeviceIdentity {
+        device_id: String,
+        private_key: String,
     }
 
-    let json: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("failed to parse device identity json: {error}"))?;
-    let device_id = json.get("deviceId").and_then(Value::as_str).unwrap_or_default().to_string();
-    let public_key = json.get("publicKey").and_then(Value::as_str).unwrap_or_default().to_string();
-    if device_id.is_empty() || public_key.is_empty() {
-        return Err("invalid device identity payload from openclaw".to_string());
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LegacyStoredDeviceIdentity {
+        device_id: String,
+        public_key: Option<String>,
+        private_key_pem: Option<String>,
+        public_key_pem: Option<String>,
     }
 
-    Ok(DeviceIdentity { device_id, public_key })
+    let stored = if identity_path.exists() {
+        let content = fs::read_to_string(&identity_path)
+            .map_err(|error| format!("failed to read {}: {error}", identity_path.display()))?;
+        match serde_json::from_str::<StoredDeviceIdentity>(&content) {
+            Ok(current) => current,
+            Err(_) => {
+                let legacy = serde_json::from_str::<LegacyStoredDeviceIdentity>(&content)
+                    .map_err(|error| format!("failed to parse {}: {error}", identity_path.display()))?;
+                let pem = legacy
+                    .private_key_pem
+                    .ok_or_else(|| format!("legacy device identity missing privateKeyPem in {}", identity_path.display()))?;
+                let signing_key = signing_key_from_pem(&pem)?;
+                let migrated = StoredDeviceIdentity {
+                    device_id: legacy.device_id,
+                    private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+                };
+                let migrated_content = serde_json::to_string_pretty(&migrated)
+                    .map_err(|error| format!("failed to serialize migrated device identity: {error}"))?;
+                fs::write(&identity_path, migrated_content)
+                    .map_err(|error| format!("failed to write {}: {error}", identity_path.display()))?;
+                migrated
+            }
+        }
+    } else {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let stored = StoredDeviceIdentity {
+            device_id: format!("clawx-{}", rand::random::<u64>()),
+            private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        };
+        let content = serde_json::to_string_pretty(&stored)
+            .map_err(|error| format!("failed to serialize device identity: {error}"))?;
+        fs::write(&identity_path, content)
+            .map_err(|error| format!("failed to write {}: {error}", identity_path.display()))?;
+        stored
+    };
+
+    let private_key_bytes = URL_SAFE_NO_PAD
+        .decode(stored.private_key.as_bytes())
+        .map_err(|error| format!("invalid stored private key encoding: {error}"))?;
+    let private_key_array: [u8; 32] = private_key_bytes
+        .try_into()
+        .map_err(|_| "stored private key must be 32 bytes".to_string())?;
+    let signing_key = SigningKey::from_bytes(&private_key_array);
+    let verifying_key: VerifyingKey = signing_key.verifying_key();
+    let public_key = URL_SAFE_NO_PAD.encode(verifying_key.to_bytes());
+
+    Ok(DeviceIdentity {
+        device_id: stored.device_id,
+        public_key,
+        signing_key,
+    })
 }
 
 fn sign_connect_payload_v3(
@@ -249,70 +314,24 @@ fn sign_connect_payload_v3(
     platform: &str,
     device_family: Option<&str>,
 ) -> Result<String, String> {
-    let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    let scopes_json = serde_json::to_string(scopes).map_err(|error| format!("serialize scopes failed: {error}"))?;
-    let script = format!(
-        r#"
-const home = process.env.HOME;
-const mod = await import(`file://${{home}}/.nvm/versions/node/v24.4.1/lib/node_modules/openclaw/dist/device-identity-TBOlRcQx.js`);
-const loadOrCreateDeviceIdentity = mod.n;
-const signDevicePayload = mod.a;
-const identity = loadOrCreateDeviceIdentity(`${{home}}/.openclaw/clawx/device_identity.json`);
-const normalizeDeviceMetadataForAuth = (value) => {{
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  return trimmed ? trimmed.toLowerCase() : '';
-}};
-const payload = [
-  'v3',
-  {device_id:?},
-  {client_id:?},
-  {client_mode:?},
-  {role:?},
-  ...[{scopes_json}].map((x) => Array.isArray(x) ? x.join(',') : x),
-  String({signed_at}),
-  {token:?} ?? '',
-  {nonce:?},
-  normalizeDeviceMetadataForAuth({platform:?}),
-  normalizeDeviceMetadataForAuth({device_family_js})
-].join('|');
-process.stdout.write(signDevicePayload(identity.privateKeyPem, payload));
-"#,
-        device_id = identity.device_id,
-        client_id = client_id,
-        client_mode = client_mode,
-        role = role,
-        scopes_json = scopes_json,
-        signed_at = signed_at,
-        token = token,
-        nonce = nonce,
-        platform = platform,
-        device_family_js = device_family.map(|s| format!("{s:?}")).unwrap_or("null".to_string()),
-    );
+    let payload = [
+        "v3".to_string(),
+        identity.device_id.clone(),
+        client_id.to_string(),
+        client_mode.to_string(),
+        role.to_string(),
+        scopes.join(","),
+        signed_at.to_string(),
+        token.to_string(),
+        nonce.to_string(),
+        normalize_device_metadata_for_auth(Some(platform)),
+        normalize_device_metadata_for_auth(device_family),
+    ]
+    .join("|");
 
-    let output = Command::new("node")
-        .env("HOME", &home)
-        .arg("--input-type=module")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|error| format!("failed to run node for device signature: {error}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "failed to sign device payload: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    let signature = String::from_utf8(output.stdout)
-        .map_err(|error| format!("invalid signature output encoding: {error}"))?
-        .trim()
-        .to_string();
-    if signature.is_empty() {
-        return Err("empty device signature".to_string());
-    }
-    Ok(signature)
+    use ed25519_dalek::Signer;
+    let signature = identity.signing_key.sign(payload.as_bytes());
+    Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
 fn connect_gateway_socket(config: &GatewayClientConfig) -> Result<WsStream, String> {
@@ -424,6 +443,15 @@ fn gateway_event_loop(
                             client_platform,
                             client_device_family,
                         )?;
+                        let mut client = json!({
+                            "id": client_id,
+                            "version": env!("CARGO_PKG_VERSION"),
+                            "platform": client_platform,
+                            "mode": client_mode
+                        });
+                        if let Some(device_family) = client_device_family {
+                            client["deviceFamily"] = json!(device_family);
+                        }
                         send_gateway_request(
                             &mut socket,
                             "connect",
@@ -431,13 +459,7 @@ fn gateway_event_loop(
                             json!({
                                 "minProtocol": 3,
                                 "maxProtocol": 3,
-                                "client": {
-                                    "id": client_id,
-                                    "version": env!("CARGO_PKG_VERSION"),
-                                    "platform": client_platform,
-                                    "deviceFamily": client_device_family,
-                                    "mode": client_mode
-                                },
+                                "client": client,
                                 "role": role,
                                 "scopes": scopes,
                                 "caps": ["tool-events"],

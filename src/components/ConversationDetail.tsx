@@ -1,19 +1,21 @@
+import { useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
+import type { Conversation, ConversationStatus } from "../types/conversation";
 
 type ConversationDetailProps = {
   activeConversation: Conversation;
   agentName: string;
   statusLabel: Record<ConversationStatus, string>;
-  userExpanded: boolean;
-  onUserExpandedChange: (expanded: boolean) => void;
-  onBack: () => void;
-  onOpenImage: (src: string) => void;
+  onBack: (resetUserExpanded: () => void) => void;
+  resetUserExpanded: () => void;
   conversationMessageList: React.ReactNode;
   aiResponseScrollRef: React.RefObject<HTMLDivElement | null>;
   parseSenderMeta: (text: string) => { label?: string; time?: string; cleanText: string };
-  normalizeImageSrc: (data: string, mimeType?: string) => string;
+  userExpanded: boolean;
+  onUserExpandedChange: (expanded: boolean) => void;
+  showJumpToBottom: boolean;
+  onJumpToBottom: () => void;
 };
 
 function MarkdownBlock({ content, className }: { content: string; className?: string }) {
@@ -28,26 +30,34 @@ export function ConversationDetail({
   activeConversation,
   agentName,
   statusLabel,
-  userExpanded,
-  onUserExpandedChange,
   onBack,
-  onOpenImage,
+  resetUserExpanded,
   conversationMessageList,
   aiResponseScrollRef,
   parseSenderMeta,
-  normalizeImageSrc,
+  userExpanded,
+  onUserExpandedChange,
+  showJumpToBottom,
+  onJumpToBottom,
 }: ConversationDetailProps) {
-  const msgs = activeConversation.previewMessages ?? [];
-  const lastUserMsg = [...msgs].reverse().find((m) => m.role?.toLowerCase() === "user");
-  const rawText = lastUserMsg?.text ?? "";
-  const { label, time, cleanText } = parseSenderMeta(rawText);
-  const imageParts = (lastUserMsg?.parts ?? []).filter((part) => part.kind === "image") as Array<Extract<MessagePart, { kind: "image" }>>;
-  const shouldShowExpand = cleanText.length > 120 || cleanText.split("\n").length > 3;
+  // Auto scroll to bottom when entering conversation or when messages change
+  useEffect(() => {
+    const scrollContainer = aiResponseScrollRef.current;
+    if (!scrollContainer) return;
+    
+    // Use requestAnimationFrame to ensure content is rendered before scrolling
+    requestAnimationFrame(() => {
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollHeight,
+        behavior: "auto",
+      });
+    });
+  }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef]);
 
   return (
     <div className="conversation-detail-shell">
       <div className="conversation-detail-statusbar">
-        <button className="back-icon-button" onClick={onBack} type="button" title="返回列表">
+        <button className="back-icon-button" onClick={() => onBack(resetUserExpanded)} type="button" title="返回列表">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <path d="M12.5 15L7.5 10L12.5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
@@ -61,47 +71,40 @@ export function ConversationDetail({
         <span className={`statusbar-badge ${activeConversation.status}`}>{statusLabel[activeConversation.status]}</span>
       </div>
 
-      <div className="conversation-detail-scroll">
+      <div className="conversation-detail-scroll without-history">
         <div className="conversation-window-page in-app">
           <section className="conversation-turn-section">
-            <div className="last-user-message">
-              <div className="last-user-header">
-                <span className="message-role-label">User</span>
-                <div className="message-meta-right">
-                  {label && <span className="message-source-badge">{label}</span>}
-                  {time && <span className="message-time-badge">{time}</span>}
+            {(() => {
+              const msgs = activeConversation.previewMessages ?? [];
+              const lastUserMsg = [...msgs].reverse().find((m) => m.role?.toLowerCase() === "user");
+              const rawText = lastUserMsg?.text ?? "";
+              const { label, time, cleanText } = parseSenderMeta(rawText);
+              const shouldShowExpand = cleanText.length > 80 || cleanText.split("\n").length > 2;
+              return lastUserMsg ? (
+                <div className="top-user-message">
+                  <div className="top-user-meta">
+                    {label ? <span className="top-user-badge">{label}</span> : null}
+                    {time ? <span className="top-user-time">{time}</span> : null}
+                  </div>
+                  <div className={`top-user-text ${userExpanded ? "expanded" : "clamped"}`}>
+                    <MarkdownBlock content={cleanText} className="markdown-body" />
+                  </div>
+                  {shouldShowExpand ? (
+                    <button className="top-user-expand" type="button" onClick={() => onUserExpandedChange(!userExpanded)} title={userExpanded ? "收起" : "展开"}>
+                      {userExpanded ? "⌃" : "⌄"}
+                    </button>
+                  ) : null}
                 </div>
-              </div>
-              <div className={`last-user-text ${userExpanded ? "expanded" : "clamped"}`}>
-                <MarkdownBlock content={cleanText} className="markdown-body" />
-              </div>
-              {imageParts.length > 0 && (
-                <div className="message-image-grid">
-                  {imageParts.map((part, index) => {
-                    const src = normalizeImageSrc(part.data, part.mime_type);
-                    return (
-                      <button className="message-image-card" type="button" key={`user-image-${index}`} onClick={() => onOpenImage(src)}>
-                        <img className="message-image" src={src} alt={part.alt ?? `用户图片 ${index + 1}`} />
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {shouldShowExpand && !userExpanded && (
-                <button className="expand-btn" type="button" onClick={() => onUserExpandedChange(true)}>
-                  展开
-                </button>
-              )}
-              {shouldShowExpand && userExpanded && (
-                <button className="expand-btn" type="button" onClick={() => onUserExpandedChange(false)}>
-                  收起
-                </button>
-              )}
-            </div>
-
+              ) : null;
+            })()}
             <div className="ai-response-scroll" ref={aiResponseScrollRef}>
               {conversationMessageList}
             </div>
+            {showJumpToBottom ? (
+              <button className="jump-to-bottom-button" type="button" onClick={onJumpToBottom} title="回到底部">
+                ↓
+              </button>
+            ) : null}
           </section>
         </div>
       </div>

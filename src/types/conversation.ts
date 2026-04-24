@@ -20,6 +20,14 @@ export type PreviewMessage = {
   cache_write_tokens?: number;
 };
 
+export type ConversationRuntime = {
+  activeRunId?: string | null;
+  activeStartedAt?: number;
+  lastEventAt?: number;
+  lastTerminalAt?: number;
+  lastTerminalReason?: "completed" | "aborted" | "error" | "failed" | "cancelled" | "interrupted";
+};
+
 export type Conversation = {
   id: string;
   title: string;
@@ -41,4 +49,5 @@ export type Conversation = {
   latestEventRole?: string;
   latestEventType?: string;
   previewMessages?: PreviewMessage[];
+  runtime?: ConversationRuntime;
 };
