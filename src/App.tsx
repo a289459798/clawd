@@ -333,7 +333,7 @@ function buildAgentsFromSnapshot(
           cacheReadTokens: session.cache_read_tokens,
           cacheWriteTokens: session.cache_write_tokens,
           totalTokens: session.total_tokens,
-          model: agent.model ?? existing?.model ?? "未配置",
+          model: latestAssistantMessage?.model ?? agent.model ?? existing?.model ?? "未配置",
           workspace: agent.workspace ?? "/Users/zhangzy/clawd",
           visible: sessionIndex < 3,
           pinned: sessionIndex === 0,
