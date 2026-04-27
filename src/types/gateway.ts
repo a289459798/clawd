@@ -5,6 +5,7 @@ export type SnapshotSession = {
   agent_id: string;
   key: string;
   title: string;
+  label?: string;
   updated_at?: number;
   channel?: string;
   session_file?: string;

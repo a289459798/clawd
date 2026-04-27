@@ -1,5 +1,15 @@
 import type { Conversation, ConversationStatus } from "../types/conversation";
 
+// 从 title 解析对话类型
+function getLabelTypeFromTitle(title?: string): { text: string; color: string } {
+  const lower = title?.toLowerCase() || "";
+  if (lower.includes("main")) return { text: "主对话", color: "#52f2c5" };
+  if (lower.includes("cron")) return { text: "定时任务", color: "#f3bf63" };
+  if (lower.includes("dreaming")) return { text: "做梦", color: "#c08bff" };
+  if (lower.includes("channel")) return { text: "频道", color: "#7aa2ff" };
+  return { text: "对话", color: "#7aa2ff" };
+}
+
 type ConversationCardData = Conversation & {
   agentId: string;
   agentName: string;
@@ -13,12 +23,14 @@ type ConversationCardProps = {
 };
 
 export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: ConversationCardProps) {
+  const labelType = getLabelTypeFromTitle(conversation.title);
+
   return (
     <article className={`conversation-card compact ${conversation.status}`}>
       <div className="conversation-card-head">
         <div className="conversation-card-title-block">
           <div className="card-row">
-            <strong className="conversation-card-title">{conversation.title}</strong>
+            <strong className="conversation-card-title">{conversation.label || conversation.title}</strong>
           </div>
           <div className="conversation-card-subline">
             <span>{conversation.agentName} · {conversation.model} · {conversation.tokens}</span>
@@ -54,7 +66,10 @@ export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: 
       <button className="conversation-card-body-button" onClick={() => onOpen(conversation.id)} type="button">
         <div className="conversation-summary">
           <p>{conversation.lastMessage}</p>
-          <div className="summary-meta compact-time-row">
+          <div className="summary-meta compact-time-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: labelType.color, fontSize: "12px" }}>
+              {labelType.text}
+            </span>
             <span>{conversation.lastTime}</span>
           </div>
         </div>

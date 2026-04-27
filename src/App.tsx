@@ -305,9 +305,21 @@ function buildAgentsFromSnapshot(
         // Note: When entering a conversation, openConversationDetail will fetch
         // full message history via gateway_chat_history and update previewMessages
         const mergedPreviewMessages = sessionMessages as PreviewMessage[];
+        // 从 title 解析对话类型
+        const titleLower = session.title?.toLowerCase() || "";
+        const labelType = (() => {
+          if (titleLower.includes("main")) return { text: "主对话", color: "#52f2c5" };
+          if (titleLower.includes("cron")) return { text: "定时任务", color: "#f3bf63" };
+          if (titleLower.includes("dreaming")) return { text: "做梦", color: "#c08bff" };
+          if (titleLower.includes("channel")) return { text: "频道", color: "#7aa2ff" };
+          return { text: "对话", color: "#7aa2ff" };
+        })();
+
         return {
           id: session.key,
           title: session.title,
+          label: session.label || session.title,
+          channel: session.channel,
           status: deriveConversationStatus(runtime),
           lastMessage: (() => {
             // Check if latest assistant message has tool calls

@@ -32,6 +32,8 @@ export type ConversationRuntime = {
 export type Conversation = {
   id: string;
   title: string;
+  label?: string;
+  channel?: string;
   status: ConversationStatus;
   lastMessage: string;
   lastTime: string;
