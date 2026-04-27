@@ -1,0 +1,163 @@
+import type { MessagePart } from "../types/conversation";
+import type { GatewayMessage } from "../types/gateway";
+
+export function extractUsageFromGatewayMessage(message?: GatewayMessage | null) {
+  return {
+    input_tokens: message?.usage?.input,
+    output_tokens: message?.usage?.output,
+    cache_read_tokens: message?.usage?.cacheRead,
+    cache_write_tokens: message?.usage?.cacheWrite,
+  };
+}
+
+export function stripInboundWrapperText(text: string) {
+  return text
+    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*```json\n[\s\S]*?\n\s*```\n?/g, "")
+    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*\{[\s\S]*?\n\s*\}\n?/g, "")
+    .replace(/^\[[A-Za-z]+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*GMT[+-]\d+\]\s*/gm, "")
+    .trim();
+}
+
+
+function rawMessageText(message?: { text?: string; content?: unknown } | null) {
+  if (!message) return "";
+  if (typeof message.text === "string") return message.text;
+  if (typeof message.content === "string") return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((part) => typeof part?.text === "string" ? part.text : "")
+      .join("\n");
+  }
+  return "";
+}
+
+export function isInternalOpenClawMessage(message?: { role?: string; text?: string; content?: unknown; senderLabel?: string } | null) {
+  const rawText = rawMessageText(message).trim();
+  const cleanedText = stripInboundWrapperText(rawText).trim();
+  const role = message?.role?.toLowerCase();
+  const sender = message?.senderLabel?.toLowerCase();
+  const isAsyncCompletionEvent = rawText.includes("An async command completion event was triggered")
+    || (rawText.includes("Exec completed") && rawText.includes("user delivery is disabled"));
+
+  // Only trust the gateway-client label for known internal completion/heartbeat payloads.
+  // This avoids hiding a legitimate user/assistant message just because text mentions gateway-client.
+  if (sender === "gateway-client" && (isAsyncCompletionEvent || cleanedText === "HEARTBEAT_OK")) return true;
+  if (cleanedText === "HEARTBEAT_OK") return true;
+  if (isAsyncCompletionEvent) return true;
+  if (role === "assistant" && cleanedText === "HEARTBEAT_OK") return true;
+  return false;
+}
+
+export function extractTextFromGatewayMessage(message?: GatewayMessage | null) {
+  const messageError = (message as { errorMessage?: string } | null | undefined)?.errorMessage;
+  if (!message || messageError) return "";
+  if (typeof message.text === "string") {
+    const cleaned = stripInboundWrapperText(message.text);
+    return cleaned === "fetch failed" ? "" : cleaned;
+  }
+  if (typeof message.content === "string") {
+    const cleaned = stripInboundWrapperText(message.content);
+    return cleaned === "fetch failed" ? "" : cleaned;
+  }
+  if (Array.isArray(message.content)) {
+    if (message.content.length === 0) return "";
+    return message.content
+      .map((part) => {
+        if (part.type === "text") return part.text ?? "";
+        return "";
+      })
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
+export function mapGatewayContentToParts(message?: GatewayMessage | null): MessagePart[] {
+  const messageError = (message as { errorMessage?: string } | null | undefined)?.errorMessage;
+  if (!message || messageError) return [];
+
+  if ((message.role?.toLowerCase() === "toolresult" || message.role?.toLowerCase() === "tool_result") && Array.isArray(message.content)) {
+    const text = message.content
+      .map((part) => (part.type === "text" ? stripInboundWrapperText(part.text ?? "") : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return text
+      ? [{ kind: "tool_result", tool: message.toolName, text }]
+      : [];
+  }
+
+  if (typeof message.content === "string") {
+    const cleaned = stripInboundWrapperText(message.content);
+    return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+  }
+  if (Array.isArray(message.content)) {
+    if (message.content.length === 0) return [];
+    return message.content.flatMap<MessagePart>((part) => {
+      if (part.type === "text") {
+        const cleaned = stripInboundWrapperText(part.text ?? "");
+        return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+      }
+      if (part.type === "toolcall" || part.type === "toolCall") {
+        return [{ kind: "tool_call", tool: part.name ?? "tool", args: typeof part.arguments === "string" ? part.arguments : JSON.stringify(part.arguments ?? {}, null, 2) }];
+      }
+      if (part.type === "toolresult" || part.type === "toolResult") {
+        const cleaned = stripInboundWrapperText(part.text ?? "");
+        return cleaned ? [{ kind: "tool_result", tool: part.name, text: cleaned }] : [];
+      }
+      if (part.type === "image" || part.type === "input_image" || part.type === "image_url") {
+        const src = part.data ?? part.url ?? part.image_url?.url;
+        return src ? [{ kind: "image", data: src, mime_type: part.mimeType ?? part.mime_type, alt: part.text ?? part.alt }] : [];
+      }
+      return [];
+    });
+  }
+  if (typeof message.text === "string") {
+    const cleaned = stripInboundWrapperText(message.text);
+    return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+  }
+  return [];
+}
+
+export function mergeStreamingParts(existingParts: MessagePart[] = [], incomingParts: MessagePart[] = [], deltaText = ""): MessagePart[] {
+  const merged: MessagePart[] = [];
+  let textBuffer = "";
+
+  const flushText = () => {
+    if (textBuffer) {
+      merged.push({ kind: "text", text: textBuffer });
+      textBuffer = "";
+    }
+  };
+
+  for (const part of existingParts) {
+    if (part.kind === "text") {
+      textBuffer += part.text ?? "";
+    } else {
+      flushText();
+      merged.push(part);
+    }
+  }
+
+  let hasIncomingTextPart = false;
+  for (const part of incomingParts) {
+    if (part.kind === "text") {
+      hasIncomingTextPart = true;
+      textBuffer += part.text ?? "";
+      continue;
+    }
+    flushText();
+    const key = JSON.stringify(part);
+    const exists = merged.some((item) => item.kind !== "text" && JSON.stringify(item) === key);
+    if (!exists) {
+      merged.push(part);
+    }
+  }
+
+  if (!hasIncomingTextPart && deltaText) {
+    textBuffer += deltaText;
+  }
+
+  flushText();
+  return merged;
+}

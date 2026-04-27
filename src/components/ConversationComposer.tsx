@@ -8,6 +8,12 @@ type ComposerAttachment = {
   previewUrl?: string;
 };
 
+type QueuedComposerMessage = {
+  id: string;
+  text: string;
+  attachments: ComposerAttachment[];
+};
+
 type ModelOption = {
   value: string;
   label: string;
@@ -20,13 +26,16 @@ type ConversationComposerProps = {
   thinking: string;
   sending: boolean;
   attachments: ComposerAttachment[];
+  queuedMessages: QueuedComposerMessage[];
   modelOptions: ModelOption[];
+  modelsLoading?: boolean;
   onFocusChange: (focused: boolean) => void;
   onValueChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onThinkingChange: (value: string) => void;
   onFilesSelected: (files: FileList | null) => void | Promise<void>;
   onRemoveAttachment: (attachmentId: string) => void;
+  onRemoveQueuedMessage: (messageId: string) => void;
   onSend: () => void | Promise<void>;
   onAbort: () => void | Promise<void>;
 };
@@ -38,13 +47,16 @@ export function ConversationComposer({
   thinking,
   sending,
   attachments,
+  queuedMessages,
   modelOptions,
+  modelsLoading = false,
   onFocusChange,
   onValueChange,
   onModelChange,
   onThinkingChange,
   onFilesSelected,
   onRemoveAttachment,
+  onRemoveQueuedMessage,
   onSend,
   onAbort,
 }: ConversationComposerProps) {
@@ -73,6 +85,25 @@ export function ConversationComposer({
             e.currentTarget.value = "";
           }}
         />
+        {queuedMessages.length > 0 ? (
+          <div className="composer-queue" aria-label="待发送消息列表">
+            <div className="composer-queue-head">
+              <span>待发送</span>
+              <strong>{queuedMessages.length}</strong>
+            </div>
+            <div className="composer-queue-list">
+              {queuedMessages.map((item, index) => (
+                <div className="composer-queue-item" key={item.id}>
+                  <span className="composer-queue-index">#{index + 1}</span>
+                  <span className="composer-queue-text">
+                    {item.text || (item.attachments.length > 0 ? `[图片] ${item.attachments.map((attachment) => attachment.name).join(", ")}` : "空消息")}
+                  </span>
+                  <button type="button" onClick={() => onRemoveQueuedMessage(item.id)} title="删除待发送消息">×</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <textarea
           className="composer-input"
           placeholder="输入消息…"
@@ -86,11 +117,14 @@ export function ConversationComposer({
           value={value}
         />
         {attachments.length > 0 ? (
-          <div className="composer-attachments">
+          <div className="composer-attachments" aria-label="已选择图片">
             {attachments.map((attachment) => (
-              <div className="composer-attachment-chip" key={attachment.id}>
-                <span>{attachment.name}</span>
-                <button type="button" onClick={() => onRemoveAttachment(attachment.id)}>×</button>
+              <div className="composer-attachment-card" key={attachment.id}>
+                <img src={attachment.previewUrl ?? attachment.dataUrl} alt={attachment.name} />
+                <div className="composer-attachment-meta">
+                  <span title={attachment.name}>{attachment.name}</span>
+                </div>
+                <button type="button" onClick={() => onRemoveAttachment(attachment.id)} title="移除图片">×</button>
               </div>
             ))}
           </div>
@@ -103,10 +137,12 @@ export function ConversationComposer({
               <path d="M8 7V11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
           </button>
-          <select className="composer-select" value={model} onChange={(e) => onModelChange(e.target.value)} title="模型">
-            {modelOptions.map((option) => (
+          <select className="composer-select" value={model} onChange={(e) => onModelChange(e.target.value)} title="模型" disabled={modelsLoading || modelOptions.length === 0}>
+            {modelsLoading ? <option value={model}>加载模型…</option> : null}
+            {!modelsLoading && modelOptions.length === 0 ? <option value="">无可用模型</option> : null}
+            {!modelsLoading ? modelOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
+            )) : null}
           </select>
           <select className="composer-select" value={thinking} onChange={(e) => onThinkingChange(e.target.value)} title="思考模式">
             <option value="" disabled>思考</option>
@@ -116,9 +152,16 @@ export function ConversationComposer({
           </select>
           <div style={{ flex: 1 }} />
           {sending ? (
-            <button className="composer-send-btn" type="button" title="停止" onClick={() => void onAbort()}>
-              停止
-            </button>
+            <>
+              <button className="composer-send-btn" type="button" title="加入待发送" disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M3 9H15M15 9L10.5 4.5M15 9L10.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              <button className="composer-stop-btn" type="button" title="停止" onClick={() => void onAbort()}>
+                停止
+              </button>
+            </>
           ) : (
             <button className="composer-send-btn" type="button" title="发送" disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">

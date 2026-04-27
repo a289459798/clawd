@@ -18,6 +18,7 @@ export type PreviewMessage = {
   output_tokens?: number;
   cache_read_tokens?: number;
   cache_write_tokens?: number;
+  senderLabel?: string;
 };
 
 export type ConversationRuntime = {

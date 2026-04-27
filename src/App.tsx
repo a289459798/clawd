@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { ConversationComposer } from "./components/ConversationComposer";
 import { ConversationDetail } from "./components/ConversationDetail";
 import { ConversationList } from "./components/ConversationList";
+import { ConversationMessageList } from "./components/ConversationMessageList";
 import { getConversationDetailState } from "./lib/conversationDetailState";
+import { extractTextFromGatewayMessage, extractUsageFromGatewayMessage, isInternalOpenClawMessage, mapGatewayContentToParts, mergeStreamingParts } from "./lib/gatewayMessages";
 import type { Conversation, ConversationRuntime, MessagePart, PreviewMessage } from "./types/conversation";
+import type { GatewayChatEvent, GatewayHistoryResult, GatewayModelsResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent } from "./realtime";
 import "./App.css";
 
@@ -43,41 +44,6 @@ type ChannelConnection = {
   activity: string;
 };
 
-type SnapshotSession = {
-  id: string;
-  agent_id: string;
-  key: string;
-  title: string;
-  updated_at?: number;
-  channel?: string;
-  session_file?: string;
-  last_message?: string;
-  last_role?: string;
-  latest_event_role?: string;
-  latest_event_type?: string;
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_tokens?: number;
-  cache_write_tokens?: number;
-  total_tokens?: number;
-  total_tokens_fresh?: boolean;
-  estimated_cost_usd?: number;
-  preview_messages: Array<{ role?: string; text: string; parts?: MessagePart[]; model?: string; provider?: string; api?: string; timestamp?: number; input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number }>;
-};
-
-type OpenClawSnapshot = {
-  agents: Array<{ id: string; name: string; workspace?: string; model?: string; agent_dir?: string }>;
-  sessions: SnapshotSession[];
-  connections: Array<{ id: string; name: string; enabled: boolean }>;
-  skills: Array<{ id: string; name: string; location: string }>;
-};
-
-type GatewayStatus = {
-  connected: boolean;
-  statusText: string;
-  error?: string | null;
-};
-
 type ClawxBootstrapStatus = {
   openclawInstalled: boolean;
   openclawPath?: string | null;
@@ -90,50 +56,19 @@ type ClawxBootstrapStatus = {
   bindingWrites: string[];
 };
 
-type GatewayHistoryResult = {
-  messages: GatewayMessage[];
-};
-
-type GatewayPart =
-  | { type: "text"; text: string }
-  | { type: "toolcall"; name?: string; arguments?: unknown }
-  | { type: "toolresult"; name?: string; text?: string }
-  | { type: "image" | "input_image" | "image_url"; data?: string; url?: string; mimeType?: string; mime_type?: string; text?: string; alt?: string; image_url?: { url?: string } };
-
-type GatewayUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens?: number;
-};
-
-type GatewayMessage = {
-  role?: string;
-  content?: GatewayPart[] | string;
-  text?: string;
-  timestamp?: number;
-  model?: string;
-  provider?: string;
-  api?: string;
-  usage?: GatewayUsage;
-};
-
-type GatewayChatEvent = {
-  type?: string;
-  state?: "delta" | "final" | "aborted" | "error";
-  sessionKey?: string;
-  runId?: string;
-  message?: GatewayMessage;
-  errorMessage?: string;
-};
-
 type ComposerAttachment = {
   id: string;
   name: string;
   mimeType: string;
   dataUrl: string;
   previewUrl?: string;
+};
+
+type QueuedComposerMessage = {
+  id: string;
+  text: string;
+  attachments: ComposerAttachment[];
+  createdAt: number;
 };
 
 type GatewayCreateSessionResult = {
@@ -218,295 +153,6 @@ function parseSenderMeta(text: string): { label?: string; time?: string; cleanTe
   return { label, time, cleanText };
 }
 
-function CodeBlock({ code, language }: { code: string; language?: string }) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
-  }, [code]);
-
-  return (
-    <div className="code-block-shell">
-      <div className="code-block-toolbar">
-        <span className="code-block-language">{language ?? "text"}</span>
-        <button className="code-block-copy-button" type="button" onClick={() => void onCopy()}>
-          {copied ? "已复制" : "复制"}
-        </button>
-      </div>
-      <pre className="tool-entry-body code terminal-block">{code}</pre>
-    </div>
-  );
-}
-
-function MarkdownBlock({ content, className }: { content: string; className?: string }) {
-  return (
-    <div className={className}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code(props) {
-            const { className, children, ...rest } = props;
-            const match = String(className ?? "").match(/language-([\w-]+)/);
-            const language = match?.[1];
-            const value = String(children).replace(/\n$/, "");
-            if (!language) {
-              return <code className="inline-code" {...rest}>{children}</code>;
-            }
-            return <CodeBlock code={value} language={language} />;
-          },
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-function normalizeImageSrc(data: string, mimeType?: string) {
-  if (data.startsWith("data:") || data.startsWith("http://") || data.startsWith("https://") || data.startsWith("/") || data.startsWith("file://")) {
-    return data;
-  }
-  const mime = mimeType && mimeType.length > 0 ? mimeType : "image/png";
-  return `data:${mime};base64,${data}`;
-}
-
-function MessageBubbleWithCopy({
-  text,
-  imageVariant,
-}: {
-  text: string;
-  imageVariant: "user" | "assistant" | "tool";
-}) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [text]);
-
-  const isAssistant = imageVariant !== "user";
-
-  return (
-    <div className={`message-bubble ${imageVariant === "user" ? "user" : "assistant"}`}>
-      {isAssistant ? (
-        <div className="message-bubble-content">
-          <MarkdownBlock content={text} className="markdown-body" />
-          <button
-            className={`message-copy-button ${copied ? "copied" : ""}`}
-            type="button"
-            onClick={handleCopy}
-            title={copied ? "已复制" : "复制内容"}
-          >
-            {copied ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-            )}
-          </button>
-        </div>
-      ) : (
-        <MarkdownBlock content={text} className="markdown-body" />
-      )}
-    </div>
-  );
-}
-
-function StructuredMessageContent({
-  parts,
-  conversationId,
-  onOpenImage,
-  imageVariant = "assistant",
-}: {
-  parts: MessagePart[];
-  conversationId: string;
-  onOpenImage: (src: string) => void;
-  imageVariant?: "user" | "assistant" | "tool";
-}) {
-  const [toolsExpanded, setToolsExpanded] = useState(false);
-  const textBlocks: string[] = [];
-  const imageBlocks: Array<Extract<MessagePart, { kind: "image" }>> = [];
-  const toolCalls: Array<{ tool: string; args?: string }> = [];
-
-  for (const part of parts) {
-    if (part.kind === "tool_call") {
-      toolCalls.push({ tool: part.tool, args: part.args });
-      continue;
-    }
-    if (part.kind === "tool_result") {
-      continue;
-    }
-    if (part.kind === "image") {
-      imageBlocks.push(part);
-      continue;
-    }
-    textBlocks.push(part.text);
-  }
-
-  return (
-    <>
-      {toolCalls.length > 0 ? (
-        <div className="tool-call-box" key={`${conversationId}-tools`}>
-          <button className="tool-call-summary" type="button" onClick={() => setToolsExpanded((v) => !v)}>
-            <span className="tool-call-summary-label">已执行 {toolCalls.length} 项操作</span>
-            <span className="tool-call-summary-items">{Array.from(new Set(toolCalls.map((item) => item.tool))).slice(0, 3).join(" · ")}</span>
-            <span className="tool-call-summary-toggle">{toolsExpanded ? "收起" : "展开"}</span>
-          </button>
-          {toolsExpanded ? (
-            <div className="tool-call-detail-list">
-              {toolCalls.map((item, index) => (
-                <div className="tool-call-detail" key={`${conversationId}-tool-${index}`}>
-                  <div className="tool-call-detail-name">{item.tool}</div>
-                  {item.args ? <pre className="tool-call-detail-args">{item.args}</pre> : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {textBlocks.map((text, index) => (
-        <MessageBubbleWithCopy
-          key={`${conversationId}-text-${index}`}
-          text={text}
-          imageVariant={imageVariant}
-        />
-      ))}
-
-      {imageBlocks.map((part, index) => {
-        const src = normalizeImageSrc(part.data, part.mime_type);
-        return (
-          <button className={`message-image-card ${imageVariant}`} key={`${conversationId}-image-${index}`} type="button" onClick={() => onOpenImage(src)}>
-            <img className="message-image" src={src} alt={part.alt ?? "图片内容"} />
-            <span className="message-image-badge">{imageVariant === "user" ? "用户图片" : "图片"}</span>
-          </button>
-        );
-      })}
-    </>
-  );
-}
-
-function ConversationMessageList({
-  messages,
-  conversationId,
-  onOpenImage,
-}: {
-  messages: PreviewMessage[];
-  conversationId: string;
-  onOpenImage: (src: string) => void;
-}) {
-  const { rows, lastAssistantMessage } = useMemo(() => {
-    const normalizedMessages = messages
-      .filter((message) => {
-        const role = message.role?.toLowerCase();
-        if (role === "user" || role === "toolresult" || role === "tool_result") return false;
-        const text = (message.text ?? "").trim().toLowerCase();
-        if (text.startsWith("tool_result:") || text.startsWith("toolresult:")) return false;
-        return true;
-      })
-      .map((message) => ({
-        ...message,
-        parts: (message.parts ?? []).filter((part) => part.kind !== "tool_result"),
-      }));
-
-    const rows: Array<
-      | { kind: "message"; message: PreviewMessage; index: number }
-      | { kind: "tool_group"; items: Array<{ message: PreviewMessage; index: number }> }
-    > = [];
-
-    let pendingToolMessages: Array<{ message: PreviewMessage; index: number }> = [];
-    const isToolOnlyMessage = (message: PreviewMessage) => {
-      const parts = message.parts ?? [];
-      // A message is considered "tool-only" if it contains tool_calls
-      // (even if it also has text content, we extract tool_calls for display)
-      return parts.some((part) => part.kind === "tool_call");
-    };
-    const flushToolMessages = () => {
-      if (pendingToolMessages.length > 0) {
-        rows.push({ kind: "tool_group", items: pendingToolMessages });
-        pendingToolMessages = [];
-      }
-    };
-
-    normalizedMessages.forEach((message, index) => {
-      if (isToolOnlyMessage(message)) {
-        pendingToolMessages.push({ message, index });
-        return;
-      }
-      flushToolMessages();
-      rows.push({ kind: "message", message, index });
-    });
-    flushToolMessages();
-
-    // Find the last assistant message that has actual content (not just tool calls)
-    // and contains token data for display
-    const lastAssistantMessage = [...normalizedMessages]
-      .reverse()
-      .find((m) => {
-        const role = m.role?.toLowerCase();
-        if (role !== "assistant") return false;
-        // Skip messages that only contain tool calls (no text content)
-        const parts = m.parts ?? [];
-        const hasTextContent = parts.some((p) => p.kind === "text" && p.text?.trim());
-        const hasImageContent = parts.some((p) => p.kind === "image");
-        return hasTextContent || hasImageContent || (!parts.length && m.text?.trim());
-      });
-
-    return { rows, lastAssistantMessage };
-  }, [messages]);
-
-  return (
-    <>
-      {rows.map((row, index) => {
-        if (row.kind === "tool_group") {
-          const mergedParts = row.items.flatMap((item) => item.message.parts ?? []);
-          return (
-            <div className="message-stack tool-stack" key={`${conversationId}-tool-group-${index}`}>
-              <StructuredMessageContent
-                parts={mergedParts}
-                conversationId={`${conversationId}-tool-group-${index}`}
-                onOpenImage={onOpenImage}
-                imageVariant="tool"
-              />
-            </div>
-          );
-        }
-
-        const { message } = row;
-        const parts = message.parts?.length ? message.parts : [{ kind: "text", text: message.text } as MessagePart];
-        return (
-          <div className="message-stack" key={`${conversationId}-message-${index}`}>
-            <StructuredMessageContent
-              parts={parts}
-              conversationId={`${conversationId}-${index}`}
-              onOpenImage={onOpenImage}
-              imageVariant={message.role?.toLowerCase() === "user" ? "user" : "assistant"}
-            />
-          </div>
-        );
-      })}
-
-      {lastAssistantMessage?.model ? (
-        <div className="conversation-model-footer" key={`${conversationId}-model-footer`}>
-          <span className="conversation-model-name">{lastAssistantMessage.model}</span>
-          <span className="conversation-model-divider">·</span>
-          <span className="conversation-model-tokens">
-            <span className="token-item">↑{formatTokenCount(lastAssistantMessage.output_tokens)}</span>
-            <span className="token-item">↓{formatTokenCount(lastAssistantMessage.input_tokens)}</span>
-            <span className="token-item">R{formatTokenCount(lastAssistantMessage.cache_read_tokens)}</span>
-          </span>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
 /** AI message renderer that separates text, tool calls, and tool results */
 const COMPLETED_RECENT_WINDOW_MS = 10 * 60 * 1000;
 
@@ -529,84 +175,98 @@ const patchConversation = (conversation: Conversation, updater: (conversation: C
   };
 };
 
-function extractUsageFromGatewayMessage(message?: GatewayMessage | null) {
-  return {
-    input_tokens: message?.usage?.input,
-    output_tokens: message?.usage?.output,
-    cache_read_tokens: message?.usage?.cacheRead,
-    cache_write_tokens: message?.usage?.cacheWrite,
-  };
-}
+type ModelOption = {
+  value: string;
+  label: string;
+};
 
-function stripInboundWrapperText(text: string) {
-  return text
-    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*```json\n[\s\S]*?\n\s*```\n?/g, "")
-    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*\{[\s\S]*?\n\s*\}\n?/g, "")
-    .replace(/^\[[A-Za-z]+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*GMT[+-]\d+\]\s*/gm, "")
-    .trim();
-}
+const normalizeModelKey = (value: string) => value.trim().toLowerCase();
 
-function extractTextFromGatewayMessage(message?: GatewayMessage | null) {
-  if (!message) return "";
-  if (typeof message.text === "string") {
-    return stripInboundWrapperText(message.text);
-  }
-  if (typeof message.content === "string") {
-    return stripInboundWrapperText(message.content);
-  }
-  if (Array.isArray(message.content)) {
-    return message.content
-      .map((part) => {
-        if (part.type === "text") return part.text ?? "";
-        return "";
-      })
-      .join("\n")
-      .trim();
-  }
-  return "";
-}
+const qualifyModelId = (id: string, provider?: string) => {
+  const trimmedId = id.trim();
+  const trimmedProvider = provider?.trim();
+  if (!trimmedId) return "";
+  if (!trimmedProvider || trimmedId.includes("/")) return trimmedId;
+  return `${trimmedProvider}/${trimmedId}`;
+};
 
-function mapGatewayContentToParts(message?: GatewayMessage | null): MessagePart[] {
-  if (!message) return [];
-  if (typeof message.content === "string") {
-    const cleaned = stripInboundWrapperText(message.content);
-    return cleaned.trim() ? [{ kind: "text", text: cleaned }] : [];
-  }
-  if (Array.isArray(message.content)) {
-    return message.content.flatMap<MessagePart>((part) => {
-      if (part.type === "text") {
-        const cleaned = stripInboundWrapperText(part.text ?? "");
-        return cleaned.trim() ? [{ kind: "text", text: cleaned }] : [];
-      }
-      if (part.type === "toolcall") {
-        return [{ kind: "tool_call", tool: part.name ?? "tool", args: typeof part.arguments === "string" ? part.arguments : JSON.stringify(part.arguments ?? {}, null, 2) }];
-      }
-      if (part.type === "toolresult") {
-        return [];
-      }
-      if (part.type === "image" || part.type === "input_image" || part.type === "image_url") {
-        const src = part.data ?? part.url ?? part.image_url?.url;
-        return src ? [{ kind: "image", data: src, mime_type: part.mimeType ?? part.mime_type, alt: part.text ?? part.alt }] : [];
-      }
-      return [];
+const buildModelOptions = (result?: GatewayModelsResult | null): ModelOption[] => {
+  const models = Array.isArray(result?.models) ? result.models : [];
+  const seen = new Set<string>();
+  return models
+    .map((model) => {
+      const value = qualifyModelId(model.id, model.provider);
+      if (!value) return null;
+      const displayName = model.alias?.trim() || model.label?.trim() || model.name?.trim() || model.id.trim();
+      const provider = model.provider?.trim();
+      const label = provider && !displayName.toLowerCase().includes(provider.toLowerCase())
+        ? `${displayName} · ${provider}`
+        : displayName;
+      return { value, label };
+    })
+    .filter((option): option is ModelOption => {
+      if (!option) return false;
+      const key = normalizeModelKey(option.value);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
-  }
-  if (typeof message.text === "string") {
-    const cleaned = stripInboundWrapperText(message.text);
-    return cleaned.trim() ? [{ kind: "text", text: cleaned }] : [];
-  }
-  return [];
-}
+};
 
-const MODEL_OPTIONS = [
-  { value: "openai-codex/gpt-5.4", label: "GPT-5.4 (Codex)" },
-  { value: "openai/gpt-5.4", label: "GPT-5.4" },
-  { value: "openai/gpt-4.1", label: "GPT-4.1" },
-  { value: "bailian/qwen3.6-plus", label: "Qwen3.6-Plus" },
-  { value: "bailian/qwen3-coder-plus", label: "Qwen3-Coder-Plus" },
-  { value: "moonshot/kimi-k2-thinking", label: "Kimi-K2-Thinking" },
-  { value: "moonshot/kimi-k2-turbo-preview", label: "Kimi-K2-Turbo" },
-];
+const ensureSelectedModelOption = (options: ModelOption[], selectedModel: string): ModelOption[] => {
+  const selected = selectedModel.trim();
+  if (!selected) return options;
+  if (options.some((option) => normalizeModelKey(option.value) === normalizeModelKey(selected))) {
+    return options;
+  }
+  return [{ value: selected, label: `当前: ${selected}` }, ...options];
+};
+
+const stringifyToolValue = (value: unknown) => {
+  if (value == null) return undefined;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const mapGatewayToolStreamToPart = (data?: Record<string, unknown>): Extract<MessagePart, { kind: "tool_call" | "tool_result" }> | null => {
+  if (!data) return null;
+  const name = typeof data.name === "string" && data.name.trim() ? data.name : "tool";
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase === "result") {
+    const text = stringifyToolValue(data.result ?? data.partialResult);
+    return { kind: "tool_result", tool: name, text };
+  }
+  return { kind: "tool_call", tool: name, args: stringifyToolValue(data.args) };
+};
+
+const hasToolParts = (parts: MessagePart[] = []) => parts.some((part) => part.kind === "tool_call" || part.kind === "tool_result");
+
+const messageOrderKey = (message: PreviewMessage) => {
+  const role = message.role?.toLowerCase() ?? "";
+  const timestamp = message.timestamp ?? "";
+  const text = (message.text ?? "").replace(/^__streaming__(?:[^_]+__)?/, "");
+  const parts = JSON.stringify(message.parts ?? []);
+  return `${role}|${timestamp}|${text}|${parts}`;
+};
+
+const mergeSnapshotMessagesPreservingCurrentOrder = (currentMessages: PreviewMessage[] = [], snapshotMessages: PreviewMessage[] = []) => {
+  if (currentMessages.length === 0) return snapshotMessages;
+  if (snapshotMessages.length === 0) return currentMessages;
+
+  const seen = new Set(currentMessages.map(messageOrderKey));
+  const next = [...currentMessages];
+  for (const message of snapshotMessages) {
+    const key = messageOrderKey(message);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(message);
+  }
+  return next;
+};
 
 function buildAgentsFromSnapshot(
   snapshot: OpenClawSnapshot,
@@ -635,7 +295,7 @@ function buildAgentsFromSnapshot(
         };
         // Merge previewMessages: use session messages as base, but preserve token data from existing messages
         const existingPreviewMessages = existingConversation?.previewMessages;
-        const sessionMessages = session.preview_messages || [];
+        const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message));
         // Create a map of existing messages by index for quick lookup
         const existingMessagesMap = new Map<number, PreviewMessage>();
         if (existingPreviewMessages) {
@@ -649,10 +309,18 @@ function buildAgentsFromSnapshot(
           id: session.key,
           title: session.title,
           status: deriveConversationStatus(runtime),
-          lastMessage:
-            latestAssistantMessage?.text ??
-            session.last_message ??
-            "暂无回复内容",
+          lastMessage: (() => {
+            // Check if latest assistant message has tool calls
+            const hasToolCalls = latestAssistantMessage?.parts?.some((p) => p.kind === "tool_call");
+            const text = latestAssistantMessage?.text ?? session.last_message ?? "";
+            if (hasToolCalls && text) {
+              return `🔧 使用了工具 · ${text.slice(0, 50)}${text.length > 50 ? "..." : ""}`;
+            }
+            if (hasToolCalls) {
+              return "🔧 使用了工具";
+            }
+            return text || "暂无回复内容";
+          })(),
           previewMessages: mergedPreviewMessages,
           lastRole: latestRole,
           latestEventRole: session.latest_event_role?.toLowerCase(),
@@ -697,15 +365,12 @@ function buildAgentsFromSnapshot(
   });
 }
 
-function resolveAgentDefaultModel(agents: Agent[], agentId: string) {
+function resolveAgentDefaultModel(agents: Agent[], agentId: string, modelOptions: ModelOption[]) {
   const agent = agents.find((item) => item.id === agentId);
-  if (!agent) {
-    return MODEL_OPTIONS[0]?.value ?? "";
-  }
-  if (agent.model && agent.model !== "未配置") {
+  if (agent?.model && agent.model !== "未配置") {
     return agent.model;
   }
-  return MODEL_OPTIONS[0]?.value ?? "";
+  return modelOptions[0]?.value ?? "";
 }
 
 function App() {
@@ -724,13 +389,19 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  const [composerModel, setComposerModel] = useState(MODEL_OPTIONS[0]?.value ?? "");
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [queuedMessagesByConversation, setQueuedMessagesByConversation] = useState<Record<string, QueuedComposerMessage[]>>({});
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const reloadedConversationIdsRef = useRef<Set<string>>(new Set());
+  const autoSendingQueuedMessageRef = useRef<string | null>(null);
+  const queuedMessagesByConversationRef = useRef<Record<string, QueuedComposerMessage[]>>({});
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
@@ -748,6 +419,10 @@ function App() {
   useEffect(() => {
     activeRunIdRef.current = activeRunId;
   }, [activeRunId]);
+
+  useEffect(() => {
+    queuedMessagesByConversationRef.current = queuedMessagesByConversation;
+  }, [queuedMessagesByConversation]);
 
   const loadBootstrapStatus = useCallback(async () => {
     setBootstrapLoading(true);
@@ -869,9 +544,30 @@ function App() {
       }
     };
 
+    const loadModels = async () => {
+      setModelsLoading(true);
+      try {
+        await invoke("gateway_connect");
+        const result = await invoke<GatewayModelsResult>("gateway_models_list");
+        if (!cancelled) {
+          setModelOptions(buildModelOptions(result));
+        }
+      } catch (error) {
+        console.error("Failed to load OpenClaw models", error);
+        if (!cancelled) {
+          setModelOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      }
+    };
+
     // Load snapshot only once on startup
     // Polling removed to avoid overwriting frontend state (token data, streaming messages, tools)
     void loadSnapshot();
+    void loadModels();
 
     return () => {
       cancelled = true;
@@ -906,6 +602,28 @@ function App() {
                 const nextLastRole = payload.session.lastRole?.toLowerCase() ?? conversation.lastRole;
                 const nextLatestEventType = payload.session.latestEventType?.toLowerCase() ?? conversation.latestEventType;
                 const nextTotalTokens = payload.session.totalTokens ?? conversation.totalTokens;
+                const nextPreviewMessages = payload.session.previewMessages?.length
+                  ? (payload.session.previewMessages as PreviewMessage[]).filter((message) => !isInternalOpenClawMessage(message))
+                  : conversation.previewMessages;
+                const latestSnapshotMessage = nextPreviewMessages?.[nextPreviewMessages.length - 1];
+                const latestSnapshotParts = latestSnapshotMessage?.parts ?? [];
+                const latestIsToolOnly = latestSnapshotParts.some((part) => part.kind === "tool_call" || part.kind === "tool_result")
+                  && !latestSnapshotParts.some((part) => part.kind === "text" && part.text?.trim());
+                const isTerminalSnapshot = ["turn_completed", "completed", "final", "aborted", "error", "failed", "cancelled"].includes(nextLatestEventType ?? "");
+                const nextRuntime = latestIsToolOnly && !isTerminalSnapshot
+                  ? {
+                      ...conversation.runtime,
+                      activeRunId: conversation.runtime?.activeRunId ?? `snapshot-tool-${payload.session.key}`,
+                      activeStartedAt: conversation.runtime?.activeStartedAt ?? nextUpdatedAt ?? Date.now(),
+                      lastEventAt: nextUpdatedAt,
+                    }
+                  : conversation.runtime ?? {
+                      activeRunId: undefined,
+                      activeStartedAt: undefined,
+                      lastEventAt: nextUpdatedAt,
+                      lastTerminalAt: nextLastRole === "assistant" ? nextUpdatedAt : undefined,
+                      lastTerminalReason: nextLastRole === "assistant" ? "completed" : undefined,
+                    };
                 return patchConversation(conversation, (currentConversation) => ({
                   ...currentConversation,
                   lastMessage: payload.session.lastMessage ?? currentConversation.lastMessage,
@@ -921,15 +639,10 @@ function App() {
                   totalTokens: nextTotalTokens,
                   tokens: formatTokenCount(nextTotalTokens),
                   model: payload.session.model ?? currentConversation.model,
-                  previewMessages: currentConversation.previewMessages,
-                  // Preserve existing runtime state from frontend; session_patch doesn't include runtime info
-                  runtime: currentConversation.runtime ?? {
-                    activeRunId: undefined,
-                    activeStartedAt: undefined,
-                    lastEventAt: nextUpdatedAt,
-                    lastTerminalAt: nextLastRole === "assistant" ? nextUpdatedAt : undefined,
-                    lastTerminalReason: nextLastRole === "assistant" ? "completed" : undefined,
-                  },
+                  previewMessages: currentConversation.runtime?.activeRunId
+                    ? mergeSnapshotMessagesPreservingCurrentOrder(currentConversation.previewMessages, nextPreviewMessages)
+                    : nextPreviewMessages,
+                  runtime: nextRuntime,
                 }));
               }),
             })),
@@ -1038,7 +751,123 @@ function App() {
           const isCurrentConversation = activeConversationIdRef.current === chat.sessionKey;
           const isCurrentRun = !chat.runId || !activeRunIdRef.current || chat.runId === activeRunIdRef.current;
 
+          if (chat.stream === "tool") {
+            const toolPart = mapGatewayToolStreamToPart(chat.data);
+            if (!toolPart) return;
+            const toolName = toolPart.kind === "tool_call" ? toolPart.tool : toolPart.tool ?? "tool";
+            const toolRunId = chat.runId ?? activeRunIdRef.current ?? `tool-stream-${chat.sessionKey}`;
+            setAgents((current) => current.map((agent) => ({
+              ...agent,
+              conversations: agent.conversations.map((conversation) => {
+                if (conversation.id !== chat.sessionKey) return conversation;
+                return patchConversation(conversation, (currentConversation) => {
+                  const nextMessages = [...(currentConversation.previewMessages ?? [])];
+                  const toolKey = `${toolRunId}:${toolName}`;
+                  const existingIndex = nextMessages.findIndex((message) =>
+                    message.role?.toLowerCase() === "assistant"
+                    && message.text === toolKey
+                    && (message.parts ?? []).some((part) => part.kind === "tool_call" && part.tool === toolName),
+                  );
+                  if (existingIndex >= 0) {
+                    const existing = nextMessages[existingIndex];
+                    nextMessages[existingIndex] = {
+                      ...existing,
+                      parts: mergeStreamingParts(existing.parts ?? [], [toolPart], ""),
+                      timestamp: eventTimestamp,
+                    };
+                  } else {
+                    nextMessages.push({
+                      role: "assistant",
+                      text: toolKey,
+                      parts: [toolPart],
+                      timestamp: eventTimestamp,
+                    });
+                  }
+                  return {
+                    ...currentConversation,
+                    lastRole: "assistant",
+                    latestEventType: "tool_stream",
+                    lastMessage: `🔧 ${toolName}`,
+                    previewMessages: nextMessages,
+                    updatedAt: eventTimestamp,
+                    lastTime: eventLastTime,
+                    runtime: {
+                      ...currentConversation.runtime,
+                      activeRunId: toolRunId,
+                      activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
+                      lastEventAt: eventTimestamp,
+                    },
+                  };
+                });
+              }),
+            })));
+            if (isCurrentConversation && isCurrentRun) {
+              setSending(true);
+            }
+            return;
+          }
+
           if (chat.state === "delta") {
+            // Check if this is the first delta of a new run (status changed to working)
+            // If so, reload conversation data first to ensure we have complete history
+            if (isCurrentConversation && chat.runId) {
+              const currentConversation = agents.flatMap((agent) => agent.conversations)
+                .find((conv) => conv.id === chat.sessionKey);
+              const previousStatus = currentConversation?.status;
+              
+              // If status changed from completed/idle to working, reload conversation messages in background
+              // without refreshing the entire page or changing UI state
+              // Only reload once per runId to avoid multiple calls
+              if (previousStatus && (previousStatus === "completed" || previousStatus === "idle") && chat.runId) {
+                const reloadKey = `${chat.sessionKey}:${chat.runId}`;
+                if (!reloadedConversationIdsRef.current.has(reloadKey)) {
+                  reloadedConversationIdsRef.current.add(reloadKey);
+                  // Load messages in background without affecting current UI state
+                  void (async () => {
+                    try {
+                      const result = await invoke<GatewayHistoryResult>("gateway_chat_history", { 
+                        params: { sessionKey: chat.sessionKey, limit: 200 } 
+                      });
+                      if (Array.isArray(result?.messages)) {
+                        const sortedMessages = [...result.messages].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+                        const mappedMessages = sortedMessages
+                          .filter((message) => !isInternalOpenClawMessage(message))
+                          .map((message) => ({
+                            role: message.role,
+                            text: extractTextFromGatewayMessage(message),
+                            parts: mapGatewayContentToParts(message),
+                            model: message.model,
+                            provider: message.provider,
+                            api: message.api,
+                            timestamp: message.timestamp,
+                            senderLabel: message.senderLabel,
+                            ...extractUsageFromGatewayMessage(message),
+                          }))
+                          .filter((message) => {
+                            const hasText = Boolean(message.text?.trim());
+                            const hasParts = Boolean(message.parts?.length);
+                            return hasText || hasParts || message.role?.toLowerCase() === "user";
+                          });
+                        // Update only previewMessages, preserve all other state
+                        setAgents((current) => current.map((agent) => ({
+                          ...agent,
+                          conversations: agent.conversations.map((conversation) => {
+                            if (conversation.id !== chat.sessionKey) return conversation;
+                            return {
+                              ...conversation,
+                              previewMessages: mappedMessages,
+                            };
+                          }),
+                        })));
+                      }
+                    } catch (error) {
+                      console.error("Failed to reload messages:", error);
+                    }
+                  })();
+                }
+              }
+            }
+
             const deltaText = extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
             if (!deltaText && deltaParts.length === 0) return;
@@ -1048,15 +877,22 @@ function App() {
                 if (conversation.id !== chat.sessionKey) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
-                  const streamingMarker = chat.runId ? `__streaming__${chat.runId}__` : "__streaming__";
+                  const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
+                  const streamingMarker = `__streaming__${effectiveRunId}__`;
                   const lastIndex = nextMessages.length - 1;
                   const last = nextMessages[lastIndex];
                   if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
+                    const previousText = last.text.replace(streamingMarker, "");
+                    const mergedParts = mergeStreamingParts(last.parts ?? [], deltaParts, deltaText);
+                    const mergedTextPart = mergedParts
+                      .flatMap((part) => part.kind === "text" ? [part.text] : [])
+                      .join("");
+                    const nextText = mergedTextPart || `${previousText}${deltaText}`;
                     nextMessages[lastIndex] = {
                       ...last,
-                      text: `${streamingMarker}${deltaText || last.text.replace(streamingMarker, "")}`,
-                      parts: deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: deltaText }],
+                      text: `${streamingMarker}${nextText}`,
+                      parts: mergedParts.length > 0 ? mergedParts : [{ kind: "text", text: nextText }],
                       model: chat.message?.model ?? last.model,
                       provider: chat.message?.provider ?? last.provider,
                       api: chat.message?.api ?? last.api,
@@ -1068,20 +904,27 @@ function App() {
                     };
                   } else {
                     if (deltaParts.length > 0 || deltaText) {
-                      nextMessages.push({ role: "assistant", text: `${streamingMarker}${deltaText}`, parts: deltaParts.length > 0 ? deltaParts : [{ kind: "text", text: deltaText }], model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: eventTimestamp, ...extractUsageFromGatewayMessage(chat.message) });
+                      const initialParts: MessagePart[] = deltaParts.length > 0 ? mergeStreamingParts([], deltaParts, deltaText) : [{ kind: "text", text: deltaText }];
+                      const initialText = initialParts
+                        .filter((part) => part.kind === "text")
+                        .map((part) => part.text)
+                        .join("") || deltaText;
+                      nextMessages.push({ role: "assistant", text: `${streamingMarker}${initialText}`, parts: initialParts, model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: eventTimestamp, ...extractUsageFromGatewayMessage(chat.message) });
                     }
                   }
+                  const latestPreview = nextMessages[nextMessages.length - 1];
+                  const latestRenderedText = latestPreview?.text?.replace(streamingMarker, "") || deltaText;
                   return {
                     ...currentConversation,
                     lastRole: "assistant",
                     latestEventType: "assistant_stream",
-                    lastMessage: deltaText || currentConversation.lastMessage,
+                    lastMessage: latestRenderedText || currentConversation.lastMessage,
                     previewMessages: nextMessages,
                     updatedAt: eventTimestamp,
                     lastTime: eventLastTime,
                     runtime: {
                       ...currentConversation.runtime,
-                      activeRunId: chat.runId ?? currentConversation.runtime?.activeRunId,
+                      activeRunId: effectiveRunId,
                       activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
                       lastEventAt: eventTimestamp,
                     },
@@ -1109,16 +952,25 @@ function App() {
                 if (conversation.id !== chat.sessionKey) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
-                  const streamingMarker = chat.runId ? `__streaming__${chat.runId}__` : "__streaming__";
+                  const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
+                  const streamingMarker = `__streaming__${effectiveRunId}__`;
                   const lastIndex = nextMessages.length - 1;
                   const last = nextMessages[lastIndex];
                   if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
-                    const newText = finalText || last.text.replace(streamingMarker, "");
+                    const fallbackText = last.text.replace(streamingMarker, "");
+                    const hasExistingToolMessages = nextMessages.some((message, index) => index !== lastIndex && hasToolParts(message.parts ?? []));
+                    const finalTextOnlyParts = finalParts.filter((part) => part.kind === "text" || part.kind === "image");
+                    const mergedFinalParts = finalParts.length > 0 && !hasExistingToolMessages
+                      ? mergeStreamingParts([], finalParts, finalText)
+                      : mergeStreamingParts(last.parts ?? [], finalTextOnlyParts, finalText || fallbackText);
+                    const renderedFinalText = mergedFinalParts
+                      .flatMap((part) => part.kind === "text" ? [part.text] : [])
+                      .join("") || finalText || fallbackText;
                     nextMessages[lastIndex] = {
                       ...last,
-                      text: newText,
-                      parts: finalParts.length > 0 ? finalParts : [{ kind: "text", text: newText }],
+                      text: renderedFinalText,
+                      parts: mergedFinalParts.length > 0 ? mergedFinalParts : [{ kind: "text", text: renderedFinalText }],
                       model: chat.message?.model ?? last.model,
                       provider: chat.message?.provider ?? last.provider,
                       api: chat.message?.api ?? last.api,
@@ -1129,13 +981,22 @@ function App() {
                       cache_write_tokens: usage.cache_write_tokens ?? last.cache_write_tokens,
                     };
                   } else if (finalText || finalParts.length > 0) {
-                    nextMessages.push({ role: "assistant", text: finalText, parts: finalParts.length > 0 ? finalParts : [{ kind: "text", text: finalText }], model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: eventTimestamp, ...extractUsageFromGatewayMessage(chat.message) });
+                    const hasExistingToolMessages = nextMessages.some((message) => hasToolParts(message.parts ?? []));
+                    const finalTextOnlyParts = finalParts.filter((part) => part.kind === "text" || part.kind === "image");
+                    const appendedParts: MessagePart[] = finalParts.length > 0 && !hasExistingToolMessages
+                      ? mergeStreamingParts([], finalParts, finalText)
+                      : finalTextOnlyParts.length > 0
+                        ? mergeStreamingParts([], finalTextOnlyParts, finalText)
+                        : [{ kind: "text", text: finalText }];
+                    nextMessages.push({ role: "assistant", text: finalText, parts: appendedParts, model: chat.message?.model, provider: chat.message?.provider, api: chat.message?.api, timestamp: eventTimestamp, ...extractUsageFromGatewayMessage(chat.message) });
                   }
+                  const latestPreview = nextMessages[nextMessages.length - 1];
+                  const latestRenderedText = latestPreview?.text || finalText;
                   return {
                     ...currentConversation,
                     lastRole: "assistant",
                     latestEventType: terminalEventType,
-                    lastMessage: finalText || currentConversation.lastMessage,
+                    lastMessage: latestRenderedText || currentConversation.lastMessage,
                     previewMessages: nextMessages,
                     updatedAt: eventTimestamp,
                     lastTime: eventLastTime,
@@ -1152,11 +1013,6 @@ function App() {
               }),
             })));
             void refreshGatewayStatus();
-            if (isCurrentConversation) {
-              setTimeout(() => {
-                void openConversationDetail(chat.sessionKey!);
-              }, 1000);
-            }
             return;
           }
 
@@ -1237,7 +1093,7 @@ function App() {
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
     if (!conversation) {
-      return MODEL_OPTIONS[0]?.value ?? "";
+      return modelOptions[0]?.value ?? "";
     }
     // Priority 1: last assistant message's model from previewMessages
     const lastAssistantModel = [...(conversation.previewMessages ?? [])]
@@ -1247,8 +1103,8 @@ function App() {
     // Priority 2: conversation-level model (from agent config)
     if (conversation.model && conversation.model !== "未配置") return conversation.model;
     // Priority 3: first model option as fallback
-    return MODEL_OPTIONS[0]?.value ?? "";
-  }, []);
+    return modelOptions[0]?.value ?? "";
+  }, [modelOptions]);
 
   // Update composer model when conversation changes or previewMessages update
   useEffect(() => {
@@ -1259,7 +1115,7 @@ function App() {
     try {
       setGatewayError(null);
       await invoke("gateway_connect");
-      const defaultModel = resolveAgentDefaultModel(agents, agentId);
+      const defaultModel = resolveAgentDefaultModel(agents, agentId, modelOptions);
       const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
         params: {
           agentId,
@@ -1283,7 +1139,7 @@ function App() {
           lastTime: new Date().toLocaleString("zh-CN"),
           updatedAt: now,
           tokens: "--",
-          model: resolveAgentDefaultModel(current, agentId) || "未配置",
+          model: resolveAgentDefaultModel(current, agentId, modelOptions) || "未配置",
           workspace: agent.summary || "",
           visible: true,
           previewMessages: [],
@@ -1325,7 +1181,7 @@ function App() {
     }
   };
 
-  const openConversationDetail = async (conversationId: string) => {
+  const openConversationDetail = async (conversationId: string, preserveStatus = false) => {
     setActiveConversationId(conversationId);
     setUserExpanded(false);
     try {
@@ -1334,7 +1190,11 @@ function App() {
       const result = await invoke<GatewayHistoryResult>("gateway_chat_history", { params: { sessionKey: conversationId, limit: 200 } });
       await refreshGatewayStatus();
       if (Array.isArray(result?.messages)) {
-        const mappedMessages = result.messages.map((message) => ({
+        // Sort messages by timestamp to ensure correct chronological order
+        const sortedMessages = [...result.messages].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+        const mappedMessages = sortedMessages
+          .filter((message) => !isInternalOpenClawMessage(message))
+          .map((message) => ({
           role: message.role,
           text: extractTextFromGatewayMessage(message),
           parts: mapGatewayContentToParts(message),
@@ -1342,6 +1202,7 @@ function App() {
           provider: message.provider,
           api: message.api,
           timestamp: message.timestamp,
+          senderLabel: message.senderLabel,
           ...extractUsageFromGatewayMessage(message),
         }));
         const lastAssistant = [...mappedMessages].reverse().find(m => m.role === "assistant");
@@ -1357,26 +1218,48 @@ function App() {
           ...agent,
           conversations: agent.conversations.map((conversation) => {
             if (conversation.id !== conversationId) return conversation;
-            return patchConversation(conversation, (currentConversation) => ({
-              ...currentConversation,
+            // If preserveStatus is true, preserve all status-related fields
+            // This is used when reloading data while already in the conversation
+            if (preserveStatus) {
+              return {
+                ...conversation,
+                previewMessages: mappedMessages,
+                lastMessage: lastAssistant?.text || conversation.lastMessage,
+                model: lastAssistant?.model || conversation.model,
+                inputTokens: totalInput,
+                outputTokens: totalOutput,
+                cacheReadTokens: totalCacheRead,
+                cacheWriteTokens: totalCacheWrite,
+                totalTokens,
+                tokens: formatTokenCount(totalTokens),
+                // Preserve all status-related fields
+                status: conversation.status,
+                lastRole: conversation.lastRole,
+                runtime: conversation.runtime,
+              };
+            }
+            // Normal update with status calculation
+            const updatedConversation = {
+              ...conversation,
               previewMessages: mappedMessages,
               lastRole,
-              lastMessage: lastAssistant?.text || currentConversation.lastMessage,
-              model: lastAssistant?.model || currentConversation.model,
+              lastMessage: lastAssistant?.text || conversation.lastMessage,
+              model: lastAssistant?.model || conversation.model,
               inputTokens: totalInput,
               outputTokens: totalOutput,
               cacheReadTokens: totalCacheRead,
               cacheWriteTokens: totalCacheWrite,
               totalTokens,
               tokens: formatTokenCount(totalTokens),
-              runtime: currentConversation.runtime ?? {
+              runtime: conversation.runtime ?? {
                 activeRunId: undefined,
                 activeStartedAt: undefined,
-                lastEventAt: currentConversation.updatedAt,
-                lastTerminalAt: lastAssistant ? currentConversation.updatedAt : undefined,
+                lastEventAt: conversation.updatedAt,
+                lastTerminalAt: lastAssistant ? conversation.updatedAt : undefined,
                 lastTerminalReason: lastAssistant ? "completed" : undefined,
               },
-            }));
+            };
+            return patchConversation(conversation, () => updatedConversation);
           }),
         })));
       }
@@ -1458,6 +1341,128 @@ function App() {
     setComposerAttachments((current) => current.filter((item) => item.id !== attachmentId));
   }, []);
 
+  const activeQueuedMessages = activeConversationId ? queuedMessagesByConversation[activeConversationId] ?? [] : [];
+
+  const enqueueComposerMessage = useCallback((conversationId: string, text: string, attachments: ComposerAttachment[]) => {
+    const item: QueuedComposerMessage = {
+      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text,
+      attachments,
+      createdAt: Date.now(),
+    };
+    setQueuedMessagesByConversation((current) => ({
+      ...current,
+      [conversationId]: [...(current[conversationId] ?? []), item],
+    }));
+  }, []);
+
+  const removeQueuedMessage = useCallback((messageId: string) => {
+    if (!activeConversationId) return;
+    setQueuedMessagesByConversation((current) => ({
+      ...current,
+      [activeConversationId]: (current[activeConversationId] ?? []).filter((item) => item.id !== messageId),
+    }));
+  }, [activeConversationId]);
+
+  const sendMessageToConversation = useCallback(async (
+    conversationId: string,
+    message: string,
+    attachments: ComposerAttachment[],
+    options?: { restoreToComposerOnError?: boolean; requeueOnError?: QueuedComposerMessage },
+  ) => {
+    const optimisticUserParts: MessagePart[] = [];
+    if (message) {
+      optimisticUserParts.push({ kind: "text", text: message });
+    }
+    optimisticUserParts.push(...attachments.map((item) => ({
+      kind: "image" as const,
+      data: item.dataUrl,
+      mime_type: item.mimeType,
+      alt: item.name,
+    })));
+
+    setGatewayError(null);
+    setSending(true);
+
+    setAgents((current) => current.map((agent) => ({
+      ...agent,
+      conversations: agent.conversations.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        return {
+          ...conversation,
+          status: "working",
+          lastRole: "user",
+          lastMessage: message || (attachments.length > 0 ? `[图片] ${attachments.map((item) => item.name).join(", ")}` : conversation.lastMessage),
+          updatedAt: Date.now(),
+          lastTime: new Date().toLocaleString("zh-CN"),
+          previewMessages: [
+            ...(conversation.previewMessages ?? []),
+            { role: "user", text: message || attachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
+          ],
+        };
+      }),
+    })));
+
+    try {
+      await invoke("gateway_connect");
+      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setActiveRunId(runId);
+      setAgents((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) => {
+          if (conversation.id !== conversationId) return conversation;
+          return patchConversation(conversation, (currentConversation) => ({
+            ...currentConversation,
+            runtime: {
+              ...currentConversation.runtime,
+              activeRunId: runId,
+              activeStartedAt: Date.now(),
+              lastEventAt: Date.now(),
+            },
+          }));
+        }),
+      })));
+
+      const targetConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
+      if (composerModel && composerModel !== targetConversation?.model) {
+        await invoke("gateway_sessions_patch", {
+          params: {
+            sessionKey: conversationId,
+            model: composerModel,
+          },
+        });
+      }
+
+      await invoke("gateway_chat_send", {
+        params: {
+          sessionKey: conversationId,
+          message,
+          idempotencyKey: runId,
+          thinking: composerThinking === "off" ? null : composerThinking,
+          attachments: attachments.map((item) => ({ dataUrl: item.dataUrl, mimeType: item.mimeType })),
+        },
+      });
+      await refreshGatewayStatus();
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setGatewayError(messageText);
+      setGatewayStatusText(`Gateway 请求失败: ${messageText}`);
+      setSending(false);
+      setActiveRunId(null);
+      if (options?.restoreToComposerOnError) {
+        setComposerValue(message);
+        setComposerAttachments(attachments);
+      }
+      if (options?.requeueOnError) {
+        setQueuedMessagesByConversation((current) => ({
+          ...current,
+          [conversationId]: [options.requeueOnError!, ...(current[conversationId] ?? [])],
+        }));
+      }
+      await refreshGatewayStatus();
+    }
+  }, [agents, composerModel, composerThinking, refreshGatewayStatus]);
+
   const handleAbort = useCallback(async () => {
     if (!activeConversationId || !sending) return;
     try {
@@ -1475,97 +1480,48 @@ function App() {
   }, [activeConversationId, activeRunId, sending]);
 
   const handleSend = useCallback(async () => {
-    if (!activeConversationId || sending) return;
+    if (!activeConversationId) return;
     const message = composerValue.trim();
-    if (!message && composerAttachments.length === 0) return;
+    const attachments = composerAttachments;
+    if (!message && attachments.length === 0) return;
 
-    const optimisticUserParts: MessagePart[] = [];
-    if (message) {
-      optimisticUserParts.push({ kind: "text", text: message });
-    }
-    optimisticUserParts.push(...composerAttachments.map((item) => ({
-      kind: "image" as const,
-      data: item.dataUrl,
-      mime_type: item.mimeType,
-      alt: item.name,
-    })));
-
-    setGatewayError(null);
-    setSending(true);
-
-    setAgents((current) => current.map((agent) => ({
-      ...agent,
-      conversations: agent.conversations.map((conversation) => {
-        if (conversation.id !== activeConversationId) return conversation;
-        return {
-          ...conversation,
-          status: "working",
-          lastRole: "user",
-          lastMessage: message || (composerAttachments.length > 0 ? `[图片] ${composerAttachments.map((item) => item.name).join(", ")}` : conversation.lastMessage),
-          updatedAt: Date.now(),
-          lastTime: new Date().toLocaleString("zh-CN"),
-          previewMessages: [
-            ...(conversation.previewMessages ?? []),
-            { role: "user", text: message || composerAttachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
-          ],
-        };
-      }),
-    })));
-
-    const pendingAttachments = composerAttachments;
+    const shouldQueue = sending || activeConversation?.status === "working" || Boolean(activeConversation?.runtime?.activeRunId);
     setComposerValue("");
     setComposerAttachments([]);
 
-    try {
-      await invoke("gateway_connect");
-      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setActiveRunId(runId);
-      setAgents((current) => current.map((agent) => ({
-        ...agent,
-        conversations: agent.conversations.map((conversation) => {
-          if (conversation.id !== activeConversationId) return conversation;
-          return patchConversation(conversation, (currentConversation) => ({
-            ...currentConversation,
-            runtime: {
-              ...currentConversation.runtime,
-              activeRunId: runId,
-              activeStartedAt: Date.now(),
-              lastEventAt: Date.now(),
-            },
-          }));
-        }),
-      })));
-      
-      // 如果选择了不同的模型，先 patch 会话
-      if (composerModel && composerModel !== activeConversation?.model) {
-        await invoke("gateway_sessions_patch", {
-          params: {
-            sessionKey: activeConversationId,
-            model: composerModel,
-          },
-        });
-      }
-      
-      await invoke("gateway_chat_send", {
-        params: {
-          sessionKey: activeConversationId,
-          message,
-          idempotencyKey: runId,
-          thinking: composerThinking === "off" ? null : composerThinking,
-          attachments: pendingAttachments.map((item) => ({ dataUrl: item.dataUrl, mimeType: item.mimeType })),
-        },
-      });
-      await refreshGatewayStatus();
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      setGatewayError(messageText);
-      setGatewayStatusText(`Gateway 请求失败: ${messageText}`);
-      setSending(false);
-      setActiveRunId(null);
-      setComposerAttachments(pendingAttachments);
-      await refreshGatewayStatus();
+    if (shouldQueue) {
+      enqueueComposerMessage(activeConversationId, message, attachments);
+      return;
     }
-  }, [activeConversationId, composerAttachments, composerModel, composerThinking, composerValue, refreshGatewayStatus, sending]);
+
+    await sendMessageToConversation(activeConversationId, message, attachments, { restoreToComposerOnError: true });
+  }, [activeConversation, activeConversationId, composerAttachments, composerValue, enqueueComposerMessage, sendMessageToConversation, sending]);
+
+  useEffect(() => {
+    if (!activeConversationId || !activeConversation || sending) return;
+    if (activeConversation.status === "working" || activeConversation.runtime?.activeRunId) return;
+    const nextQueuedMessage = queuedMessagesByConversation[activeConversationId]?.[0];
+    if (!nextQueuedMessage) return;
+    if (autoSendingQueuedMessageRef.current === nextQueuedMessage.id) return;
+
+    autoSendingQueuedMessageRef.current = nextQueuedMessage.id;
+    const remainingQueuedMessages = (queuedMessagesByConversationRef.current[activeConversationId] ?? []).filter((item) => item.id !== nextQueuedMessage.id);
+    setQueuedMessagesByConversation((current) => ({
+      ...current,
+      [activeConversationId]: remainingQueuedMessages,
+    }));
+    void sendMessageToConversation(activeConversationId, nextQueuedMessage.text, nextQueuedMessage.attachments, { requeueOnError: nextQueuedMessage })
+      .finally(() => {
+        if (autoSendingQueuedMessageRef.current === nextQueuedMessage.id) {
+          autoSendingQueuedMessageRef.current = null;
+        }
+        if (remainingQueuedMessages.length > 0) {
+          setSending(false);
+          setActiveRunId(null);
+        }
+      });
+  }, [activeConversation, activeConversationId, queuedMessagesByConversation, sendMessageToConversation, sending]);
+
 
 
 
@@ -1837,7 +1793,7 @@ function App() {
                       const detailState = getConversationDetailState(
                         activeConversation.previewMessages ?? [],
                         activeConversation.lastRole,
-                        false,
+                        false, // Only show messages after last user message
                       );
                       const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isWaitingReply || detailState.isStillStreaming;
                       if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
@@ -1851,6 +1807,7 @@ function App() {
                               messages={messagesToShow}
                               conversationId={activeConversation.id}
                               onOpenImage={setPreviewImageSrc}
+                              formatTokenCount={formatTokenCount}
                             />
                           ) : null}
                           {shouldShowInProgress && (
@@ -1874,13 +1831,16 @@ function App() {
                     thinking={composerThinking}
                     sending={sending}
                     attachments={composerAttachments}
-                    modelOptions={MODEL_OPTIONS}
+                    queuedMessages={activeQueuedMessages}
+                    modelOptions={ensureSelectedModelOption(modelOptions, composerModel)}
+                    modelsLoading={modelsLoading}
                     onFocusChange={setComposerFocused}
                     onValueChange={setComposerValue}
                     onModelChange={setComposerModel}
                     onThinkingChange={setComposerThinking}
                     onFilesSelected={handleComposerFiles}
                     onRemoveAttachment={removeComposerAttachment}
+                    onRemoveQueuedMessage={removeQueuedMessage}
                     onSend={handleSend}
                     onAbort={handleAbort}
                   />

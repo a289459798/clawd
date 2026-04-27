@@ -17,7 +17,7 @@ export type RealtimeSessionPatch = {
   cacheWriteTokens?: number;
   totalTokens?: number;
   model?: string;
-  previewMessages?: Array<{ role?: string; text: string; parts?: MessagePart[] }>;
+  previewMessages?: Array<{ role?: string; text: string; parts?: MessagePart[]; model?: string; provider?: string; api?: string; timestamp?: number; input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number }>;
 };
 
 export type RealtimeGatewayEvent = {

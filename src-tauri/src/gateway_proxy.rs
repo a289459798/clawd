@@ -88,6 +88,8 @@ pub struct GatewayChatEventPayload {
     pub session_key: Option<String>,
     pub run_id: Option<String>,
     pub message: Option<Value>,
+    pub stream: Option<String>,
+    pub data: Option<Value>,
     pub error_message: Option<String>,
 }
 
@@ -572,6 +574,8 @@ fn handle_message(app: &AppHandle, value: Value) {
             session_key: payload.get("sessionKey").and_then(Value::as_str).map(str::to_string),
             run_id: payload.get("runId").and_then(Value::as_str).map(str::to_string),
             message: payload.get("message").cloned(),
+            stream: payload.get("stream").and_then(Value::as_str).map(str::to_string),
+            data: payload.get("data").cloned(),
             error_message: payload.get("errorMessage").and_then(Value::as_str).map(str::to_string),
         };
         let _ = app.emit("clawx://gateway-chat", evt);
@@ -737,6 +741,14 @@ fn send_rpc(state: &GatewayProxyState, method: &str, params: Value) -> Result<Va
     }
 
     pending.wait(15000)
+}
+
+
+#[tauri::command]
+pub fn gateway_models_list(
+    state: tauri::State<Arc<GatewayProxyState>>,
+) -> Result<Value, String> {
+    send_rpc(&state, "models.list", json!({}))
 }
 
 #[tauri::command]

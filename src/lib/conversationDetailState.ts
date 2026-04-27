@@ -9,7 +9,9 @@ export function getConversationDetailState(messages: PreviewMessage[], lastRole?
   const assistantSlice = showFullHistory ? messages : userPos >= 0 ? messages.slice(userPos + 1) : [];
   const hasRenderableContent = assistantSlice.some((m) => {
     const hasText = (m.text ?? "").replace(STREAMING_PREFIX, "").trim().length > 0;
-    const hasRenderableParts = (m.parts ?? []).some((part) => part.kind === "text" || part.kind === "image");
+    const hasRenderableParts = (m.parts ?? []).some(
+      (part) => part.kind === "text" || part.kind === "image" || part.kind === "tool_call",
+    );
     return hasText || hasRenderableParts;
   });
   const isWaitingReply = !hasRenderableContent && lastRole === "user";

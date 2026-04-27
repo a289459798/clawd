@@ -1076,6 +1076,7 @@ pub fn run() {
             gateway_proxy::gateway_status,
             gateway_proxy::gateway_connect,
             gateway_proxy::gateway_chat_history,
+            gateway_proxy::gateway_models_list,
             gateway_proxy::gateway_chat_send,
             gateway_proxy::gateway_chat_abort,
             gateway_proxy::gateway_sessions_create,
