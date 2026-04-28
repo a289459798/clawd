@@ -3,6 +3,7 @@ import type { Conversation, ConversationStatus } from "../types/conversation";
 // 从 title 解析对话类型
 function getLabelTypeFromTitle(title?: string): { text: string; color: string } {
   const lower = title?.toLowerCase() || "";
+  if (lower.includes("dashboard")) return { text: "clawx", color: "#52f2c5" };
   if (lower.includes("main")) return { text: "主对话", color: "#52f2c5" };
   if (lower.includes("cron")) return { text: "定时任务", color: "#f3bf63" };
   if (lower.includes("dreaming")) return { text: "做梦", color: "#c08bff" };
@@ -30,7 +31,7 @@ export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: 
       <div className="conversation-card-head">
         <div className="conversation-card-title-block">
           <div className="card-row">
-            <strong className="conversation-card-title">{conversation.label || conversation.title}</strong>
+            <strong className="conversation-card-title">{conversation.title}</strong>
           </div>
           <div className="conversation-card-subline">
             <span>{conversation.agentName} · {conversation.model} · {conversation.tokens}</span>

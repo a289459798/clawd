@@ -28,6 +28,7 @@ struct SessionSummary {
     agent_id: String,
     key: String,
     title: String,
+    label: Option<String>,
     updated_at: Option<i64>,
     channel: Option<String>,
     session_file: Option<String>,
@@ -627,11 +628,11 @@ fn read_sessions_for_agent(agent_id: &str) -> Vec<SessionSummary> {
                 agent_id: agent_id.to_string(),
                 key: key.clone(),
                 title: entry
-                    .get("origin")
-                    .and_then(|origin| origin.get("label"))
+                    .get("label")
                     .and_then(Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(|| session_title_from_key(key)),
+                label: entry.get("label").and_then(Value::as_str).map(str::to_string),
                 updated_at: entry.get("updatedAt").and_then(Value::as_i64),
                 channel: entry.get("lastChannel").and_then(Value::as_str).map(str::to_string),
                 session_file,

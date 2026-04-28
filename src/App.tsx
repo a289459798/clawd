@@ -305,20 +305,12 @@ function buildAgentsFromSnapshot(
         // Note: When entering a conversation, openConversationDetail will fetch
         // full message history via gateway_chat_history and update previewMessages
         const mergedPreviewMessages = sessionMessages as PreviewMessage[];
-        // 从 title 解析对话类型
-        const titleLower = session.title?.toLowerCase() || "";
-        const labelType = (() => {
-          if (titleLower.includes("main")) return { text: "主对话", color: "#52f2c5" };
-          if (titleLower.includes("cron")) return { text: "定时任务", color: "#f3bf63" };
-          if (titleLower.includes("dreaming")) return { text: "做梦", color: "#c08bff" };
-          if (titleLower.includes("channel")) return { text: "频道", color: "#7aa2ff" };
-          return { text: "对话", color: "#7aa2ff" };
-        })();
-
+        // 优先使用 label（用户自定义标题），否则使用 title
+        const displayTitle = session.label || session.title;
+        
         return {
           id: session.key,
-          title: session.title,
-          label: session.label || session.title,
+          title: displayTitle,
           channel: session.channel,
           status: deriveConversationStatus(runtime),
           lastMessage: (() => {
@@ -1123,54 +1115,49 @@ function App() {
     setComposerModel(resolveConversationDefaultModel(activeConversation));
   }, [activeConversation?.id, resolveConversationDefaultModel]);
 
-  const handleCreateConversation = useCallback(async (agentId: string) => {
-    try {
-      setGatewayError(null);
-      await invoke("gateway_connect");
-      const defaultModel = resolveAgentDefaultModel(agents, agentId, modelOptions);
-      const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
-        params: {
-          agentId,
-          label: "新对话",
-          model: defaultModel || null,
-          message: "",
-        },
-      });
-      const newKey = result.key;
-      if (!newKey) {
-        throw new Error("创建会话失败，未返回 session key");
-      }
-      const now = Date.now();
-      setAgents((current) => current.map((agent) => {
-        if (agent.id !== agentId) return agent;
-        const nextConversation: Conversation = {
-          id: newKey,
-          title: "新对话",
-          status: "idle",
-          lastMessage: "",
-          lastTime: new Date().toLocaleString("zh-CN"),
-          updatedAt: now,
-          tokens: "--",
-          model: resolveAgentDefaultModel(current, agentId, modelOptions) || "未配置",
-          workspace: agent.summary || "",
-          visible: true,
-          previewMessages: [],
-        };
-        return {
-          ...agent,
-          conversations: [nextConversation, ...agent.conversations],
-        };
-      }));
-      setExpandedConversationId(newKey);
-      setActiveConversationId(newKey);
-      await refreshGatewayStatus();
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      setGatewayError(messageText);
-      setGatewayConnected(false);
-      setGatewayStatusText(`新建对话失败: ${messageText}`);
+  // 创建本地草稿对话，不调用 API
+  const handleCreateConversation = useCallback((agentId: string) => {
+    // 检查是否已存在该 agent 的草稿对话
+    const existingDraft = agents
+      .find((a) => a.id === agentId)
+      ?.conversations.find((c) => c.isDraft);
+
+    if (existingDraft) {
+      // 如果存在草稿，直接打开现有的
+      setExpandedConversationId(existingDraft.id);
+      setActiveConversationId(existingDraft.id);
+      return;
     }
-  }, [agents, refreshGatewayStatus]);
+
+    const now = Date.now();
+    const draftId = `draft-${agentId}-${now}`;
+    const defaultModel = resolveAgentDefaultModel(agents, agentId, modelOptions);
+
+    setAgents((current) => current.map((agent) => {
+      if (agent.id !== agentId) return agent;
+      const nextConversation: Conversation = {
+        id: draftId,
+        title: "新对话",
+        status: "idle",
+        lastMessage: "",
+        lastTime: new Date().toLocaleString("zh-CN"),
+        updatedAt: now,
+        tokens: "--",
+        model: defaultModel || "未配置",
+        workspace: "/Users/zhangzy/clawd",
+        visible: true,
+        previewMessages: [],
+        isDraft: true,
+        draftAgentId: agentId,
+      };
+      return {
+        ...agent,
+        conversations: [nextConversation, ...agent.conversations],
+      };
+    }));
+    setExpandedConversationId(draftId);
+    setActiveConversationId(draftId);
+  }, [agents, modelOptions]);
 
   const toggleConversationVisibility = (agentId: string, conversationId: string, visible: boolean) => {
     setAgents((current) =>
@@ -1396,10 +1383,71 @@ function App() {
     setGatewayError(null);
     setSending(true);
 
+    // 检查是否是草稿对话
+    const targetConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
+    const isDraft = targetConversation?.isDraft;
+    const draftAgentId = targetConversation?.draftAgentId;
+
+    // 如果是草稿，先创建真实 session
+    let realSessionKey = conversationId;
+    if (isDraft && draftAgentId) {
+      try {
+        await invoke("gateway_connect");
+        const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
+          params: {
+            agentId: draftAgentId,
+            model: composerModel || null,
+            message: "",
+          },
+        });
+        if (!result.key) {
+          throw new Error("创建会话失败，未返回 session key");
+        }
+        realSessionKey = result.key;
+
+        // 更新对话 ID 和相关状态
+        setAgents((current) => current.map((agent) => ({
+          ...agent,
+          conversations: agent.conversations.map((conversation) => {
+            if (conversation.id !== conversationId) return conversation;
+            return {
+              ...conversation,
+              id: realSessionKey,
+              isDraft: false,
+              draftAgentId: undefined,
+            };
+          }),
+        })));
+
+        // 更新当前激活的对话 ID
+        if (activeConversationId === conversationId) {
+          setActiveConversationId(realSessionKey);
+        }
+        if (expandedConversationId === conversationId) {
+          setExpandedConversationId(realSessionKey);
+        }
+
+        // 迁移排队消息到新 ID
+        setQueuedMessagesByConversation((current) => {
+          const draftQueue = current[conversationId] ?? [];
+          return {
+            ...current,
+            [realSessionKey]: draftQueue,
+          };
+        });
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        setGatewayError(messageText);
+        setGatewayStatusText(`创建会话失败: ${messageText}`);
+        setSending(false);
+        return;
+      }
+    }
+
     setAgents((current) => current.map((agent) => ({
       ...agent,
       conversations: agent.conversations.map((conversation) => {
-        if (conversation.id !== conversationId) return conversation;
+        if (conversation.id !== realSessionKey) return conversation;
         return {
           ...conversation,
           status: "working",
@@ -1422,7 +1470,7 @@ function App() {
       setAgents((current) => current.map((agent) => ({
         ...agent,
         conversations: agent.conversations.map((conversation) => {
-          if (conversation.id !== conversationId) return conversation;
+          if (conversation.id !== realSessionKey) return conversation;
           return patchConversation(conversation, (currentConversation) => ({
             ...currentConversation,
             runtime: {
@@ -1435,11 +1483,11 @@ function App() {
         }),
       })));
 
-      const targetConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
-      if (composerModel && composerModel !== targetConversation?.model) {
+      const updatedConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === realSessionKey);
+      if (composerModel && composerModel !== updatedConversation?.model) {
         await invoke("gateway_sessions_patch", {
           params: {
-            sessionKey: conversationId,
+            sessionKey: realSessionKey,
             model: composerModel,
           },
         });
@@ -1447,7 +1495,7 @@ function App() {
 
       await invoke("gateway_chat_send", {
         params: {
-          sessionKey: conversationId,
+          sessionKey: realSessionKey,
           message,
           idempotencyKey: runId,
           thinking: composerThinking === "off" ? null : composerThinking,
@@ -1468,12 +1516,12 @@ function App() {
       if (options?.requeueOnError) {
         setQueuedMessagesByConversation((current) => ({
           ...current,
-          [conversationId]: [options.requeueOnError!, ...(current[conversationId] ?? [])],
+          [realSessionKey]: [options.requeueOnError!, ...(current[realSessionKey] ?? [])],
         }));
       }
       await refreshGatewayStatus();
     }
-  }, [agents, composerModel, composerThinking, refreshGatewayStatus]);
+  }, [agents, composerModel, composerThinking, refreshGatewayStatus, activeConversationId, expandedConversationId, setActiveConversationId, setExpandedConversationId, setQueuedMessagesByConversation]);
 
   const handleAbort = useCallback(async () => {
     if (!activeConversationId || !sending) return;
@@ -1800,6 +1848,36 @@ function App() {
                       container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
                       shouldStickToBottomRef.current = true;
                       setShowJumpToBottom(false);
+                    }}
+                    onUpdateTitle={async (conversationId, newTitle) => {
+                      // 先本地更新，并获取更新后的对话状态
+                      let isDraftConversation = false;
+                      setAgents((current) => {
+                        const updatedAgents = current.map((agent) => ({
+                          ...agent,
+                          conversations: agent.conversations.map((conversation) => {
+                            if (conversation.id === conversationId) {
+                              isDraftConversation = conversation.isDraft ?? false;
+                              return { ...conversation, title: newTitle };
+                            }
+                            return conversation;
+                          }),
+                        }));
+                        return updatedAgents;
+                      });
+                      // 调用 Gateway 接口更新 session title（如果不是草稿）
+                      if (!isDraftConversation) {
+                        try {
+                          await invoke("gateway_sessions_patch", {
+                            params: {
+                              sessionKey: conversationId,
+                              label: newTitle,
+                            },
+                          });
+                        } catch (error) {
+                          console.error("更新 session title 失败:", error);
+                        }
+                      }
                     }}
                     conversationMessageList={(() => {
                       const detailState = getConversationDetailState(

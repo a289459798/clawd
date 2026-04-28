@@ -17,6 +17,7 @@ type ConversationDetailProps = {
   onUserExpandedChange: (expanded: boolean) => void;
   showJumpToBottom: boolean;
   onJumpToBottom: () => void;
+  onUpdateTitle?: (conversationId: string, newTitle: string) => void;
 };
 
 function MarkdownBlock({ content, className }: { content: string; className?: string }) {
@@ -73,7 +74,15 @@ export function ConversationDetail({
   onUserExpandedChange,
   showJumpToBottom,
   onJumpToBottom,
+  onUpdateTitle,
 }: ConversationDetailProps) {
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleInput, setTitleInput] = useState(activeConversation.title);
+
+  // 同步 titleInput 当 conversation 变化时
+  useEffect(() => {
+    setTitleInput(activeConversation.title);
+  }, [activeConversation.title]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -136,7 +145,53 @@ export function ConversationDetail({
         </button>
         <span className="statusbar-agent">{agentName}</span>
         <span className="statusbar-divider">·</span>
-        <span className="statusbar-title">{activeConversation.title}</span>
+        {isEditingTitle ? (
+          <input
+            type="text"
+            className="statusbar-title-input"
+            value={titleInput}
+            onChange={(e) => setTitleInput(e.target.value)}
+            onBlur={() => {
+              setIsEditingTitle(false);
+              if (titleInput.trim() && titleInput !== activeConversation.title) {
+                onUpdateTitle?.(activeConversation.id, titleInput.trim());
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                setIsEditingTitle(false);
+                if (titleInput.trim() && titleInput !== activeConversation.title) {
+                  onUpdateTitle?.(activeConversation.id, titleInput.trim());
+                }
+              }
+              if (e.key === "Escape") {
+                setIsEditingTitle(false);
+                setTitleInput(activeConversation.title);
+              }
+            }}
+            autoFocus
+            style={{
+              background: "transparent",
+              border: "1px solid var(--border, #ffffff30)",
+              borderRadius: "4px",
+              color: "inherit",
+              fontSize: "inherit",
+              padding: "2px 8px",
+              outline: "none",
+              flex: "1",
+              minWidth: "120px",
+            }}
+          />
+        ) : (
+          <span
+            className="statusbar-title"
+            onClick={() => setIsEditingTitle(true)}
+            title="点击编辑"
+            style={{ cursor: "pointer" }}
+          >
+            {activeConversation.title}
+          </span>
+        )}
         <span className="statusbar-divider">·</span>
         <span className="statusbar-tokens">总: {activeConversation.tokens}</span>
         <span className="statusbar-divider">·</span>

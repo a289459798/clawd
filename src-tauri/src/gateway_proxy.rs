@@ -883,6 +883,7 @@ pub struct GatewaySessionsPatchParams {
     pub fast_mode: Option<bool>,
     pub reasoning_level: Option<String>,
     pub verbose_level: Option<String>,
+    pub label: Option<String>,
 }
 
 #[tauri::command]
@@ -907,6 +908,9 @@ pub fn gateway_sessions_patch(
     }
     if let Some(verbose_level) = params.verbose_level {
         json_params.insert("verboseLevel".to_string(), json!(verbose_level));
+    }
+    if let Some(label) = params.label {
+        json_params.insert("label".to_string(), json!(label));
     }
     
     send_rpc(

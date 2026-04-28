@@ -32,7 +32,6 @@ export type ConversationRuntime = {
 export type Conversation = {
   id: string;
   title: string;
-  label?: string;
   channel?: string;
   status: ConversationStatus;
   lastMessage: string;
@@ -53,4 +52,6 @@ export type Conversation = {
   latestEventType?: string;
   previewMessages?: PreviewMessage[];
   runtime?: ConversationRuntime;
+  isDraft?: boolean;  // 本地草稿状态，未创建真实 session
+  draftAgentId?: string;  // 草稿对应的 agentId
 };
