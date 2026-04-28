@@ -1,10 +1,8 @@
 import type { Agent } from "../types/app";
-import type { Conversation } from "../types/conversation";
 
 type ResourceSidebarProps = {
   agents: Agent[];
   expandedConversationId: string;
-  statusLabel: Record<Conversation["status"], string>;
   onCreateConversation: (agentId: string) => void;
   onToggleConversationVisibility: (agentId: string, conversationId: string, visible: boolean) => void;
   onExpandedConversationChange: (conversationId: string) => void;
@@ -17,7 +15,6 @@ type ResourceSidebarProps = {
 export function ResourceSidebar({
   agents,
   expandedConversationId,
-  statusLabel,
   onCreateConversation,
   onToggleConversationVisibility,
   onExpandedConversationChange,

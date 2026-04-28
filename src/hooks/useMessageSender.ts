@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Agent, ComposerAttachment, GatewayCreateSessionResult, QueuedComposerMessage } from "../types/app";
 import type { MessagePart } from "../types/conversation";
@@ -18,6 +18,8 @@ interface UseMessageSenderProps {
   onGatewayStatusTextChange: (text: string) => void;
   onSendingChange: (sending: boolean) => void;
   onActiveRunIdChange: (runId: string | null) => void;
+  onComposerValueChange: (value: string) => void;
+  onComposerAttachmentsChange: (attachments: ComposerAttachment[]) => void;
   refreshGatewayStatus: () => Promise<void>;
 }
 
@@ -35,11 +37,21 @@ export function useMessageSender({
   onGatewayStatusTextChange,
   onSendingChange,
   onActiveRunIdChange,
+  onComposerValueChange,
+  onComposerAttachmentsChange,
   refreshGatewayStatus,
 }: UseMessageSenderProps) {
   const activeConversationIdRef = useRef(activeConversationId);
   const expandedConversationIdRef = useRef(expandedConversationId);
   const [autoSendingQueuedMessageRef] = useState<{ current: string | null }>({ current: null });
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    expandedConversationIdRef.current = expandedConversationId;
+  }, [expandedConversationId]);
 
   const setActiveConversationId = useCallback((id: string | null) => {
     activeConversationIdRef.current = id;
@@ -198,7 +210,8 @@ export function useMessageSender({
       onSendingChange(false);
       onActiveRunIdChange(null);
       if (options?.restoreToComposerOnError) {
-        // These would need to be handled by the caller
+        onComposerValueChange(message);
+        onComposerAttachmentsChange(attachments);
       }
       if (options?.requeueOnError) {
         onQueuedMessagesChange((current) => ({
@@ -208,7 +221,7 @@ export function useMessageSender({
       }
       await refreshGatewayStatus();
     }
-  }, [agents, composerModel, composerThinking, onAgentsChange, onActiveConversationIdChange, onExpandedConversationIdChange, onQueuedMessagesChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
+  }, [agents, composerModel, composerThinking, onAgentsChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, onComposerValueChange, onComposerAttachmentsChange, onQueuedMessagesChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
 
   return {
     sendMessageToConversation,

@@ -224,8 +224,8 @@ p {
 }
 
 .statusbar-badge.idle {
-  background: rgba(122, 162, 255, 0.14);
-  color: #7aa2ff;
+  background: rgba(155, 149, 136, 0.14);
+  color: #9b9588;
 }
 
 /* Fixed bottom composer bar */
@@ -1347,7 +1347,7 @@ p {
 }
 
 .mini-status.idle {
-  background: var(--blue);
+  background: var(--muted);
 }
 
 .agent-config-block {
@@ -1452,7 +1452,7 @@ p {
 }
 
 .status-dot.idle {
-  background: var(--blue);
+  background: var(--muted);
 }
 
 .tree-item-tokens {
@@ -1606,8 +1606,8 @@ p {
 }
 
 .status-badge.idle {
-  background: rgba(122, 162, 255, 0.14);
-  color: var(--blue);
+  background: rgba(155, 149, 136, 0.14);
+  color: var(--muted);
 }
 
 .toggle-badge.warning {

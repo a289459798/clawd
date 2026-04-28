@@ -6,20 +6,21 @@ import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ConnectionsPage, SkillsPage } from "./components/InfoPages";
 import { ResourceSidebar } from "./components/ResourceSidebar";
-import { getLastAssistantMessage, mapGatewayHistoryMessages, mapNonEmptyGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
+import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
 import { readImageComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
 import { useGatewayChat } from "./hooks/useGatewayChat";
+import { useMessageSender } from "./hooks/useMessageSender";
+import { useModels } from "./hooks/useModels";
 import { buildAgentsFromSnapshot, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
 import { connectionLabel, formatTokenCount, statusLabel } from "./lib/appFormatters";
 import { parseSenderMeta } from "./lib/messageMeta";
-import { buildModelOptions } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
-import type { Conversation, MessagePart, PreviewMessage } from "./types/conversation";
-import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, GatewayCreateSessionResult, ModelOption, NavKey, QueuedComposerMessage, Skill } from "./types/app";
-import type { GatewayHistoryResult, GatewayModelsResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
+import type { Conversation, PreviewMessage } from "./types/conversation";
+import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill } from "./types/app";
+import type { GatewayHistoryResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent } from "./realtime";
 import "./App.css";
 
@@ -43,8 +44,7 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  const { modelOptions, modelsLoading } = useModels({ enabled: bootstrapStep === "ready" });
   const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
@@ -183,30 +183,10 @@ function App() {
       }
     };
 
-    const loadModels = async () => {
-      setModelsLoading(true);
-      try {
-        await invoke("gateway_connect");
-        const result = await invoke<GatewayModelsResult>("gateway_models_list");
-        if (!cancelled) {
-          setModelOptions(buildModelOptions(result));
-        }
-      } catch (error) {
-        console.error("Failed to load OpenClaw models", error);
-        if (!cancelled) {
-          setModelOptions([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setModelsLoading(false);
-        }
-      }
-    };
 
     // Load snapshot only once on startup
     // Polling removed to avoid overwriting frontend state (token data, streaming messages, tools)
     void loadSnapshot();
-    void loadModels();
 
     return () => {
       cancelled = true;
@@ -572,165 +552,24 @@ function App() {
     }));
   }, [activeConversationId]);
 
-  const sendMessageToConversation = useCallback(async (
-    conversationId: string,
-    message: string,
-    attachments: ComposerAttachment[],
-    options?: { restoreToComposerOnError?: boolean; requeueOnError?: QueuedComposerMessage },
-  ) => {
-    const optimisticUserParts: MessagePart[] = [];
-    if (message) {
-      optimisticUserParts.push({ kind: "text", text: message });
-    }
-    optimisticUserParts.push(...attachments.map((item) => ({
-      kind: "image" as const,
-      data: item.dataUrl,
-      mime_type: item.mimeType,
-      alt: item.name,
-    })));
-
-    setGatewayError(null);
-    setSending(true);
-
-    // 检查是否是草稿对话
-    const targetConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
-    const isDraft = targetConversation?.isDraft;
-    const draftAgentId = targetConversation?.draftAgentId;
-
-    // 如果是草稿，先创建真实 session
-    let realSessionKey = conversationId;
-    if (isDraft && draftAgentId) {
-      try {
-        await invoke("gateway_connect");
-        const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
-          params: {
-            agentId: draftAgentId,
-            model: composerModel || null,
-            message: "",
-          },
-        });
-        if (!result.key) {
-          throw new Error("创建会话失败，未返回 session key");
-        }
-        realSessionKey = result.key;
-
-        // 更新对话 ID 和相关状态
-        setAgents((current) => current.map((agent) => ({
-          ...agent,
-          conversations: agent.conversations.map((conversation) => {
-            if (conversation.id !== conversationId) return conversation;
-            return {
-              ...conversation,
-              id: realSessionKey,
-              isDraft: false,
-              draftAgentId: undefined,
-            };
-          }),
-        })));
-
-        // 更新当前激活的对话 ID
-        if (activeConversationId === conversationId) {
-          setActiveConversationId(realSessionKey);
-        }
-        if (expandedConversationId === conversationId) {
-          setExpandedConversationId(realSessionKey);
-        }
-
-        // 迁移排队消息到新 ID
-        setQueuedMessagesByConversation((current) => {
-          const draftQueue = current[conversationId] ?? [];
-          return {
-            ...current,
-            [realSessionKey]: draftQueue,
-          };
-        });
-      } catch (error) {
-        const messageText = error instanceof Error ? error.message : String(error);
-        setGatewayError(messageText);
-        setGatewayStatusText(`创建会话失败: ${messageText}`);
-        setSending(false);
-        return;
-      }
-    }
-
-    setAgents((current) => current.map((agent) => ({
-      ...agent,
-      conversations: agent.conversations.map((conversation) => {
-        if (conversation.id !== realSessionKey) return conversation;
-        return {
-          ...conversation,
-          status: "working",
-          lastRole: "user",
-          lastMessage: message || (attachments.length > 0 ? `[图片] ${attachments.map((item) => item.name).join(", ")}` : conversation.lastMessage),
-          updatedAt: Date.now(),
-          lastTime: new Date().toLocaleString("zh-CN"),
-          previewMessages: [
-            ...(conversation.previewMessages ?? []),
-            { role: "user", text: message || attachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
-          ],
-        };
-      }),
-    })));
-
-    try {
-      await invoke("gateway_connect");
-      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setActiveRunId(runId);
-      setAgents((current) => current.map((agent) => ({
-        ...agent,
-        conversations: agent.conversations.map((conversation) => {
-          if (conversation.id !== realSessionKey) return conversation;
-          return patchConversation(conversation, (currentConversation) => ({
-            ...currentConversation,
-            runtime: {
-              ...currentConversation.runtime,
-              activeRunId: runId,
-              activeStartedAt: Date.now(),
-              lastEventAt: Date.now(),
-            },
-          }));
-        }),
-      })));
-
-      const updatedConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === realSessionKey);
-      if (composerModel && composerModel !== updatedConversation?.model) {
-        await invoke("gateway_sessions_patch", {
-          params: {
-            sessionKey: realSessionKey,
-            model: composerModel,
-          },
-        });
-      }
-
-      await invoke("gateway_chat_send", {
-        params: {
-          sessionKey: realSessionKey,
-          message,
-          idempotencyKey: runId,
-          thinking: composerThinking === "off" ? null : composerThinking,
-          attachments: attachments.map((item) => ({ dataUrl: item.dataUrl, mimeType: item.mimeType })),
-        },
-      });
-      await refreshGatewayStatus();
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      setGatewayError(messageText);
-      setGatewayStatusText(`Gateway 请求失败: ${messageText}`);
-      setSending(false);
-      setActiveRunId(null);
-      if (options?.restoreToComposerOnError) {
-        setComposerValue(message);
-        setComposerAttachments(attachments);
-      }
-      if (options?.requeueOnError) {
-        setQueuedMessagesByConversation((current) => ({
-          ...current,
-          [realSessionKey]: [options.requeueOnError!, ...(current[realSessionKey] ?? [])],
-        }));
-      }
-      await refreshGatewayStatus();
-    }
-  }, [agents, composerModel, composerThinking, refreshGatewayStatus, activeConversationId, expandedConversationId, setActiveConversationId, setExpandedConversationId, setQueuedMessagesByConversation]);
+  const { sendMessageToConversation } = useMessageSender({
+    agents,
+    composerModel,
+    composerThinking,
+    activeConversationId,
+    expandedConversationId,
+    onAgentsChange: setAgents,
+    onActiveConversationIdChange: setActiveConversationId,
+    onExpandedConversationIdChange: setExpandedConversationId,
+    onQueuedMessagesChange: setQueuedMessagesByConversation,
+    onGatewayError: setGatewayError,
+    onGatewayStatusTextChange: setGatewayStatusText,
+    onSendingChange: setSending,
+    onActiveRunIdChange: setActiveRunId,
+    onComposerValueChange: setComposerValue,
+    onComposerAttachmentsChange: setComposerAttachments,
+    refreshGatewayStatus,
+  });
 
   const handleAbort = useCallback(async () => {
     if (!activeConversationId || !sending) return;
@@ -838,7 +677,6 @@ function App() {
             <ResourceSidebar
               agents={agents}
               expandedConversationId={expandedConversationId}
-              statusLabel={statusLabel}
               visible={showResourceSidebar}
               onCreateConversation={(agentId) => void handleCreateConversation(agentId)}
               onToggleConversationVisibility={toggleConversationVisibility}
