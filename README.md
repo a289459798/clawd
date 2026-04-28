@@ -160,7 +160,7 @@ clawx 想解决的是以下几类需求：
 
 ## 4. 当前代码状态
 
-当前项目仍是 **原型 + mock 数据驱动**，重点在验证信息架构和界面交互，而不是完整功能实现。
+当前项目是 **已接入本地 OpenClaw 真实数据与 Gateway 发送能力的桌面原型**。界面结构和核心对话链路已经打通，最近重点转向前端结构拆分与可维护性整理。
 
 ### 已完成
 
@@ -170,7 +170,11 @@ clawx 想解决的是以下几类需求：
 - 技能页和连接页基础展示
 - 列表页状态、摘要、usage 的准实时增量刷新
 - 对话详情页已接入真实发送能力，可直接发消息到现有 session
-- 构建通过
+- 左侧 agent 区已接入真实 `sessions.create`，支持新建对话
+- composer 支持停止生成、图片附件、纯图片发送和图文混发
+- Gateway chat 事件、消息发送、模型列表等逻辑已从 `App.tsx` 拆入 hooks
+- `App.tsx` 已从 1234 行降到约 761 行
+- `pnpm build` 构建通过
 
 ### 尚未完成
 
@@ -221,8 +225,17 @@ clawx 想解决的是以下几类需求：
 - composer 已拆为独立组件 `src/components/ConversationComposer.tsx`
 - 详情页主体已拆为独立组件 `src/components/ConversationDetail.tsx`
 - 列表容器与卡片已拆为独立组件 `src/components/ConversationList.tsx`、`src/components/ConversationCard.tsx`
-- 对话共享类型已抽到 `src/types/conversation.ts`
+- 应用框架、引导页、信息页、资源侧栏已拆为独立组件：
+  - `src/components/AppChrome.tsx`
+  - `src/components/BootstrapScreens.tsx`
+  - `src/components/InfoPages.tsx`
+  - `src/components/ResourceSidebar.tsx`
+- 对话共享类型已抽到 `src/types/conversation.ts`，应用/Gateway 类型分别抽到 `src/types/app.ts`、`src/types/gateway.ts`
 - 详情页消息状态推导已抽到 `src/lib/conversationDetailState.ts`
+- Gateway chat 事件处理已抽到 `src/hooks/useGatewayChat.ts`
+- 发送消息、草稿会话转真实 session、错误恢复已抽到 `src/hooks/useMessageSender.ts`
+- 模型列表加载已抽到 `src/hooks/useModels.ts`
+- 自动滚动已抽到 `src/hooks/useConversationAutoScroll.ts`
 
 也就是说，当前更准确的描述是：
 

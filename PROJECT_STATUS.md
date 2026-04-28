@@ -1,9 +1,36 @@
 # clawx 项目状态文档
 
-> 最后更新：2026-04-22 10:14 GMT+8
+> 最后更新：2026-04-28 16:31 GMT+8
 > 本文档只记录当前真实实现状态，方便后续继续开发。
 
 ---
+
+## 〇、最近进展（2026-04-28）
+
+### 2026-04-28 下午 — `App.tsx` 拆分收尾与构建修复
+
+#### 前端结构拆分
+- `App.tsx` 已从 1234 行降到约 761 行。
+- 已接入并实际使用拆分后的 hooks：
+  - `src/hooks/useGatewayChat.ts`：负责订阅和处理 `clawx://gateway-chat` 事件，包括 tool stream、delta、final、error 状态。
+  - `src/hooks/useMessageSender.ts`：负责发送消息、草稿会话转真实 session、乐观插入 user 消息、错误时恢复 composer、排队消息重试。
+  - `src/hooks/useModels.ts`：负责加载 Gateway 模型列表。
+- 继续保留 `App.tsx` 作为页面状态编排层，具体事件处理和发送链路下沉到 hooks。
+
+#### 构建问题修复
+- 修复拆分过程中产生的错误 import / unused import。
+- 修复 `mergeStreamingParts` 引用位置，统一从 `gatewayMessages` 读取。
+- 修复 `useGatewayRealtime` 的 `onAgentsChange` updater 类型不匹配。
+- 移除 `ResourceSidebar` 未使用的 `statusLabel` prop。
+
+#### 验证
+- `pnpm build` ✅
+- 当前构建输出正常，Vite production build 通过。
+
+#### 后续建议
+- 继续把 bootstrap / realtime session patch / open conversation detail 逻辑拆成独立 hooks。
+- 给 `useGatewayChat` 和 `useMessageSender` 增加更小粒度的纯函数测试，降低流式消息合并逻辑回归风险。
+- 在提交前做一次 UI 手动回归：新建对话、发送文本、发送图片、停止生成、工具调用折叠、隐藏/恢复对话。
 
 ## 〇、最近进展（2026-04-22）
 
