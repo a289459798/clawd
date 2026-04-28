@@ -1,3 +1,4 @@
+import { Icon, IconNames } from "./Icon";
 import type { Conversation, ConversationStatus } from "../types/conversation";
 
 // 从 title 解析对话类型
@@ -48,7 +49,7 @@ export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: 
             title="打开当前对话"
             type="button"
           >
-            ⤢
+            <Icon name={IconNames.MAXIMIZE} size={14} color="#ffffff" style={{ fill: '#ffffff', stroke: '#ffffff' }} />
           </button>
           <button
             className="icon-only-button subtle"
@@ -59,7 +60,7 @@ export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: 
             title="隐藏"
             type="button"
           >
-            ✕
+            <Icon name={IconNames.CLOSE} size={18} color="#ffffff" style={{ fill: '#ffffff', stroke: '#ffffff' }} />
           </button>
         </div>
       </div>

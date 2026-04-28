@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
+import { Icon, IconNames } from "./Icon";
 import type { Conversation, ConversationStatus, MessagePart, PreviewMessage } from "../types/conversation";
 
 type ConversationDetailProps = {
@@ -204,10 +205,7 @@ export function ConversationDetail({
           aria-label={historyOpen ? "收起消息记录" : "展开消息记录"}
           aria-pressed={historyOpen}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8A2.5 2.5 0 0 1 17.5 16H9l-5 4v-4.5A2.5 2.5 0 0 1 2 13V5.5Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M7 8h10M7 11.5h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
+          <Icon name={IconNames.MESSAGE} size={18} />
         </button>
       </div>
 

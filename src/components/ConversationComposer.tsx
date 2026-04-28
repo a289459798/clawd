@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { Icon, IconNames } from "./Icon";
 
 type ComposerAttachment = {
   id: string;
@@ -131,11 +132,7 @@ export function ConversationComposer({
         ) : null}
         <div className="composer-bar">
           <button className="composer-file-btn" type="button" title="发送文件" onClick={() => fileInputRef.current?.click()}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M14 10V13C14 13.55 13.55 14 13 14H3C2.45 14 2 13.55 2 13V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M6 10V6C6 4.89 6.89 4 8 4C9.11 4 10 4.89 10 6V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M8 7V11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
+            <Icon name={IconNames.UPLOAD} size={16} color="#ffffff" style={{ fill: '#ffffff', stroke: '#ffffff' }} />
           </button>
           <select className="composer-select" value={model} onChange={(e) => onModelChange(e.target.value)} title="模型" disabled={modelsLoading || modelOptions.length === 0}>
             {modelsLoading ? <option value={model}>加载模型…</option> : null}
@@ -154,9 +151,7 @@ export function ConversationComposer({
           {sending ? (
             <>
               <button className="composer-send-btn" type="button" title="加入待发送" disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                  <path d="M3 9H15M15 9L10.5 4.5M15 9L10.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                <Icon name={IconNames.SEND} size={18} />
               </button>
               <button className="composer-stop-btn" type="button" title="停止" onClick={() => void onAbort()}>
                 停止
@@ -164,9 +159,7 @@ export function ConversationComposer({
             </>
           ) : (
             <button className="composer-send-btn" type="button" title="发送" disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M3 9H15M15 9L10.5 4.5M15 9L10.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+              <Icon name={IconNames.SEND} size={18} />
             </button>
           )}
         </div>
