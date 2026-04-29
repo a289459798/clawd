@@ -23,29 +23,60 @@ export function ImageLightbox({ src, onClose }: { src: string | null; onClose: (
   );
 }
 
-export function NavSidebar({ activeNav, onNavChange, onOpenLocalOpenClaw }: {
+export function NavSidebar({
+  activeNav,
+  onNavChange,
+  onOpenLocalOpenClaw,
+  gatewayConnected,
+  gatewayVersion,
+  sessionCount,
+  onReconnect,
+  onOpenStatus,
+}: {
   activeNav: NavKey;
   onNavChange: (nav: NavKey) => void;
   onOpenLocalOpenClaw: () => void;
+  gatewayConnected?: boolean;
+  gatewayVersion?: string | null;
+  sessionCount?: number;
+  onReconnect?: () => void;
+  onOpenStatus?: () => void;
 }) {
+  const navItems: Array<{ key: NavKey; label: string; icon: string }> = [
+    { key: "conversations", label: "对话", icon: "chat" },
+    { key: "skills", label: "技能", icon: "skill" },
+    { key: "connections", label: "连接", icon: "plug" },
+    { key: "usage", label: "用量", icon: "usage" },
+  ];
+  const openClawTitle = [
+    gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接",
+    gatewayVersion ? `版本 ${gatewayVersion}` : "",
+    typeof sessionCount === "number" ? `${sessionCount} 个会话` : "",
+  ].filter(Boolean).join(" · ");
   return (
     <aside className="nav-sidebar">
       <div className="nav-group">
-        <button className={`nav-item ${activeNav === "conversations" ? "active" : ""}`} onClick={() => onNavChange("conversations")} type="button">
-          对话
-        </button>
-        <button className={`nav-item ${activeNav === "skills" ? "active" : ""}`} onClick={() => onNavChange("skills")} type="button">
-          技能
-        </button>
-        <button className={`nav-item ${activeNav === "connections" ? "active" : ""}`} onClick={() => onNavChange("connections")} type="button">
-          连接
-        </button>
+        {navItems.map((item) => (
+          <button className={`nav-item ${activeNav === item.key ? "active" : ""}`} onClick={() => onNavChange(item.key)} type="button" key={item.key}>
+            <span className={`nav-symbol ${item.icon}`} />
+            <span>{item.label}</span>
+          </button>
+        ))}
       </div>
 
       <div className="sidebar-bottom-actions">
-        <button className="nav-icon-button" onClick={onOpenLocalOpenClaw} title="打开本地 OpenClaw" type="button">
-          🌐
+        <button
+          className={`openclaw-logo-button ${gatewayConnected ? "connected" : "disconnected"}`}
+          type="button"
+          title={openClawTitle}
+          onClick={onOpenStatus}
+        >
+          <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
         </button>
+        <div className="openclaw-mini-actions">
+          <button className="nav-icon-button" onClick={onReconnect} title="重连 Gateway" type="button">↻</button>
+          <button className="nav-icon-button" onClick={onOpenLocalOpenClaw} title="打开本地 OpenClaw" type="button">⌂</button>
+        </div>
       </div>
     </aside>
   );

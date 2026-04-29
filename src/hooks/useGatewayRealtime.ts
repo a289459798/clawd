@@ -49,7 +49,6 @@ export function useGatewayRealtime({
             id: skill.id,
             name: skill.name,
             summary: "来自本地 OpenClaw skill 目录。",
-            location: skill.location,
             enabled: true,
           })),
         );

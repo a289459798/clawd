@@ -90,9 +90,57 @@ pub struct GatewaySessionsPreviewParams {
 pub struct GatewayAgentCreateParams {
     pub name: String,
     pub workspace: String,
-    pub model: Option<String>,
     pub emoji: Option<String>,
     pub avatar: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySkillsStatusParams {
+    pub agent_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySkillsUpdateParams {
+    pub skill_key: String,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayChannelsStatusParams {
+    pub probe: Option<bool>,
+    pub timeout_ms: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebLoginStartParams {
+    pub force: Option<bool>,
+    pub timeout_ms: Option<u32>,
+    pub verbose: Option<bool>,
+    pub account_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayWebLoginWaitParams {
+    pub timeout_ms: Option<u32>,
+    pub account_id: Option<String>,
+    pub current_qr_data_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySessionsUsageParams {
+    pub key: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub mode: Option<String>,
+    pub utc_offset: Option<String>,
+    pub limit: Option<u32>,
+    pub include_context_weight: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -787,6 +835,21 @@ pub fn gateway_models_list(
 }
 
 #[tauri::command]
+pub fn gateway_openclaw_status(
+    state: tauri::State<Arc<GatewayProxyState>>,
+) -> Result<Value, String> {
+    send_rpc(&state, "status", json!({}))
+}
+
+#[tauri::command]
+pub fn gateway_health(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    probe: Option<bool>,
+) -> Result<Value, String> {
+    send_rpc(&state, "health", json!({ "probe": probe.unwrap_or(false) }))
+}
+
+#[tauri::command]
 pub fn gateway_agents_list(
     state: tauri::State<Arc<GatewayProxyState>>,
 ) -> Result<Value, String> {
@@ -801,9 +864,6 @@ pub fn gateway_agents_create(
     let mut json_params = serde_json::Map::new();
     json_params.insert("name".to_string(), json!(params.name));
     json_params.insert("workspace".to_string(), json!(params.workspace));
-    if let Some(model) = params.model {
-        json_params.insert("model".to_string(), json!(model));
-    }
     if let Some(emoji) = params.emoji {
         json_params.insert("emoji".to_string(), json!(emoji));
     }
@@ -811,6 +871,115 @@ pub fn gateway_agents_create(
         json_params.insert("avatar".to_string(), json!(avatar));
     }
     send_rpc(&state, "agents.create", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_skills_status(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySkillsStatusParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    if let Some(agent_id) = params.agent_id {
+        json_params.insert("agentId".to_string(), json!(agent_id));
+    }
+    send_rpc(&state, "skills.status", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_skills_update(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySkillsUpdateParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    json_params.insert("skillKey".to_string(), json!(params.skill_key));
+    if let Some(enabled) = params.enabled {
+        json_params.insert("enabled".to_string(), json!(enabled));
+    }
+    send_rpc(&state, "skills.update", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_channels_status(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayChannelsStatusParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    if let Some(probe) = params.probe {
+        json_params.insert("probe".to_string(), json!(probe));
+    }
+    if let Some(timeout_ms) = params.timeout_ms {
+        json_params.insert("timeoutMs".to_string(), json!(timeout_ms));
+    }
+    send_rpc(&state, "channels.status", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_web_login_start(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayWebLoginStartParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    if let Some(force) = params.force {
+        json_params.insert("force".to_string(), json!(force));
+    }
+    if let Some(timeout_ms) = params.timeout_ms {
+        json_params.insert("timeoutMs".to_string(), json!(timeout_ms));
+    }
+    if let Some(verbose) = params.verbose {
+        json_params.insert("verbose".to_string(), json!(verbose));
+    }
+    if let Some(account_id) = params.account_id {
+        json_params.insert("accountId".to_string(), json!(account_id));
+    }
+    send_rpc(&state, "web.login.start", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_web_login_wait(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayWebLoginWaitParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    if let Some(timeout_ms) = params.timeout_ms {
+        json_params.insert("timeoutMs".to_string(), json!(timeout_ms));
+    }
+    if let Some(account_id) = params.account_id {
+        json_params.insert("accountId".to_string(), json!(account_id));
+    }
+    if let Some(current_qr_data_url) = params.current_qr_data_url {
+        json_params.insert("currentQrDataUrl".to_string(), json!(current_qr_data_url));
+    }
+    send_rpc(&state, "web.login.wait", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_sessions_usage(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySessionsUsageParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    if let Some(key) = params.key {
+        json_params.insert("key".to_string(), json!(key));
+    }
+    if let Some(start_date) = params.start_date {
+        json_params.insert("startDate".to_string(), json!(start_date));
+    }
+    if let Some(end_date) = params.end_date {
+        json_params.insert("endDate".to_string(), json!(end_date));
+    }
+    if let Some(mode) = params.mode {
+        json_params.insert("mode".to_string(), json!(mode));
+    }
+    if let Some(utc_offset) = params.utc_offset {
+        json_params.insert("utcOffset".to_string(), json!(utc_offset));
+    }
+    if let Some(limit) = params.limit {
+        json_params.insert("limit".to_string(), json!(limit));
+    }
+    if let Some(include_context_weight) = params.include_context_weight {
+        json_params.insert("includeContextWeight".to_string(), json!(include_context_weight));
+    }
+    send_rpc(&state, "sessions.usage", Value::Object(json_params))
 }
 
 #[tauri::command]

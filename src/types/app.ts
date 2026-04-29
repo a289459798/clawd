@@ -1,7 +1,7 @@
 import type { Conversation, ConversationRuntime, MessagePart, PreviewMessage } from "./conversation";
 import type { GatewayModelsResult, OpenClawSnapshot } from "./gateway";
 
-export type NavKey = "conversations" | "skills" | "connections";
+export type NavKey = "conversations" | "skills" | "connections" | "usage";
 export type AgentStatus = "working" | "completed" | "idle";
 
 export type Agent = {
@@ -20,8 +20,11 @@ export type Skill = {
   id: string;
   name: string;
   summary: string;
-  location: string;
+  description?: string;
   enabled: boolean;
+  eligible?: boolean;
+  missing?: string[];
+  homepage?: string;
 };
 
 export type ChannelConnection = {
@@ -31,6 +34,29 @@ export type ChannelConnection = {
   detail: string;
   config: string;
   activity: string;
+  docsUrl?: string;
+  packageName?: string;
+  accounts?: Array<{
+    accountId: string;
+    name?: string;
+    enabled?: boolean;
+    configured?: boolean;
+    connected?: boolean;
+    running?: boolean;
+    lastError?: string;
+  }>;
+};
+
+export type UsageTotals = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  cost?: number;
+  messages?: number;
+  toolCalls?: number;
+  errors?: number;
 };
 
 export type ClawxBootstrapStatus = {

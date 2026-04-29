@@ -31,7 +31,55 @@
 - [ ] Task 5: Session operations.
 - [ ] Task 6: Tool timeline improvements.
 - [ ] Task 7: Long conversation performance.
-- [ ] Task 8: Skills and connections Gateway migration.
+- [x] Task 8: Skills and connections Gateway migration.
+- [x] Task 9: Usage dashboard.
+- [ ] Task 10: Channel settings write-back forms.
+- [ ] Task 11: Agent files editor and delete/update operations.
+
+## 2026-04-29 Product Completion Pass
+
+This pass implements the user-facing shell for the remaining OpenClaw parity
+areas and removes the last development-machine skill path fallback.
+
+### Agent Creation
+
+- Use Gateway `agents.create` as the only writer for agent config and bootstrap
+  files.
+- Do not send `model` in the create payload. Models are selected per
+  conversation in Clawx.
+- Add a native workspace directory picker. The default suggestion still follows
+  OpenClaw's convention: `~/.openclaw/workspace-<agentId>`.
+- Follow-up: expose `agents.files.list/get/set` so the agent identity files
+  can be reviewed and edited after creation.
+
+### Skills
+
+- Load from `skills.status` instead of scanning local OpenClaw source trees.
+- Hide directory/source paths in the UI.
+- Show skill description and dependency status.
+- Use `skills.update` for enable/disable switches.
+
+### Connections
+
+- Load runtime status from `channels.status`.
+- Show the full supported channel matrix from OpenClaw docs, including
+  BlueBubbles, Discord, Feishu, Google Chat, LINE, Matrix, Mattermost, Teams,
+  Telegram, WeChat, WhatsApp, Zalo, and others.
+- Surface channel-specific setup hints:
+  - Feishu: bot credentials under `channels.feishu`.
+  - WeChat: external package `@tencent-weixin/openclaw-weixin`, channel id
+    `openclaw-weixin`, QR login via Gateway web login methods.
+- Follow-up: schema-driven config forms using `config.schema.lookup` and
+  `config.patch`. The first implementation shows per-channel settings entry
+  points and QR login, but does not yet write arbitrary channel config fields.
+
+### Usage
+
+- Add a Usage nav page backed by `sessions.usage`.
+- Show totals for input/output/cache read/cache write/cost.
+- Break down usage by Agent, model, and recent conversations.
+- Follow-up: add date range controls, daily chart, provider/channel breakdown,
+  and CSV export.
 
 ## Task 1: Conversation Detail Display Modes
 

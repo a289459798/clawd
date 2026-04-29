@@ -36,6 +36,22 @@ export type GatewayStatus = {
   error?: string | null;
 };
 
+export type GatewayOpenClawStatusResult = {
+  runtimeVersion?: string | null;
+  channelSummary?: string[];
+  sessions?: {
+    count?: number;
+    defaults?: {
+      model?: string | null;
+      contextTokens?: number | null;
+    };
+  };
+  heartbeat?: {
+    defaultAgentId?: string;
+    agents?: Array<{ agentId: string; enabled: boolean; every?: string }>;
+  };
+};
+
 export type GatewayModelSummary = {
   id: string;
   provider?: string;
@@ -75,7 +91,98 @@ export type GatewayAgentsCreateResult = {
   agentId: string;
   name: string;
   workspace: string;
-  model?: string;
+};
+
+export type GatewaySkillsStatusResult = {
+  workspaceDir?: string;
+  managedSkillsDir?: string;
+  skills?: Array<{
+    name: string;
+    description?: string;
+    skillKey?: string;
+    emoji?: string;
+    homepage?: string;
+    disabled?: boolean;
+    eligible?: boolean;
+    missing?: Record<string, unknown> | string[] | null;
+  }>;
+};
+
+export type GatewaySkillsUpdateResult = {
+  ok?: boolean;
+};
+
+export type GatewayChannelsStatusResult = {
+  ts?: number;
+  channelOrder?: string[];
+  channelLabels?: Record<string, string>;
+  channelDetailLabels?: Record<string, string>;
+  channelSystemImages?: Record<string, string>;
+  channelMeta?: Array<{ id: string; label: string; detailLabel: string; systemImage?: string }>;
+  channels?: Record<string, unknown>;
+  channelAccounts?: Record<string, Array<{
+    accountId: string;
+    name?: string;
+    enabled?: boolean;
+    configured?: boolean;
+    linked?: boolean;
+    running?: boolean;
+    connected?: boolean;
+    lastError?: string;
+    healthState?: string;
+  }>>;
+  channelDefaultAccountId?: Record<string, string>;
+};
+
+export type GatewayWebLoginResult = {
+  connected?: boolean;
+  qrDataUrl?: string;
+  message?: string;
+  accountId?: string;
+};
+
+export type GatewaySessionsUsageResult = {
+  updatedAt?: number;
+  startDate?: string;
+  endDate?: string;
+  sessions?: Array<{
+    key: string;
+    label?: string;
+    updatedAt?: number;
+    agentId?: string;
+    channel?: string;
+    modelProvider?: string;
+    model?: string;
+    usage?: {
+      totals?: GatewayUsageTotals;
+      messages?: number;
+      toolCalls?: number;
+      errors?: number;
+    } | null;
+  }>;
+  totals?: GatewayUsageTotals;
+  aggregates?: {
+    byModel?: Array<{ model?: string; provider?: string; totals?: GatewayUsageTotals }>;
+    byProvider?: Array<{ provider?: string; model?: string; totals?: GatewayUsageTotals }>;
+    byAgent?: Array<{ agentId: string; totals?: GatewayUsageTotals }>;
+    byChannel?: Array<{ channel: string; totals?: GatewayUsageTotals }>;
+    daily?: Array<{ date: string; tokens: number; cost: number; messages: number; toolCalls: number; errors: number }>;
+  };
+};
+
+export type GatewayUsageTotals = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  totalTokens?: number;
+  cached?: number;
+  cost?: number;
+  estimatedCostUsd?: number;
+  messages?: number;
+  toolCalls?: number;
+  errors?: number;
 };
 
 export type GatewaySessionsListParams = {

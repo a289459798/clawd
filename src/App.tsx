@@ -5,7 +5,7 @@ import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome
 import { AgentCreateDialog } from "./components/AgentCreateDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
-import { ConnectionsPage, SkillsPage } from "./components/InfoPages";
+import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
@@ -22,7 +22,7 @@ import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import type { Conversation, PreviewMessage } from "./types/conversation";
 import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill } from "./types/app";
-import type { GatewayAgentsCreateResult, GatewayHistoryResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
+import type { GatewayAgentsCreateResult, GatewayChannelsStatusResult, GatewayHistoryResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
 
@@ -30,6 +30,66 @@ const agentsSeed: Agent[] = [];
 const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+
+function normalizeSkillMissing(missing: unknown): string[] {
+  if (!missing) return [];
+  if (Array.isArray(missing)) return missing.map((item) => String(item)).filter(Boolean);
+  if (typeof missing === "object") {
+    return Object.entries(missing as Record<string, unknown>)
+      .filter(([, value]) => {
+        if (Array.isArray(value)) return value.length > 0;
+        if (value && typeof value === "object") return Object.keys(value).length > 0;
+        return Boolean(value);
+      })
+      .map(([key]) => key);
+  }
+  return [String(missing)];
+}
+
+function mapGatewaySkills(result: GatewaySkillsStatusResult): Skill[] {
+  return (result.skills ?? []).map((skill) => ({
+    id: skill.skillKey ?? skill.name,
+    name: [skill.emoji, skill.name].filter(Boolean).join(" "),
+    summary: skill.description ?? "暂无技能说明。",
+    description: skill.description,
+    enabled: !skill.disabled,
+    eligible: skill.eligible,
+    missing: normalizeSkillMissing(skill.missing),
+    homepage: skill.homepage,
+  }));
+}
+
+function mapGatewayChannels(result: GatewayChannelsStatusResult): ChannelConnection[] {
+  const ids = result.channelOrder ?? Object.keys(result.channels ?? {});
+  return ids.map((id) => {
+    const accounts = result.channelAccounts?.[id] ?? [];
+    const connected = accounts.some((account) => account.connected || account.running);
+    const configured = accounts.some((account) => account.configured || account.enabled);
+    const error = accounts.find((account) => account.lastError)?.lastError;
+    const status: ChannelConnection["status"] = connected ? "connected" : error ? "warning" : configured ? "warning" : "disabled";
+    const label = result.channelLabels?.[id] ?? result.channelMeta?.find((item) => item.id === id)?.label ?? id;
+    const detail = result.channelDetailLabels?.[id] ?? result.channelMeta?.find((item) => item.id === id)?.detailLabel ?? "OpenClaw Gateway channel";
+    return {
+      id,
+      name: label,
+      status,
+      detail: error ? `${detail}：${error}` : detail,
+      config: `channels.${id}`,
+      activity: connected ? "运行中" : configured ? "已配置，等待连接" : "待配置",
+      packageName: id === "openclaw-weixin" ? "@tencent-weixin/openclaw-weixin" : undefined,
+      docsUrl: `https://docs.openclaw.ai/channels/${id}`,
+      accounts: accounts.map((account) => ({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        connected: account.connected,
+        running: account.running,
+        lastError: account.lastError,
+      })),
+    };
+  });
+}
 
 function App() {
   const [bootstrapStatus, setBootstrapStatus] = useState<ClawxBootstrapStatus | null>(null);
@@ -49,6 +109,13 @@ function App() {
   const [showResourceSidebar, setShowResourceSidebar] = useState(true);
   const [skills, setSkills] = useState<Skill[]>(fallbackSkills);
   const [connections, setConnections] = useState<ChannelConnection[]>(fallbackConnections);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
+  const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
+  const [weixinQrDataUrl, setWeixinQrDataUrl] = useState<string | null>(null);
+  const [weixinQrMessage, setWeixinQrMessage] = useState<string | null>(null);
+  const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
@@ -105,6 +172,23 @@ function App() {
       setBootstrapError(error instanceof Error ? error.message : "写入 OpenClaw 配置失败");
     } finally {
       setBindingInProgress(false);
+    }
+  }, []);
+
+  const refreshGatewayMetadata = useCallback(async () => {
+    setMetadataLoading(true);
+    try {
+      await invoke("gateway_connect");
+      const [skillsResult, channelsResult] = await Promise.all([
+        invoke<GatewaySkillsStatusResult>("gateway_skills_status", { params: {} }),
+        invoke<GatewayChannelsStatusResult>("gateway_channels_status", { params: { probe: false, timeoutMs: 2000 } }),
+      ]);
+      setSkills(mapGatewaySkills(skillsResult));
+      setConnections(mapGatewayChannels(channelsResult));
+    } catch (error) {
+      console.warn("Failed to refresh Gateway metadata", error);
+    } finally {
+      setMetadataLoading(false);
     }
   }, []);
 
@@ -182,27 +266,7 @@ function App() {
         }
 
         setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots, { preserveExistingConversations: true }));
-
-        setSkills(
-          snapshot.skills.map((skill) => ({
-            id: skill.id,
-            name: skill.name,
-            summary: "来自本地 OpenClaw skill 目录。",
-            location: skill.location,
-            enabled: true,
-          })),
-        );
-
-        setConnections(
-          snapshot.connections.map((connection) => ({
-            id: connection.id,
-            name: connection.name,
-            status: connection.enabled ? "connected" : "disabled",
-            detail: connection.enabled ? "已从本地 OpenClaw 配置读取" : "当前未启用",
-            config: `channels.${connection.id}`,
-            activity: connection.enabled ? "配置已启用" : "配置关闭",
-          })),
-        );
+        void refreshGatewayMetadata();
       } catch (error) {
         console.error("Failed to load OpenClaw snapshot", error);
       }
@@ -243,7 +307,7 @@ function App() {
       }
       eventCleanup?.();
     };
-  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot]);
+  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot, refreshGatewayMetadata]);
 
   useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured || bootstrapStep !== "ready") {
@@ -391,6 +455,18 @@ function App() {
     }
   }, []);
 
+  const refreshOpenClawStatus = useCallback(async () => {
+    try {
+      await invoke("gateway_connect");
+      const status = await invoke<GatewayOpenClawStatusResult>("gateway_openclaw_status");
+      setOpenClawStatus(status);
+      await refreshGatewayStatus();
+    } catch (error) {
+      console.warn("Failed to load OpenClaw runtime status", error);
+      await refreshGatewayStatus();
+    }
+  }, [refreshGatewayStatus]);
+
   const openLocalOpenClaw = async () => {
     try {
       const dashboardUrl = await invoke<string>("resolve_dashboard_url");
@@ -400,32 +476,95 @@ function App() {
     }
   };
 
+  const refreshUsage = useCallback(async () => {
+    setUsageLoading(true);
+    try {
+      await invoke("gateway_connect");
+      const today = new Date();
+      const start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const formatDate = (value: Date) => value.toISOString().slice(0, 10);
+      const result = await invoke<GatewaySessionsUsageResult>("gateway_sessions_usage", {
+        params: {
+          startDate: formatDate(start),
+          endDate: formatDate(today),
+          mode: "gateway",
+          limit: 1000,
+          includeContextWeight: true,
+        },
+      });
+      setUsage(result);
+    } catch (error) {
+      console.warn("Failed to refresh usage", error);
+    } finally {
+      setUsageLoading(false);
+    }
+  }, []);
+
+  const handleNavChange = useCallback((nav: NavKey) => {
+    if (nav === activeNav) return;
+    if (nav === "skills" || nav === "connections") {
+      setMetadataLoading(true);
+    }
+    if (nav === "usage") {
+      setUsageLoading(true);
+    }
+    setActiveNav(nav);
+  }, [activeNav]);
+
+  const handleToggleSkill = useCallback(async (skillId: string, enabled: boolean) => {
+    setSkills((current) => current.map((skill) => (skill.id === skillId ? { ...skill, enabled } : skill)));
+    try {
+      await invoke<GatewaySkillsUpdateResult>("gateway_skills_update", {
+        params: {
+          skillKey: skillId,
+          enabled,
+        },
+      });
+      await refreshGatewayMetadata();
+    } catch (error) {
+      console.error("Failed to update skill", error);
+      setSkills((current) => current.map((skill) => (skill.id === skillId ? { ...skill, enabled: !enabled } : skill)));
+    }
+  }, []);
+
+  const handleWeixinLogin = useCallback(async () => {
+    setWeixinQrDataUrl(null);
+    setWeixinQrMessage("正在打开终端执行 openclaw channels login --channel openclaw-weixin ...");
+    try {
+      const message = await invoke<string>("open_weixin_login_terminal");
+      setWeixinQrMessage(message);
+    } catch (error) {
+      setWeixinQrMessage(error instanceof Error ? error.message : String(error));
+    }
+  }, [refreshGatewayMetadata]);
+
+  useEffect(() => {
+    if (bootstrapStep !== "ready") {
+      return;
+    }
+    if (activeNav === "skills" || activeNav === "connections") {
+      void refreshGatewayMetadata();
+    }
+    if (activeNav === "usage") {
+      void refreshUsage();
+    }
+  }, [activeNav, bootstrapStep, refreshGatewayMetadata, refreshUsage]);
+
+  useEffect(() => {
+    if (bootstrapStep !== "ready") {
+      return;
+    }
+    void refreshOpenClawStatus();
+  }, [bootstrapStep, refreshOpenClawStatus]);
+
   const refreshGatewaySnapshot = useCallback(async () => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
     const snapshot = await loadGatewaySnapshot({ fallbackSnapshot });
     setAgents(buildAgentsFromSnapshot(snapshot, agentsRef.current, { preserveExistingConversations: true }));
-    setSkills(
-      snapshot.skills.map((skill) => ({
-        id: skill.id,
-        name: skill.name,
-        summary: "来自本地 OpenClaw skill 目录。",
-        location: skill.location,
-        enabled: true,
-      })),
-    );
-    setConnections(
-      snapshot.connections.map((connection) => ({
-        id: connection.id,
-        name: connection.name,
-        status: connection.enabled ? "connected" : "disabled",
-        detail: connection.enabled ? "已从本地 OpenClaw 配置读取" : "当前未启用",
-        config: `channels.${connection.id}`,
-        activity: connection.enabled ? "配置已启用" : "配置关闭",
-      })),
-    );
-  }, [loadGatewaySnapshot]);
+    await refreshGatewayMetadata();
+  }, [loadGatewaySnapshot, refreshGatewayMetadata]);
 
-  const handleCreateAgent = useCallback(async (params: { name: string; workspace: string; model?: string; emoji?: string }) => {
+  const handleCreateAgent = useCallback(async (params: { name: string; workspace: string; emoji?: string }) => {
     setAgentCreating(true);
     setAgentCreateError(null);
     try {
@@ -836,7 +975,6 @@ function App() {
       <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} />
       <AgentCreateDialog
         open={agentCreateOpen}
-        modelOptions={modelOptions}
         creating={agentCreating}
         error={agentCreateError}
         onClose={() => {
@@ -855,7 +993,19 @@ function App() {
             : "content-only"
         }`}
       >
-        <NavSidebar activeNav={activeNav} onNavChange={setActiveNav} onOpenLocalOpenClaw={() => void openLocalOpenClaw()} />
+        <NavSidebar
+          activeNav={activeNav}
+          onNavChange={handleNavChange}
+          onOpenLocalOpenClaw={() => void openLocalOpenClaw()}
+          gatewayConnected={gatewayConnected}
+          gatewayVersion={openClawStatus?.runtimeVersion}
+          sessionCount={openClawStatus?.sessions?.count}
+          onReconnect={() => void refreshOpenClawStatus()}
+          onOpenStatus={() => {
+            setOpenClawInfoOpen(true);
+            void refreshOpenClawStatus();
+          }}
+        />
 
         {activeNav === "conversations" ? (
           <>
@@ -940,10 +1090,61 @@ function App() {
           </>
         ) : null}
 
-        {activeNav === "skills" ? <SkillsPage skills={skills} /> : null}
+        {activeNav === "skills" ? (
+          <SkillsPage
+            skills={skills}
+            loading={metadataLoading}
+            onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
+          />
+        ) : null}
 
-        {activeNav === "connections" ? <ConnectionsPage connections={connections} connectionLabel={connectionLabel} /> : null}
+        {activeNav === "connections" ? (
+          <ConnectionsPage
+            connections={connections}
+            connectionLabel={connectionLabel}
+            loading={metadataLoading}
+            qrDataUrl={weixinQrDataUrl}
+            qrMessage={weixinQrMessage}
+            onWeixinLogin={() => void handleWeixinLogin()}
+          />
+        ) : null}
+
+        {activeNav === "usage" ? (
+          <UsagePage usage={usage} loading={usageLoading} />
+        ) : null}
       </div>
+
+      {openClawInfoOpen ? (
+        <aside className="openclaw-info-drawer" role="dialog" aria-modal="true">
+          <div className="openclaw-info-head">
+            <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
+            <button className="icon-only-button" type="button" onClick={() => setOpenClawInfoOpen(false)} title="关闭">×</button>
+          </div>
+          <div className="openclaw-info-status">
+            <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
+            <strong>{gatewayConnected ? "已连接" : "未连接"}</strong>
+            <span>{gatewayStatusText}</span>
+          </div>
+          <div className="openclaw-info-grid">
+            <span>版本</span><strong>{openClawStatus?.runtimeVersion || "-"}</strong>
+            <span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong>
+            <span>默认模型</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong>
+            <span>默认 Agent</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong>
+          </div>
+          {openClawStatus?.channelSummary?.length ? (
+            <div className="openclaw-info-list">
+              <strong>连接摘要</strong>
+              {openClawStatus.channelSummary.slice(0, 8).map((item, index) => (
+                <span key={`${item}-${index}`}>{item}</span>
+              ))}
+            </div>
+          ) : null}
+          <div className="openclaw-info-actions">
+            <button className="ghost-button" type="button" onClick={() => void refreshOpenClawStatus()}>重连</button>
+            <button className="primary-action-button" type="button" onClick={() => void openLocalOpenClaw()}>打开 OpenClaw</button>
+          </div>
+        </aside>
+      ) : null}
     </main>
   );
 }

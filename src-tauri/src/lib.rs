@@ -872,11 +872,9 @@ fn load_openclaw_snapshot() -> Result<OpenClawSnapshot, String> {
         .unwrap_or_default();
 
     let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    let bundled_root = PathBuf::from(&home).join("Workspace/nodejs/clawdbot/skills");
     let user_root = PathBuf::from(&home).join(".agents/skills");
 
-    let mut skills = read_skills_from_dir(&bundled_root);
-    skills.extend(read_skills_from_dir(&user_root));
+    let mut skills = read_skills_from_dir(&user_root);
     skills.sort_by(|left, right| left.name.cmp(&right.name));
     skills.dedup_by(|left, right| left.name == right.name);
 
@@ -1061,6 +1059,30 @@ fn resolve_gateway_auth() -> Result<GatewayAuthInfo, String> {
     })
 }
 
+#[tauri::command]
+fn pick_workspace_directory() -> Result<Option<String>, String> {
+    Ok(rfd::FileDialog::new()
+        .set_title("选择 Agent 工作区")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn open_weixin_login_terminal() -> Result<String, String> {
+    let status = Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"Terminal\" to do script \"openclaw channels login --channel openclaw-weixin\"")
+        .arg("-e")
+        .arg("tell application \"Terminal\" to activate")
+        .status()
+        .map_err(|error| format!("failed to open Terminal: {error}"))?;
+    if status.success() {
+        Ok("已打开终端，请在终端中扫描 openclaw-weixin 登录二维码。".to_string())
+    } else {
+        Err(format!("openclaw-weixin login terminal exited with status {status}"))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1078,6 +1100,14 @@ pub fn run() {
             gateway_proxy::gateway_connect,
             gateway_proxy::gateway_agents_list,
             gateway_proxy::gateway_agents_create,
+            gateway_proxy::gateway_openclaw_status,
+            gateway_proxy::gateway_health,
+            gateway_proxy::gateway_skills_status,
+            gateway_proxy::gateway_skills_update,
+            gateway_proxy::gateway_channels_status,
+            gateway_proxy::gateway_web_login_start,
+            gateway_proxy::gateway_web_login_wait,
+            gateway_proxy::gateway_sessions_usage,
             gateway_proxy::gateway_sessions_list,
             gateway_proxy::gateway_sessions_preview,
             gateway_proxy::gateway_sessions_subscribe,
@@ -1090,6 +1120,8 @@ pub fn run() {
             gateway_proxy::gateway_chat_abort,
             gateway_proxy::gateway_sessions_create,
             gateway_proxy::gateway_sessions_patch,
+            pick_workspace_directory,
+            open_weixin_login_terminal,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])

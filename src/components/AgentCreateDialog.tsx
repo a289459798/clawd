@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelOption } from "../types/app";
+import { invoke } from "@tauri-apps/api/core";
 
 type AgentCreateDialogProps = {
   open: boolean;
-  modelOptions: ModelOption[];
   creating: boolean;
   error: string | null;
   onClose: () => void;
-  onCreate: (params: { name: string; workspace: string; model?: string; emoji?: string }) => void | Promise<void>;
+  onCreate: (params: { name: string; workspace: string; emoji?: string }) => void | Promise<void>;
 };
 
 function normalizeAgentId(value: string) {
@@ -21,7 +20,6 @@ function normalizeAgentId(value: string) {
 
 export function AgentCreateDialog({
   open,
-  modelOptions,
   creating,
   error,
   onClose,
@@ -29,17 +27,16 @@ export function AgentCreateDialog({
 }: AgentCreateDialogProps) {
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
-  const [model, setModel] = useState("");
-  const [emoji, setEmoji] = useState("");
+  const [pickingWorkspace, setPickingWorkspace] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
   const agentId = useMemo(() => normalizeAgentId(name), [name]);
 
   useEffect(() => {
     if (!open) return;
     setName("");
     setWorkspace("");
-    setModel(modelOptions[0]?.value ?? "");
-    setEmoji("");
-  }, [modelOptions, open]);
+    setPickError(null);
+  }, [open]);
 
   useEffect(() => {
     if (!open || workspace) return;
@@ -51,6 +48,21 @@ export function AgentCreateDialog({
   }
 
   const canSubmit = name.trim().length > 0 && workspace.trim().length > 0 && !creating;
+
+  const chooseWorkspace = async () => {
+    setPickingWorkspace(true);
+    setPickError(null);
+    try {
+      const selected = await invoke<string | null>("pick_workspace_directory");
+      if (selected) {
+        setWorkspace(selected);
+      }
+    } catch (err) {
+      setPickError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPickingWorkspace(false);
+    }
+  };
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -64,30 +76,30 @@ export function AgentCreateDialog({
         </div>
 
         <div className="agent-create-form">
+          <div className="agent-create-guidance">
+            <strong>Agent 用来隔离身份、记忆和工作目录</strong>
+            <p>名称会生成 agent id；工作区会保存 IDENTITY.md、USER.md、SOUL.md 等文件。模型不在这里绑定，后续在每个对话中选择。</p>
+          </div>
           <label>
             <span>名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="coding" autoFocus />
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：coding、research、ops" autoFocus />
           </label>
           <label>
             <span>工作区</span>
-            <input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="~/.openclaw/workspace-coding" />
+            <div className="workspace-picker-row">
+              <input value={workspace} readOnly placeholder="~/.openclaw/workspace-coding" />
+              <button className="ghost-button" type="button" onClick={() => void chooseWorkspace()} disabled={pickingWorkspace}>
+                {pickingWorkspace ? "选择中" : "选择"}
+              </button>
+            </div>
           </label>
-          <label>
-            <span>模型</span>
-            <select value={model} onChange={(event) => setModel(event.target.value)}>
-              <option value="">继承默认模型</option>
-              {modelOptions.map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Emoji</span>
-            <input value={emoji} onChange={(event) => setEmoji(event.target.value)} placeholder="可选" />
-          </label>
+          <div className="agent-create-field-notes">
+            <span>建议：名称写职责，工作区选择长期可保留的目录。创建后可在 Agent 身份文件里继续完善能力说明。</span>
+          </div>
         </div>
 
         {error ? <div className="agent-create-error">{error}</div> : null}
+        {pickError ? <div className="agent-create-error">{pickError}</div> : null}
 
         <div className="agent-create-actions">
           <button className="ghost-button" type="button" onClick={onClose} disabled={creating}>取消</button>
@@ -98,8 +110,6 @@ export function AgentCreateDialog({
             onClick={() => void onCreate({
               name: name.trim(),
               workspace: workspace.trim(),
-              model: model || undefined,
-              emoji: emoji.trim() || undefined,
             })}
           >
             {creating ? "创建中..." : "创建"}
