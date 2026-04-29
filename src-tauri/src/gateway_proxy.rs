@@ -96,6 +96,37 @@ pub struct GatewayAgentCreateParams {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayAgentUpdateParams {
+    pub agent_id: String,
+    pub name: Option<String>,
+    pub workspace: Option<String>,
+    pub emoji: Option<String>,
+    pub avatar: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAgentFilesListParams {
+    pub agent_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAgentFilesGetParams {
+    pub agent_id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAgentFilesSetParams {
+    pub agent_id: String,
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewaySkillsStatusParams {
     pub agent_id: Option<String>,
 }
@@ -871,6 +902,56 @@ pub fn gateway_agents_create(
         json_params.insert("avatar".to_string(), json!(avatar));
     }
     send_rpc(&state, "agents.create", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_agents_update(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayAgentUpdateParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    json_params.insert("agentId".to_string(), json!(params.agent_id));
+    if let Some(name) = params.name {
+        json_params.insert("name".to_string(), json!(name));
+    }
+    if let Some(workspace) = params.workspace {
+        json_params.insert("workspace".to_string(), json!(workspace));
+    }
+    if let Some(emoji) = params.emoji {
+        json_params.insert("emoji".to_string(), json!(emoji));
+    }
+    if let Some(avatar) = params.avatar {
+        json_params.insert("avatar".to_string(), json!(avatar));
+    }
+    send_rpc(&state, "agents.update", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_agents_files_list(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayAgentFilesListParams,
+) -> Result<Value, String> {
+    send_rpc(&state, "agents.files.list", json!({ "agentId": params.agent_id }))
+}
+
+#[tauri::command]
+pub fn gateway_agents_files_get(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayAgentFilesGetParams,
+) -> Result<Value, String> {
+    send_rpc(&state, "agents.files.get", json!({ "agentId": params.agent_id, "name": params.name }))
+}
+
+#[tauri::command]
+pub fn gateway_agents_files_set(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayAgentFilesSetParams,
+) -> Result<Value, String> {
+    send_rpc(
+        &state,
+        "agents.files.set",
+        json!({ "agentId": params.agent_id, "name": params.name, "content": params.content }),
+    )
 }
 
 #[tauri::command]

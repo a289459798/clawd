@@ -53,6 +53,12 @@ function buildPreviewMessages(preview?: GatewaySessionsPreviewResult["previews"]
     : [];
 }
 
+function cleanDerivedTitle(value?: string) {
+  return value
+    ?.replace(/\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+GMT[+-]\d+\]\s*/g, "")
+    .trim();
+}
+
 export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawSnapshot {
   const fallbackAgentId = resolveFallbackAgentId(input);
   const sessionAgents = input.sessionsResult?.agents ?? [];
@@ -91,10 +97,11 @@ export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawS
     const fallbackText = session.lastMessagePreview;
     const previewMessages = buildPreviewMessages(preview, fallbackText);
     const agentId = parseAgentIdFromSessionKey(session.key) ?? fallbackAgentId;
+    const derivedTitle = cleanDerivedTitle(session.derivedTitle);
     const title =
       session.label ??
+      derivedTitle ??
       session.displayName ??
-      session.derivedTitle ??
       session.lastMessagePreview ??
       session.key;
 
@@ -103,7 +110,8 @@ export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawS
       agent_id: agentId,
       key: session.key,
       title,
-      label: session.label ?? session.displayName ?? session.derivedTitle,
+      label: session.label,
+      model: session.model,
       updated_at: session.updatedAt ?? undefined,
       channel: session.channel ?? session.lastChannel,
       last_message: latestPreviewText(preview) ?? fallbackText,

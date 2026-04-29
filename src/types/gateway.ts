@@ -6,6 +6,7 @@ export type SnapshotSession = {
   key: string;
   title: string;
   label?: string;
+  model?: string;
   updated_at?: number;
   channel?: string;
   session_file?: string;
@@ -91,6 +92,39 @@ export type GatewayAgentsCreateResult = {
   agentId: string;
   name: string;
   workspace: string;
+};
+
+export type GatewayAgentsUpdateResult = {
+  ok: true;
+  agentId: string;
+};
+
+export type GatewayAgentFileEntry = {
+  name: string;
+  path: string;
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type GatewayAgentsFilesListResult = {
+  agentId: string;
+  workspace: string;
+  files: GatewayAgentFileEntry[];
+};
+
+export type GatewayAgentsFilesGetResult = {
+  agentId: string;
+  workspace: string;
+  file: GatewayAgentFileEntry;
+};
+
+export type GatewayAgentsFilesSetResult = {
+  ok: true;
+  agentId: string;
+  workspace: string;
+  file: GatewayAgentFileEntry;
 };
 
 export type GatewaySkillsStatusResult = {

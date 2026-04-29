@@ -100,6 +100,7 @@ export type ModelOption = {
 export type BuildAgentsOptions = {
   preserveExistingConversations?: boolean;
   activeConversationId?: string | null;
+  priorityAgentId?: string | null;
 };
 
 export type AppMessageHelpers = {

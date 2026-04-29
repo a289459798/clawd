@@ -5,6 +5,7 @@ type ResourceSidebarProps = {
   agents: Agent[];
   expandedConversationId: string;
   onCreateAgent: () => void;
+  onEditAgentFiles: (agentId: string) => void;
   onCreateConversation: (agentId: string) => void;
   onToggleConversationVisibility: (agentId: string, conversationId: string, visible: boolean) => void;
   onExpandedConversationChange: (conversationId: string) => void;
@@ -18,6 +19,7 @@ export function ResourceSidebar({
   agents,
   expandedConversationId,
   onCreateAgent,
+  onEditAgentFiles,
   onCreateConversation,
   onToggleConversationVisibility,
   onExpandedConversationChange,
@@ -95,6 +97,17 @@ export function ResourceSidebar({
                   <strong className="agent-name">{agent.name}</strong>
                 </div>
                 <div className="agent-inline-actions">
+                  <button
+                    className="icon-only-button"
+                    title="编辑身份文件"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onEditAgentFiles(agent.id);
+                    }}
+                  >
+                    ✎
+                  </button>
                   <button
                     className="icon-only-button"
                     title="新建对话"

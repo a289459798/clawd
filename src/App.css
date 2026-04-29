@@ -1832,6 +1832,16 @@ p {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #ffffff;
+}
+
+.conversation-maximize-icon {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .conversation-card-title-block {
@@ -2465,6 +2475,18 @@ p {
   overflow: hidden;
 }
 
+.agent-files-dialog {
+  width: min(880px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: #15181f;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .agent-create-header {
   display: flex;
   align-items: flex-start;
@@ -2502,6 +2524,20 @@ p {
   font-size: 0.78rem;
 }
 
+.agent-create-form label small {
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.agent-create-hint {
+  color: rgba(82, 242, 197, 0.56);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.agent-create-inline-error {
+  color: #f08b7d;
+}
+
 .agent-create-form input,
 .agent-create-form select,
 .channel-config-body input {
@@ -2529,6 +2565,133 @@ p {
 .channel-config-body input:focus {
   border-color: rgba(82, 242, 197, 0.34);
   box-shadow: 0 0 0 3px rgba(82, 242, 197, 0.08);
+}
+
+.agent-files-body {
+  min-height: 430px;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  overflow: hidden;
+}
+
+.agent-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+  overflow-y: auto;
+}
+
+.agent-files-workspace {
+  padding: 8px 9px;
+  border-radius: 8px;
+  background: rgba(82, 242, 197, 0.055);
+  color: rgba(255, 255, 255, 0.52);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.agent-file-tab {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.72);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-file-tab.active {
+  border-color: rgba(82, 242, 197, 0.3);
+  background: rgba(82, 242, 197, 0.09);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.agent-file-tab strong {
+  font-size: 0.82rem;
+}
+
+.agent-file-tab span {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 0.72rem;
+}
+
+.agent-file-editor {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+
+.agent-file-editor-head {
+  min-height: 64px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agent-file-editor-head div {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-file-editor-head strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.92rem;
+}
+
+.agent-file-editor-head span,
+.agent-file-editor-head small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.78rem;
+}
+
+.agent-file-editor textarea {
+  width: 100%;
+  min-height: 360px;
+  resize: none;
+  border: 0;
+  outline: none;
+  padding: 16px;
+  background: rgba(10, 12, 16, 0.68);
+  color: rgba(255, 255, 255, 0.86);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.agent-file-editor textarea:disabled {
+  opacity: 0.62;
+}
+
+.agent-files-empty {
+  padding: 10px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 0.8rem;
+}
+
+.agent-files-empty.editor {
+  display: grid;
+  place-items: center;
+}
+
+.agent-files-saved {
+  margin: 0 20px 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(82, 242, 197, 0.1);
+  color: #52f2c5;
+  font-size: 0.82rem;
 }
 
 .agent-create-guidance,

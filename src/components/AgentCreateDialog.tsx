@@ -1,22 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { buildDefaultAgentWorkspace, normalizeAgentId, validateAgentCreateInput } from "../lib/agentCreate";
 
 type AgentCreateDialogProps = {
   open: boolean;
   creating: boolean;
   error: string | null;
   onClose: () => void;
-  onCreate: (params: { name: string; workspace: string; emoji?: string }) => void | Promise<void>;
+  onCreate: (params: { agentId: string; name: string; workspace: string; emoji?: string }) => void | Promise<void>;
 };
-
-function normalizeAgentId(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    || "agent";
-}
 
 export function AgentCreateDialog({
   open,
@@ -25,29 +17,37 @@ export function AgentCreateDialog({
   onClose,
   onCreate,
 }: AgentCreateDialogProps) {
+  const [agentIdInput, setAgentIdInput] = useState("");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [workspaceTouched, setWorkspaceTouched] = useState(false);
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
-  const agentId = useMemo(() => normalizeAgentId(name), [name]);
+  const agentId = useMemo(() => normalizeAgentId(agentIdInput), [agentIdInput]);
+  const validationError = useMemo(
+    () => validateAgentCreateInput({ agentId: agentIdInput, name, workspace }),
+    [agentIdInput, name, workspace],
+  );
 
   useEffect(() => {
     if (!open) return;
+    setAgentIdInput("");
     setName("");
     setWorkspace("");
+    setWorkspaceTouched(false);
     setPickError(null);
   }, [open]);
 
   useEffect(() => {
-    if (!open || workspace) return;
-    setWorkspace(`~/.openclaw/workspace-${agentId}`);
-  }, [agentId, open, workspace]);
+    if (!open || workspaceTouched) return;
+    setWorkspace(buildDefaultAgentWorkspace(agentIdInput));
+  }, [agentIdInput, open, workspaceTouched]);
 
   if (!open) {
     return null;
   }
 
-  const canSubmit = name.trim().length > 0 && workspace.trim().length > 0 && !creating;
+  const canSubmit = !validationError && !creating;
 
   const chooseWorkspace = async () => {
     setPickingWorkspace(true);
@@ -56,6 +56,7 @@ export function AgentCreateDialog({
       const selected = await invoke<string | null>("pick_workspace_directory");
       if (selected) {
         setWorkspace(selected);
+        setWorkspaceTouched(true);
       }
     } catch (err) {
       setPickError(err instanceof Error ? err.message : String(err));
@@ -70,19 +71,18 @@ export function AgentCreateDialog({
         <div className="agent-create-header">
           <div>
             <h2 id="agent-create-title">新建 Agent</h2>
-            <span>{agentId}</span>
           </div>
           <button className="icon-only-button" type="button" onClick={onClose} title="关闭">×</button>
         </div>
 
         <div className="agent-create-form">
-          <div className="agent-create-guidance">
-            <strong>Agent 用来隔离身份、记忆和工作目录</strong>
-            <p>名称会生成 agent id；工作区会保存 IDENTITY.md、USER.md、SOUL.md 等文件。模型不在这里绑定，后续在每个对话中选择。</p>
-          </div>
+          <label>
+            <span>Agent ID</span>
+            <input value={agentIdInput} onChange={(event) => setAgentIdInput(event.target.value)} placeholder="例如：coding、research-cn、ops" autoFocus />
+          </label>
           <label>
             <span>名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：coding、research、ops" autoFocus />
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：研究助手、代码助手、运营助手" />
           </label>
           <label>
             <span>工作区</span>
@@ -93,11 +93,9 @@ export function AgentCreateDialog({
               </button>
             </div>
           </label>
-          <div className="agent-create-field-notes">
-            <span>建议：名称写职责，工作区选择长期可保留的目录。创建后可在 Agent 身份文件里继续完善能力说明。</span>
-          </div>
         </div>
 
+        {validationError && (agentIdInput.trim() || name.trim()) ? <div className="agent-create-error">{validationError}</div> : null}
         {error ? <div className="agent-create-error">{error}</div> : null}
         {pickError ? <div className="agent-create-error">{pickError}</div> : null}
 
@@ -108,6 +106,7 @@ export function AgentCreateDialog({
             type="button"
             disabled={!canSubmit}
             onClick={() => void onCreate({
+              agentId: agentId,
               name: name.trim(),
               workspace: workspace.trim(),
             })}

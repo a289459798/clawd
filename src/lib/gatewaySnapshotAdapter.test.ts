@@ -107,4 +107,27 @@ describe("buildSnapshotFromGateway", () => {
     expect(snapshot.connections).toEqual([{ id: "telegram", name: "Telegram", enabled: true }]);
     expect(snapshot.skills).toEqual([{ id: "docs", name: "Docs", location: "/tmp/docs" }]);
   });
+
+  it("uses cleaned derivedTitle when label is missing", () => {
+    const snapshot = buildSnapshotFromGateway({
+      sessionsResult: {
+        sessions: [
+          {
+            key: "agent:master:cron:830d",
+            derivedTitle: "[Tue 2026-04-28 12:02 GMT+8] 5b7eb144",
+            displayName: "Cron: Memory Dreaming Promotion",
+            model: "gpt-5.5",
+            modelProvider: "openai-codex",
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      key: "agent:master:cron:830d",
+      title: "5b7eb144",
+      label: undefined,
+      model: "gpt-5.5",
+    });
+  });
 });

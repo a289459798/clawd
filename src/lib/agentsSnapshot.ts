@@ -31,7 +31,20 @@ export function buildAgentsFromSnapshot(
   options?: BuildAgentsOptions,
 ): Agent[] {
   const colors = ["#52f2c5", "#7aa2ff", "#f08b7d", "#c08bff", "#f3bf63"];
-  return snapshot.agents.map((agent, index) => {
+  const snapshotAgentById = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
+  const currentOrder = currentAgentSnapshots
+    .map((agent) => snapshotAgentById.get(agent.id))
+    .filter((agent): agent is OpenClawSnapshot["agents"][number] => Boolean(agent));
+  const currentIds = new Set(currentOrder.map((agent) => agent.id));
+  const newSnapshotAgents = snapshot.agents.filter((agent) => !currentIds.has(agent.id));
+  const baseOrder = currentOrder.length > 0 ? [...currentOrder, ...newSnapshotAgents] : snapshot.agents;
+  const orderedAgents = options?.priorityAgentId
+    ? [
+        ...baseOrder.filter((agent) => agent.id === options.priorityAgentId),
+        ...baseOrder.filter((agent) => agent.id !== options.priorityAgentId),
+      ]
+    : baseOrder;
+  return orderedAgents.map((agent, index) => {
     const existing = currentAgentSnapshots.find((item) => item.id === agent.id);
     const realSessions = snapshot.sessions
       .filter((session) => session.agent_id === agent.id)
@@ -81,7 +94,7 @@ export function buildAgentsFromSnapshot(
           cacheReadTokens: session.cache_read_tokens,
           cacheWriteTokens: session.cache_write_tokens,
           totalTokens: session.total_tokens,
-          model: latestAssistantMessage?.model ?? agent.model ?? existing?.model ?? "未配置",
+          model: latestAssistantMessage?.model ?? session.model ?? agent.model ?? existing?.model ?? "未配置",
           workspace: agent.workspace ?? "未配置工作区",
           visible: existingConversation?.visible ?? true,
           pinned: sessionIndex === 0,

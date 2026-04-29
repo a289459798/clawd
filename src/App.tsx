@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
 import { AgentCreateDialog } from "./components/AgentCreateDialog";
+import { AgentFilesDialog } from "./components/AgentFilesDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
@@ -22,7 +23,7 @@ import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import type { Conversation, PreviewMessage } from "./types/conversation";
 import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill } from "./types/app";
-import type { GatewayAgentsCreateResult, GatewayChannelsStatusResult, GatewayHistoryResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
+import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsStatusResult, GatewayHistoryResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
 
@@ -99,6 +100,7 @@ function App() {
   const [agentCreateOpen, setAgentCreateOpen] = useState(false);
   const [agentCreating, setAgentCreating] = useState(false);
   const [agentCreateError, setAgentCreateError] = useState<string | null>(null);
+  const [agentFilesAgentId, setAgentFilesAgentId] = useState<string | null>(null);
   const [bootstrapStep, setBootstrapStep] = useState<"detect" | "install" | "bind" | "connect_test" | "ready">("detect");
   const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
@@ -587,21 +589,36 @@ function App() {
     void refreshOpenClawStatus();
   }, [bootstrapStep, refreshOpenClawStatus]);
 
-  const refreshGatewaySnapshot = useCallback(async () => {
+  const refreshGatewaySnapshot = useCallback(async (options?: { priorityAgentId?: string }) => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
     const snapshot = await loadGatewaySnapshot({ fallbackSnapshot });
-    setAgents(buildAgentsFromSnapshot(snapshot, agentsRef.current, { preserveExistingConversations: true }));
+    setAgents(buildAgentsFromSnapshot(snapshot, agentsRef.current, {
+      preserveExistingConversations: true,
+      priorityAgentId: options?.priorityAgentId,
+    }));
     await refreshGatewayMetadata();
   }, [loadGatewaySnapshot, refreshGatewayMetadata]);
 
-  const handleCreateAgent = useCallback(async (params: { name: string; workspace: string; emoji?: string }) => {
+  const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string }) => {
     setAgentCreating(true);
     setAgentCreateError(null);
     try {
       await invoke("gateway_connect");
-      await invoke<GatewayAgentsCreateResult>("gateway_agents_create", { params });
-      await refreshGatewaySnapshot();
+      const result = await invoke<GatewayAgentsCreateResult>("gateway_agents_create", {
+        params: {
+          name: params.agentId,
+          workspace: params.workspace,
+          emoji: params.emoji,
+        },
+      });
+      if (params.name.trim() && params.name.trim() !== result.name) {
+        await invoke<GatewayAgentsUpdateResult>("gateway_agents_update", {
+          params: { agentId: result.agentId, name: params.name.trim() },
+        });
+      }
+      await refreshGatewaySnapshot({ priorityAgentId: result.agentId });
       setAgentCreateOpen(false);
+      setAgentFilesAgentId(result.agentId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setAgentCreateError(message);
@@ -1014,6 +1031,12 @@ function App() {
         }}
         onCreate={handleCreateAgent}
       />
+      <AgentFilesDialog
+        open={Boolean(agentFilesAgentId)}
+        agentId={agentFilesAgentId}
+        agentName={agents.find((agent) => agent.id === agentFilesAgentId)?.name}
+        onClose={() => setAgentFilesAgentId(null)}
+      />
       <div
         className={`layout no-topbar ${
           activeNav === "conversations"
@@ -1039,6 +1062,7 @@ function App() {
               expandedConversationId={expandedConversationId}
               visible={showResourceSidebar}
               onCreateAgent={() => setAgentCreateOpen(true)}
+              onEditAgentFiles={setAgentFilesAgentId}
               onCreateConversation={(agentId) => void handleCreateConversation(agentId)}
               onToggleConversationVisibility={toggleConversationVisibility}
               onExpandedConversationChange={setExpandedConversationId}
