@@ -64,6 +64,39 @@ pub struct GatewayHistoryParams {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewaySessionsListParams {
+    pub limit: Option<u32>,
+    pub active_minutes: Option<u32>,
+    pub include_global: Option<bool>,
+    pub include_unknown: Option<bool>,
+    pub include_derived_titles: Option<bool>,
+    pub include_last_message: Option<bool>,
+    pub label: Option<String>,
+    pub spawned_by: Option<String>,
+    pub agent_id: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySessionsPreviewParams {
+    pub keys: Vec<String>,
+    pub limit: Option<u32>,
+    pub max_chars: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAgentCreateParams {
+    pub name: String,
+    pub workspace: String,
+    pub model: Option<String>,
+    pub emoji: Option<String>,
+    pub avatar: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GatewayCreateSessionParams {
     pub agent_id: String,
     pub label: Option<String>,
@@ -246,9 +279,7 @@ fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
     #[serde(rename_all = "camelCase")]
     struct LegacyStoredDeviceIdentity {
         device_id: String,
-        public_key: Option<String>,
         private_key_pem: Option<String>,
-        public_key_pem: Option<String>,
     }
 
     let stored = if identity_path.exists() {
@@ -585,6 +616,12 @@ fn handle_message(app: &AppHandle, value: Value) {
     {
         let _ = app.emit("clawx://sessions-changed", ());
     }
+    if value.get("type").and_then(Value::as_str) == Some("event")
+        && value.get("event").and_then(Value::as_str) == Some("session.message")
+    {
+        let payload = value.get("payload").cloned().unwrap_or(json!({}));
+        let _ = app.emit("clawx://session-message", payload);
+    }
     // Log all other events too for debugging
     else if value.get("type").and_then(Value::as_str) == Some("event") {
         eprintln!("[clawx gateway] received other event: {:?}", value);
@@ -654,8 +691,6 @@ pub async fn gateway_connect(
                 eprintln!("gateway websocket loop exited: {e}");
             }
         }
-        first_waiter = None;
-
         // Auto-reconnect: up to 10 attempts, 2s-30s exponential backoff.
         let mut delay = Duration::from_secs(2);
         for attempt in 1..=10 {
@@ -749,6 +784,118 @@ pub fn gateway_models_list(
     state: tauri::State<Arc<GatewayProxyState>>,
 ) -> Result<Value, String> {
     send_rpc(&state, "models.list", json!({}))
+}
+
+#[tauri::command]
+pub fn gateway_agents_list(
+    state: tauri::State<Arc<GatewayProxyState>>,
+) -> Result<Value, String> {
+    send_rpc(&state, "agents.list", json!({}))
+}
+
+#[tauri::command]
+pub fn gateway_agents_create(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewayAgentCreateParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    json_params.insert("name".to_string(), json!(params.name));
+    json_params.insert("workspace".to_string(), json!(params.workspace));
+    if let Some(model) = params.model {
+        json_params.insert("model".to_string(), json!(model));
+    }
+    if let Some(emoji) = params.emoji {
+        json_params.insert("emoji".to_string(), json!(emoji));
+    }
+    if let Some(avatar) = params.avatar {
+        json_params.insert("avatar".to_string(), json!(avatar));
+    }
+    send_rpc(&state, "agents.create", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_sessions_list(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySessionsListParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    if let Some(limit) = params.limit {
+        json_params.insert("limit".to_string(), json!(limit));
+    }
+    if let Some(active_minutes) = params.active_minutes {
+        json_params.insert("activeMinutes".to_string(), json!(active_minutes));
+    }
+    if let Some(include_global) = params.include_global {
+        json_params.insert("includeGlobal".to_string(), json!(include_global));
+    }
+    if let Some(include_unknown) = params.include_unknown {
+        json_params.insert("includeUnknown".to_string(), json!(include_unknown));
+    }
+    if let Some(include_derived_titles) = params.include_derived_titles {
+        json_params.insert("includeDerivedTitles".to_string(), json!(include_derived_titles));
+    }
+    if let Some(include_last_message) = params.include_last_message {
+        json_params.insert("includeLastMessage".to_string(), json!(include_last_message));
+    }
+    if let Some(label) = params.label {
+        json_params.insert("label".to_string(), json!(label));
+    }
+    if let Some(spawned_by) = params.spawned_by {
+        json_params.insert("spawnedBy".to_string(), json!(spawned_by));
+    }
+    if let Some(agent_id) = params.agent_id {
+        json_params.insert("agentId".to_string(), json!(agent_id));
+    }
+    if let Some(search) = params.search {
+        json_params.insert("search".to_string(), json!(search));
+    }
+    send_rpc(&state, "sessions.list", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_sessions_preview(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySessionsPreviewParams,
+) -> Result<Value, String> {
+    let mut json_params = serde_json::Map::new();
+    json_params.insert("keys".to_string(), json!(params.keys));
+    if let Some(limit) = params.limit {
+        json_params.insert("limit".to_string(), json!(limit));
+    }
+    if let Some(max_chars) = params.max_chars {
+        json_params.insert("maxChars".to_string(), json!(max_chars));
+    }
+    send_rpc(&state, "sessions.preview", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_sessions_subscribe(
+    state: tauri::State<Arc<GatewayProxyState>>,
+) -> Result<Value, String> {
+    send_rpc(&state, "sessions.subscribe", json!({}))
+}
+
+#[tauri::command]
+pub fn gateway_sessions_unsubscribe(
+    state: tauri::State<Arc<GatewayProxyState>>,
+) -> Result<Value, String> {
+    send_rpc(&state, "sessions.unsubscribe", json!({}))
+}
+
+#[tauri::command]
+pub fn gateway_session_messages_subscribe(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    session_key: String,
+) -> Result<Value, String> {
+    send_rpc(&state, "sessions.messages.subscribe", json!({ "key": session_key }))
+}
+
+#[tauri::command]
+pub fn gateway_session_messages_unsubscribe(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    session_key: String,
+) -> Result<Value, String> {
+    send_rpc(&state, "sessions.messages.unsubscribe", json!({ "key": session_key }))
 }
 
 #[tauri::command]

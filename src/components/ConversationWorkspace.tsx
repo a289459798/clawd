@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationDetail } from "./ConversationDetail";
 import { ConversationList } from "./ConversationList";
@@ -18,6 +18,8 @@ type ConversationWorkspaceProps = {
   activeConversation: Conversation | null;
   visibleConversations: VisibleConversation[];
   filteredVisibleConversations: VisibleConversation[];
+  conversationSearch: string;
+  conversationSort: "updated" | "tokens" | "status";
   statusLabel: Record<Conversation["status"], string>;
   userExpanded: boolean;
   aiResponseScrollRef: RefObject<HTMLDivElement | null>;
@@ -41,6 +43,8 @@ type ConversationWorkspaceProps = {
   formatTokenCount: (value?: number) => string;
   onOpenConversation: (conversationId: string) => void | Promise<void>;
   onHideConversation: (agentId: string, conversationId: string) => void;
+  onConversationSearchChange: (value: string) => void;
+  onConversationSortChange: (value: "updated" | "tokens" | "status") => void;
   onFocusChange: (focused: boolean) => void;
   onValueChange: (value: string) => void;
   onModelChange: (model: string) => void;
@@ -56,6 +60,8 @@ export function ConversationWorkspace({
   activeConversation,
   visibleConversations,
   filteredVisibleConversations,
+  conversationSearch,
+  conversationSort,
   statusLabel,
   userExpanded,
   aiResponseScrollRef,
@@ -79,6 +85,8 @@ export function ConversationWorkspace({
   formatTokenCount,
   onOpenConversation,
   onHideConversation,
+  onConversationSearchChange,
+  onConversationSortChange,
   onFocusChange,
   onValueChange,
   onModelChange,
@@ -89,6 +97,12 @@ export function ConversationWorkspace({
   onSend,
   onAbort,
 }: ConversationWorkspaceProps) {
+  const [detailDisplayMode, setDetailDisplayMode] = useState<"focus" | "conversation">("focus");
+
+  useEffect(() => {
+    setDetailDisplayMode("focus");
+  }, [activeConversation?.id]);
+
   return (
     <section className="workspace-area chat-workspace-area">
       {activeConversation ? (
@@ -104,6 +118,8 @@ export function ConversationWorkspace({
             onUserExpandedChange={onUserExpandedChange}
             aiResponseScrollRef={aiResponseScrollRef}
             showJumpToBottom={showJumpToBottom}
+            displayMode={detailDisplayMode}
+            onDisplayModeChange={setDetailDisplayMode}
             onJumpToBottom={() => {
               const container = aiResponseScrollRef.current;
               if (!container) return;
@@ -116,7 +132,7 @@ export function ConversationWorkspace({
               const detailState = getConversationDetailState(
                 activeConversation.previewMessages ?? [],
                 activeConversation.lastRole,
-                false,
+                detailDisplayMode === "conversation",
               );
               const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isWaitingReply || detailState.isStillStreaming;
               if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
@@ -129,6 +145,7 @@ export function ConversationWorkspace({
                       conversationId={activeConversation.id}
                       onOpenImage={onOpenImage}
                       formatTokenCount={formatTokenCount}
+                      showUserMessages={detailDisplayMode === "conversation"}
                     />
                   ) : null}
                   {shouldShowInProgress && (
@@ -167,12 +184,34 @@ export function ConversationWorkspace({
           />
         </>
       ) : (
-        <ConversationList
-          conversations={filteredVisibleConversations}
-          statusLabel={statusLabel}
-          onOpen={onOpenConversation}
-          onHide={onHideConversation}
-        />
+        <>
+          <div className="conversation-list-toolbar">
+            <input
+              type="search"
+              value={conversationSearch}
+              onChange={(event) => onConversationSearchChange(event.target.value)}
+              placeholder="搜索对话、Agent、模型或 session key"
+              aria-label="搜索对话"
+            />
+            <div className="conversation-sort-select">
+              <select
+                value={conversationSort}
+                onChange={(event) => onConversationSortChange(event.target.value as "updated" | "tokens" | "status")}
+                aria-label="排序对话"
+              >
+                <option value="updated">最近更新</option>
+                <option value="status">运行状态</option>
+                <option value="tokens">Token 用量</option>
+              </select>
+            </div>
+          </div>
+          <ConversationList
+            conversations={filteredVisibleConversations}
+            statusLabel={statusLabel}
+            onOpen={onOpenConversation}
+            onHide={onHideConversation}
+          />
+        </>
       )}
       {!activeConversation && filteredVisibleConversations.length === 0 ? (
         <div className="empty-chat-state">

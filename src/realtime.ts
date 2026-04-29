@@ -24,3 +24,10 @@ export type RealtimeGatewayEvent = {
   type: "session_patch";
   session: RealtimeSessionPatch;
 };
+
+export type RealtimeSessionMessageEvent = {
+  sessionKey?: string;
+  message?: unknown;
+  messageId?: string;
+  messageSeq?: number;
+};

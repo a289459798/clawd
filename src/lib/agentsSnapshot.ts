@@ -35,7 +35,6 @@ export function buildAgentsFromSnapshot(
     const existing = currentAgentSnapshots.find((item) => item.id === agent.id);
     const realSessions = snapshot.sessions
       .filter((session) => session.agent_id === agent.id)
-      .slice(0, 8)
       .map((session, sessionIndex) => {
         const latestRole = (session.last_role ?? session.preview_messages[session.preview_messages.length - 1]?.role)?.toLowerCase();
         const latestAssistantMessage = [...session.preview_messages]
@@ -83,8 +82,8 @@ export function buildAgentsFromSnapshot(
           cacheWriteTokens: session.cache_write_tokens,
           totalTokens: session.total_tokens,
           model: latestAssistantMessage?.model ?? agent.model ?? existing?.model ?? "未配置",
-          workspace: agent.workspace ?? "/Users/zhangzy/clawd",
-          visible: sessionIndex < 3,
+          workspace: agent.workspace ?? "未配置工作区",
+          visible: existingConversation?.visible ?? true,
           pinned: sessionIndex === 0,
           runtime,
         } satisfies Conversation;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
+import { AgentCreateDialog } from "./components/AgentCreateDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ConnectionsPage, SkillsPage } from "./components/InfoPages";
@@ -11,6 +12,7 @@ import { findConversationById, getVisibleConversations } from "./lib/conversatio
 import { readImageComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
 import { useGatewayChat } from "./hooks/useGatewayChat";
+import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
 import { useMessageSender } from "./hooks/useMessageSender";
 import { useModels } from "./hooks/useModels";
 import { buildAgentsFromSnapshot, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
@@ -20,22 +22,28 @@ import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import type { Conversation, PreviewMessage } from "./types/conversation";
 import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill } from "./types/app";
-import type { GatewayHistoryResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
-import type { RealtimeGatewayEvent } from "./realtime";
+import type { GatewayAgentsCreateResult, GatewayHistoryResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
+import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
 
 const agentsSeed: Agent[] = [];
 const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
+const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
 function App() {
   const [bootstrapStatus, setBootstrapStatus] = useState<ClawxBootstrapStatus | null>(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bindingInProgress, setBindingInProgress] = useState(false);
+  const [agentCreateOpen, setAgentCreateOpen] = useState(false);
+  const [agentCreating, setAgentCreating] = useState(false);
+  const [agentCreateError, setAgentCreateError] = useState<string | null>(null);
   const [bootstrapStep, setBootstrapStep] = useState<"detect" | "install" | "bind" | "connect_test" | "ready">("detect");
   const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">("updated");
   const [agents, setAgents] = useState(agentsSeed);
   const [expandedConversationId, setExpandedConversationId] = useState("");
   const [showResourceSidebar, setShowResourceSidebar] = useState(true);
@@ -45,6 +53,7 @@ function App() {
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
   const { modelOptions, modelsLoading } = useModels({ enabled: bootstrapStep === "ready" });
+  const { loadGatewaySnapshot } = useGatewaySnapshot();
   const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
@@ -52,6 +61,7 @@ function App() {
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoSendingQueuedMessageRef = useRef<string | null>(null);
+  const agentsRef = useRef<Agent[]>(agentsSeed);
   const queuedMessagesByConversationRef = useRef<Record<string, QueuedComposerMessage[]>>({});
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
@@ -62,6 +72,10 @@ function App() {
   useEffect(() => {
     queuedMessagesByConversationRef.current = queuedMessagesByConversation;
   }, [queuedMessagesByConversation]);
+
+  useEffect(() => {
+    agentsRef.current = agents;
+  }, [agents]);
 
   const loadBootstrapStatus = useCallback(async () => {
     setBootstrapLoading(true);
@@ -129,6 +143,8 @@ function App() {
     }
 
     let cancelled = false;
+    let eventCleanup: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Ensure gateway connection on app startup (binding may already be configured).
     // gateway_connect returns "already connected" if previously established, so this is safe.
@@ -142,10 +158,19 @@ function App() {
 
     const loadSnapshot = async () => {
       try {
-        const currentAgentSnapshots = agents;
-        const snapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
+        const currentAgentSnapshots = agentsRef.current;
+        const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
         if (cancelled) {
           return;
+        }
+        let snapshot = fallbackSnapshot;
+        try {
+          snapshot = await loadGatewaySnapshot({ fallbackSnapshot });
+          if (cancelled) {
+            return;
+          }
+        } catch (error) {
+          console.warn("Gateway snapshot unavailable, falling back to local OpenClaw snapshot", error);
         }
 
         // Skip updating if there's an active run in progress to avoid overwriting runtime state
@@ -185,13 +210,40 @@ function App() {
 
 
     // Load snapshot only once on startup
-    // Polling removed to avoid overwriting frontend state (token data, streaming messages, tools)
     void loadSnapshot();
+
+    void (async () => {
+      try {
+        await invoke("gateway_sessions_subscribe");
+        const { listen } = await import("@tauri-apps/api/event");
+        const unlisten = await listen("clawx://sessions-changed", () => {
+          if (refreshTimer) {
+            clearTimeout(refreshTimer);
+          }
+          refreshTimer = setTimeout(() => {
+            void loadSnapshot();
+          }, 250);
+        });
+        eventCleanup = () => {
+          unlisten();
+          void invoke("gateway_sessions_unsubscribe");
+        };
+        if (cancelled) {
+          eventCleanup();
+        }
+      } catch (error) {
+        console.warn("Failed to subscribe Gateway session changes", error);
+      }
+    })();
 
     return () => {
       cancelled = true;
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      eventCleanup?.();
     };
-  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep]);
+  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot]);
 
   useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured || bootstrapStep !== "ready") {
@@ -348,6 +400,47 @@ function App() {
     }
   };
 
+  const refreshGatewaySnapshot = useCallback(async () => {
+    const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
+    const snapshot = await loadGatewaySnapshot({ fallbackSnapshot });
+    setAgents(buildAgentsFromSnapshot(snapshot, agentsRef.current, { preserveExistingConversations: true }));
+    setSkills(
+      snapshot.skills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        summary: "来自本地 OpenClaw skill 目录。",
+        location: skill.location,
+        enabled: true,
+      })),
+    );
+    setConnections(
+      snapshot.connections.map((connection) => ({
+        id: connection.id,
+        name: connection.name,
+        status: connection.enabled ? "connected" : "disabled",
+        detail: connection.enabled ? "已从本地 OpenClaw 配置读取" : "当前未启用",
+        config: `channels.${connection.id}`,
+        activity: connection.enabled ? "配置已启用" : "配置关闭",
+      })),
+    );
+  }, [loadGatewaySnapshot]);
+
+  const handleCreateAgent = useCallback(async (params: { name: string; workspace: string; model?: string; emoji?: string }) => {
+    setAgentCreating(true);
+    setAgentCreateError(null);
+    try {
+      await invoke("gateway_connect");
+      await invoke<GatewayAgentsCreateResult>("gateway_agents_create", { params });
+      await refreshGatewaySnapshot();
+      setAgentCreateOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAgentCreateError(message);
+    } finally {
+      setAgentCreating(false);
+    }
+  }, [refreshGatewaySnapshot]);
+
   useGatewayChat({
     enabled: bootstrapStep === "ready",
     activeConversationId,
@@ -364,7 +457,42 @@ function App() {
 
   const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
 
-  const filteredVisibleConversations = visibleConversations;
+  const filteredVisibleConversations = useMemo(() => {
+    const query = conversationSearch.trim().toLowerCase();
+    const now = Date.now();
+    const recentConversations = visibleConversations.filter((conversation) => {
+      if (conversation.isDraft || conversation.status === "working") {
+        return true;
+      }
+      return typeof conversation.updatedAt === "number" && now - conversation.updatedAt <= RECENT_CONVERSATION_WINDOW_MS;
+    });
+    const filtered = query
+      ? recentConversations.filter((conversation) =>
+          [
+            conversation.title,
+            conversation.id,
+            conversation.agentName,
+            conversation.channel,
+            conversation.lastMessage,
+            conversation.model,
+          ]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(query)),
+        )
+      : recentConversations;
+
+    return [...filtered].sort((left, right) => {
+      if (conversationSort === "tokens") {
+        return (right.totalTokens ?? 0) - (left.totalTokens ?? 0);
+      }
+      if (conversationSort === "status") {
+        const statusRank = { working: 0, completed: 1, idle: 2 };
+        const byStatus = statusRank[left.status] - statusRank[right.status];
+        if (byStatus !== 0) return byStatus;
+      }
+      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+    });
+  }, [conversationSearch, conversationSort, visibleConversations]);
 
   // Always get activeConversation from agents to ensure we have the latest data
   // (including previewMessages updated by gateway_chat_history)
@@ -408,7 +536,7 @@ function App() {
         updatedAt: now,
         tokens: "--",
         model: defaultModel || "未配置",
-        workspace: "/Users/zhangzy/clawd",
+        workspace: "未配置工作区",
         visible: true,
         previewMessages: [],
         isDraft: true,
@@ -512,6 +640,51 @@ function App() {
       console.error("Failed to load chat history", error);
     }
   };
+
+  useEffect(() => {
+    if (!activeConversationId || activeConversationId.startsWith("draft-") || bootstrapStep !== "ready") {
+      return;
+    }
+
+    let cancelled = false;
+    let cleanup: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+    void (async () => {
+      try {
+        await invoke("gateway_session_messages_subscribe", { sessionKey: activeConversationId });
+        const { listen } = await import("@tauri-apps/api/event");
+        const unlisten = await listen<RealtimeSessionMessageEvent>("clawx://session-message", (event) => {
+          if (event.payload?.sessionKey !== activeConversationId) {
+            return;
+          }
+          if (refreshTimer) {
+            clearTimeout(refreshTimer);
+          }
+          refreshTimer = setTimeout(() => {
+            void openConversationDetail(activeConversationId, true);
+          }, 160);
+        });
+        cleanup = () => {
+          unlisten();
+          void invoke("gateway_session_messages_unsubscribe", { sessionKey: activeConversationId });
+        };
+        if (cancelled) {
+          cleanup();
+        }
+      } catch (error) {
+        console.warn("Failed to subscribe session message events", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      cleanup?.();
+    };
+  }, [activeConversationId, bootstrapStep]);
 
   const { aiResponseScrollRef, shouldStickToBottomRef, showJumpToBottom, setShowJumpToBottom } = useConversationAutoScroll(activeConversation);
 
@@ -661,6 +834,18 @@ function App() {
     <main className="app-shell">
       <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} />
       <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} />
+      <AgentCreateDialog
+        open={agentCreateOpen}
+        modelOptions={modelOptions}
+        creating={agentCreating}
+        error={agentCreateError}
+        onClose={() => {
+          if (agentCreating) return;
+          setAgentCreateOpen(false);
+          setAgentCreateError(null);
+        }}
+        onCreate={handleCreateAgent}
+      />
       <div
         className={`layout no-topbar ${
           activeNav === "conversations"
@@ -678,6 +863,7 @@ function App() {
               agents={agents}
               expandedConversationId={expandedConversationId}
               visible={showResourceSidebar}
+              onCreateAgent={() => setAgentCreateOpen(true)}
               onCreateConversation={(agentId) => void handleCreateConversation(agentId)}
               onToggleConversationVisibility={toggleConversationVisibility}
               onExpandedConversationChange={setExpandedConversationId}
@@ -690,6 +876,8 @@ function App() {
               activeConversation={activeConversation}
               visibleConversations={visibleConversations}
               filteredVisibleConversations={filteredVisibleConversations}
+              conversationSearch={conversationSearch}
+              conversationSort={conversationSort}
               statusLabel={statusLabel}
               userExpanded={userExpanded}
               aiResponseScrollRef={aiResponseScrollRef}
@@ -737,6 +925,8 @@ function App() {
               formatTokenCount={formatTokenCount}
               onOpenConversation={openConversationDetail}
               onHideConversation={(agentId, conversationId) => toggleConversationVisibility(agentId, conversationId, false)}
+              onConversationSearchChange={setConversationSearch}
+              onConversationSortChange={setConversationSort}
               onFocusChange={setComposerFocused}
               onValueChange={setComposerValue}
               onModelChange={setComposerModel}

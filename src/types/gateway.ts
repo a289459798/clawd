@@ -48,6 +48,104 @@ export type GatewayModelsResult = {
   models?: GatewayModelSummary[];
 };
 
+export type GatewayAgentsListResult = {
+  defaultId?: string;
+  mainKey?: string;
+  scope?: "per-sender" | "global";
+  agents?: Array<{
+    id: string;
+    name?: string;
+    workspace?: string;
+    model?: {
+      primary?: string;
+      fallbacks?: string[];
+    };
+    identity?: {
+      name?: string;
+      theme?: string;
+      emoji?: string;
+      avatar?: string;
+      avatarUrl?: string;
+    };
+  }>;
+};
+
+export type GatewayAgentsCreateResult = {
+  ok: true;
+  agentId: string;
+  name: string;
+  workspace: string;
+  model?: string;
+};
+
+export type GatewaySessionsListParams = {
+  limit?: number;
+  activeMinutes?: number;
+  includeGlobal?: boolean;
+  includeUnknown?: boolean;
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  label?: string;
+  spawnedBy?: string;
+  agentId?: string;
+  search?: string;
+};
+
+export type GatewaySessionRow = {
+  key: string;
+  kind?: "direct" | "group" | "global" | "unknown";
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  channel?: string;
+  subject?: string;
+  updatedAt?: number | null;
+  sessionId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  estimatedCostUsd?: number;
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  parentSessionKey?: string;
+  childSessions?: string[];
+  modelProvider?: string;
+  model?: string;
+  contextTokens?: number;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
+export type GatewaySessionsListResult = {
+  path?: string | null;
+  storePath?: string;
+  stores?: Array<{ agentId: string; path: string }>;
+  allAgents?: boolean;
+  count?: number;
+  activeMinutes?: number | null;
+  defaults?: {
+    modelProvider?: string | null;
+    model?: string | null;
+    contextTokens?: number | null;
+    thinkingOptions?: string[];
+    thinkingDefault?: string;
+  };
+  sessions?: GatewaySessionRow[];
+  agents?: Array<{ id: string; name?: string; workspace?: string; model?: string }>;
+};
+
+export type GatewaySessionsPreviewResult = {
+  ts: number;
+  previews: Array<{
+    key: string;
+    status: "ok" | "empty" | "missing" | "error";
+    items: Array<{ role: "user" | "assistant" | "tool" | "system" | "other"; text: string }>;
+  }>;
+};
+
 export type GatewayHistoryResult = {
   messages: GatewayMessage[];
 };

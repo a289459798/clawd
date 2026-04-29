@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
-import { Icon, IconNames } from "./Icon";
-import type { Conversation, ConversationStatus, MessagePart, PreviewMessage } from "../types/conversation";
+import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
 
 type ConversationDetailProps = {
   activeConversation: Conversation;
@@ -17,6 +16,8 @@ type ConversationDetailProps = {
   userExpanded: boolean;
   onUserExpandedChange: (expanded: boolean) => void;
   showJumpToBottom: boolean;
+  displayMode: "focus" | "conversation";
+  onDisplayModeChange: (mode: "focus" | "conversation") => void;
   onJumpToBottom: () => void;
   onUpdateTitle?: (conversationId: string, newTitle: string) => void;
 };
@@ -36,32 +37,6 @@ function normalizeImageSrc(data: string, mimeType?: string) {
   return `data:${mimeType || "image/png"};base64,${data}`;
 }
 
-function messageContentForHistory(message: PreviewMessage) {
-  const parts = message.parts ?? [];
-  const textParts = parts
-    .filter((part): part is Extract<MessagePart, { kind: "text" }> => part.kind === "text")
-    .map((part) => part.text)
-    .filter((text) => text?.trim());
-
-  if (textParts.length > 0) {
-    return textParts.join("\n\n");
-  }
-
-  if (message.text?.trim()) {
-    return message.text;
-  }
-
-  if (parts.some((part) => part.kind === "image")) {
-    return "[图片]";
-  }
-
-  if (parts.some((part) => part.kind === "tool_call")) {
-    return "[工具调用记录]";
-  }
-
-  return "[空消息]";
-}
-
 export function ConversationDetail({
   activeConversation,
   agentName,
@@ -74,6 +49,8 @@ export function ConversationDetail({
   userExpanded,
   onUserExpandedChange,
   showJumpToBottom,
+  displayMode,
+  onDisplayModeChange,
   onJumpToBottom,
   onUpdateTitle,
 }: ConversationDetailProps) {
@@ -84,30 +61,6 @@ export function ConversationDetail({
   useEffect(() => {
     setTitleInput(activeConversation.title);
   }, [activeConversation.title]);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const historyScrollRef = useRef<HTMLDivElement | null>(null);
-
-  const historyMessages = useMemo(() => {
-    return (activeConversation.previewMessages ?? [])
-      .filter((message) => {
-        if (isInternalOpenClawMessage(message)) return false;
-        const role = message.role?.toLowerCase();
-        return role === "user" || role === "assistant";
-      })
-      .map((message) => {
-        const role = message.role?.toLowerCase() === "user" ? "user" : "assistant";
-        const rawContent = messageContentForHistory(message);
-        const parsed = role === "user" ? parseSenderMeta(rawContent) : undefined;
-        return {
-          role,
-          label: role === "user" ? message.senderLabel ?? parsed?.label ?? "用户" : "AI",
-          time: message.timestamp
-            ? new Date(message.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
-            : parsed?.time,
-          content: role === "user" ? parsed?.cleanText ?? rawContent : rawContent,
-        };
-      });
-  }, [activeConversation.previewMessages, parseSenderMeta]);
 
   // Auto scroll to bottom when entering conversation or when messages change
   useEffect(() => {
@@ -122,19 +75,6 @@ export function ConversationDetail({
       });
     });
   }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef]);
-
-  useEffect(() => {
-    if (!historyOpen) return;
-    const scrollContainer = historyScrollRef.current;
-    if (!scrollContainer) return;
-
-    requestAnimationFrame(() => {
-      scrollContainer.scrollTo({
-        top: scrollContainer.scrollHeight,
-        behavior: "auto",
-      });
-    });
-  }, [historyOpen, activeConversation.id, historyMessages.length]);
 
   return (
     <div className="conversation-detail-shell">
@@ -197,22 +137,30 @@ export function ConversationDetail({
         <span className="statusbar-tokens">总: {activeConversation.tokens}</span>
         <span className="statusbar-divider">·</span>
         <span className={`statusbar-badge ${activeConversation.status}`}>{statusLabel[activeConversation.status]}</span>
-        <button
-          className={`history-icon-button ${historyOpen ? "active" : ""}`}
-          onClick={() => setHistoryOpen((open) => !open)}
-          type="button"
-          title={historyOpen ? "收起消息记录" : "展开消息记录"}
-          aria-label={historyOpen ? "收起消息记录" : "展开消息记录"}
-          aria-pressed={historyOpen}
-        >
-          <Icon name={IconNames.MESSAGE} size={18} />
-        </button>
+        <div className="detail-mode-toggle" role="group" aria-label="详情展示模式">
+          <button
+            className={displayMode === "focus" ? "active" : ""}
+            type="button"
+            onClick={() => onDisplayModeChange("focus")}
+            aria-pressed={displayMode === "focus"}
+          >
+            专注
+          </button>
+          <button
+            className={displayMode === "conversation" ? "active" : ""}
+            type="button"
+            onClick={() => onDisplayModeChange("conversation")}
+            aria-pressed={displayMode === "conversation"}
+          >
+            对话
+          </button>
+        </div>
       </div>
 
-      <div className={`conversation-detail-scroll ${historyOpen ? "with-history" : "without-history"}`}>
+      <div className="conversation-detail-scroll">
         <div className="conversation-window-page in-app">
           <section className="conversation-turn-section">
-            {(() => {
+            {displayMode === "focus" ? (() => {
               const msgs = (activeConversation.previewMessages ?? []).filter((message) => !isInternalOpenClawMessage(message));
               const lastUserMsg = [...msgs].reverse().find((m) => m.role?.toLowerCase() === "user");
               const rawText = lastUserMsg?.text ?? "";
@@ -254,7 +202,7 @@ export function ConversationDetail({
                   ) : null}
                 </div>
               ) : null;
-            })()}
+            })() : null}
             <div className="ai-response-scroll" ref={aiResponseScrollRef}>
               {conversationMessageList}
             </div>
@@ -265,35 +213,6 @@ export function ConversationDetail({
             ) : null}
           </section>
         </div>
-        {historyOpen ? (
-          <aside className="history-sidepanel" aria-label="消息记录">
-            <div className="history-sidepanel-header">
-              <div>
-                <strong>消息记录</strong>
-                <span>{historyMessages.length} 条</span>
-              </div>
-            </div>
-            <div className="history-sidepanel-body" ref={historyScrollRef}>
-              {historyMessages.length > 0 ? (
-                <div className="history-message-list">
-                  {historyMessages.map((message, index) => (
-                    <article className={`history-message-row ${message.role}`} key={`${activeConversation.id}-history-${index}`}>
-                      <div className="history-message-meta">
-                        <span className="history-message-role">{message.label}</span>
-                        {message.time ? <span className="history-message-time">{message.time}</span> : null}
-                      </div>
-                      <div className={`history-message-bubble ${message.role}`}>
-                        <MarkdownBlock content={message.content} className="markdown-body" />
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="history-empty-hint">暂无消息记录</p>
-              )}
-            </div>
-          </aside>
-        ) : null}
       </div>
     </div>
   );

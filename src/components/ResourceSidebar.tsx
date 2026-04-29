@@ -1,8 +1,10 @@
+import { useState } from "react";
 import type { Agent } from "../types/app";
 
 type ResourceSidebarProps = {
   agents: Agent[];
   expandedConversationId: string;
+  onCreateAgent: () => void;
   onCreateConversation: (agentId: string) => void;
   onToggleConversationVisibility: (agentId: string, conversationId: string, visible: boolean) => void;
   onExpandedConversationChange: (conversationId: string) => void;
@@ -15,6 +17,7 @@ type ResourceSidebarProps = {
 export function ResourceSidebar({
   agents,
   expandedConversationId,
+  onCreateAgent,
   onCreateConversation,
   onToggleConversationVisibility,
   onExpandedConversationChange,
@@ -23,6 +26,9 @@ export function ResourceSidebar({
   onExpand,
   visible,
 }: ResourceSidebarProps) {
+  const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
+  const [collapsedAgentIds, setCollapsedAgentIds] = useState<Set<string>>(() => new Set());
+
   if (!visible) {
     return (
       <aside className="resource-sidebar-collapsed">
@@ -36,7 +42,7 @@ export function ResourceSidebar({
   return (
     <aside className="resource-sidebar">
       <div className="panel-head panel-head-with-actions">
-        <button className="ghost-button full-width" type="button">
+        <button className="ghost-button full-width" type="button" onClick={onCreateAgent}>
           新建 Agent
         </button>
       </div>
@@ -45,42 +51,115 @@ export function ResourceSidebar({
       </button>
 
       <div className="agent-tree flat">
-        {agents.map((agent) => (
-          <section className="agent-group flat" key={agent.id}>
-            <div className="agent-group-head flat">
-              <div className="agent-group-title">
-                <strong className="agent-name">{agent.name}</strong>
-              </div>
-              <div className="agent-inline-actions">
-                <button className="icon-only-button" title="新建对话" type="button" onClick={() => onCreateConversation(agent.id)}>
-                  ＋
-                </button>
-              </div>
-            </div>
-            <div className="conversation-tree flat">
-              {agent.conversations.map((conversation) => (
-                <button
-                  className={`conversation-tree-item flat ${conversation.visible ? "visible" : "hidden"} ${expandedConversationId === conversation.id ? "selected" : ""}`}
-                  key={conversation.id}
-                  onClick={() => {
-                    if (!conversation.visible) {
-                      onToggleConversationVisibility(agent.id, conversation.id, true);
+        {agents.map((agent) => {
+          const isCollapsed = collapsedAgentIds.has(agent.id);
+          const showsAll = expandedAgentIds.has(agent.id);
+          const visibleConversations = showsAll ? agent.conversations : agent.conversations.slice(0, 5);
+          const hiddenCount = Math.max(0, agent.conversations.length - visibleConversations.length);
+          return (
+            <section className="agent-group flat" key={agent.id}>
+              <div
+                className={`agent-group-head flat ${isCollapsed ? "collapsed" : ""}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setCollapsedAgentIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(agent.id)) {
+                      next.delete(agent.id);
+                    } else {
+                      next.add(agent.id);
                     }
-                    onExpandedConversationChange(conversation.id);
-                    onOpenConversation?.(conversation.id);
-                  }}
-                  type="button"
-                >
-                  <div className="conversation-title-wrap">
-                    <span className={`status-dot ${conversation.status}`} />
-                    <span className="conversation-title">{conversation.title}</span>
-                  </div>
-                  <span className="tree-item-tokens">{conversation.tokens}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
+                    return next;
+                  });
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") {
+                    return;
+                  }
+                  event.preventDefault();
+                  setCollapsedAgentIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(agent.id)) {
+                      next.delete(agent.id);
+                    } else {
+                      next.add(agent.id);
+                    }
+                    return next;
+                  });
+                }}
+                aria-expanded={!isCollapsed}
+              >
+                <div className="agent-group-title">
+                  <span className="agent-collapse-icon">{isCollapsed ? "›" : "⌄"}</span>
+                  <strong className="agent-name">{agent.name}</strong>
+                </div>
+                <div className="agent-inline-actions">
+                  <button
+                    className="icon-only-button"
+                    title="新建对话"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCreateConversation(agent.id);
+                    }}
+                  >
+                    ＋
+                  </button>
+                </div>
+              </div>
+              {!isCollapsed ? (
+                <div className="conversation-tree flat">
+                  {visibleConversations.map((conversation) => (
+                    <button
+                      className={`conversation-tree-item flat ${conversation.visible ? "visible" : "hidden"} ${expandedConversationId === conversation.id ? "selected" : ""}`}
+                      key={conversation.id}
+                      onClick={() => {
+                        if (!conversation.visible) {
+                          onToggleConversationVisibility(agent.id, conversation.id, true);
+                        }
+                        onExpandedConversationChange(conversation.id);
+                        onOpenConversation?.(conversation.id);
+                      }}
+                      type="button"
+                    >
+                      <div className="conversation-title-wrap">
+                        <span className={`status-dot ${conversation.status}`} />
+                        <span className="conversation-title">{conversation.title}</span>
+                      </div>
+                      <span className="tree-item-tokens">{conversation.tokens}</span>
+                    </button>
+                  ))}
+                  {hiddenCount > 0 ? (
+                    <button
+                      className="conversation-tree-more"
+                      type="button"
+                      onClick={() => {
+                        setExpandedAgentIds((current) => new Set(current).add(agent.id));
+                      }}
+                    >
+                      查看更多 {hiddenCount} 条
+                    </button>
+                  ) : showsAll && agent.conversations.length > 5 ? (
+                    <button
+                      className="conversation-tree-more"
+                      type="button"
+                      onClick={() => {
+                        setExpandedAgentIds((current) => {
+                          const next = new Set(current);
+                          next.delete(agent.id);
+                          return next;
+                        });
+                      }}
+                    >
+                      收起
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
       </div>
     </aside>
   );

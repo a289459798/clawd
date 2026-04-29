@@ -231,18 +231,20 @@ export function ConversationMessageList({
   conversationId,
   onOpenImage,
   formatTokenCount,
+  showUserMessages = false,
 }: {
   messages: PreviewMessage[];
   conversationId: string;
   onOpenImage: (src: string) => void;
   formatTokenCount: (value?: number) => string;
+  showUserMessages?: boolean;
 }) {
   const { rows, lastAssistantMessage } = useMemo(() => {
     const normalizedMessages = messages
       .filter((message) => {
         if (isInternalOpenClawMessage(message)) return false;
         const role = message.role?.toLowerCase();
-        if (role === "user") return false;
+        if (role === "user" && !showUserMessages) return false;
         const parts = message.parts ?? [];
         const hasVisiblePart = parts.some((part) => part.kind !== "tool_result" && (part.kind !== "text" || part.text?.trim()));
         const text = (message.text ?? "").trim().toLowerCase();
@@ -296,7 +298,7 @@ export function ConversationMessageList({
       });
 
     return { rows, lastAssistantMessage };
-  }, [messages]);
+  }, [messages, showUserMessages]);
 
   return (
     <>
