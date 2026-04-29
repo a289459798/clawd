@@ -39,6 +39,10 @@ function resolveTotal(totals?: GatewayUsageTotals) {
   return totals?.total ?? totals?.totalTokens ?? 0;
 }
 
+function resolveCost(totals?: GatewayUsageTotals) {
+  return totals?.cost ?? totals?.totalCost ?? totals?.estimatedCostUsd ?? 0;
+}
+
 const connectionRank: Record<ChannelConnection["status"], number> = {
   connected: 0,
   warning: 1,
@@ -270,7 +274,7 @@ export function UsagePage({
     [displayUsage?.aggregates?.byModel],
   );
   const sessions = useMemo(
-    () => (displayUsage?.sessions ?? []).filter((session) => resolveTotal(session.usage?.totals) > 0).slice(0, 40),
+    () => (displayUsage?.sessions ?? []).filter((session) => resolveTotal(session.usage ?? undefined) > 0).slice(0, 40),
     [displayUsage?.sessions],
   );
   const maxDailyTokens = useMemo(() => Math.max(1, ...daily.map((item) => item.tokens || 0)), [daily]);
@@ -284,7 +288,7 @@ export function UsagePage({
         <div className="usage-stat"><span className="usage-icon output-icon" /><div><span>输出</span><strong>{formatTokens(totals?.output)}</strong></div></div>
         <div className="usage-stat"><span className="usage-icon cache-icon" /><div><span>缓存读</span><strong>{formatTokens(totals?.cacheRead)}</strong></div></div>
         <div className="usage-stat"><span className="usage-icon cache-write-icon" /><div><span>缓存写</span><strong>{formatTokens(totals?.cacheWrite)}</strong></div></div>
-        <div className="usage-stat"><span className="usage-icon cost-icon" /><div><span>成本</span><strong>${((totals?.cost ?? totals?.estimatedCostUsd ?? 0)).toFixed(4)}</strong></div></div>
+        <div className="usage-stat"><span className="usage-icon cost-icon" /><div><span>成本</span><strong>${resolveCost(totals).toFixed(4)}</strong></div></div>
       </div>
       <section className="daily-usage-panel">
         <h2>每天用量</h2>
@@ -328,7 +332,7 @@ export function UsagePage({
             <span>{session.label || session.key}</span>
             <span>{session.agentId || "-"}</span>
             <span>{[session.modelProvider, session.model].filter(Boolean).join(" / ") || "-"}</span>
-            <strong>{formatTokens(resolveTotal(session.usage?.totals))}</strong>
+            <strong>{formatTokens(resolveTotal(session.usage ?? undefined))}</strong>
           </div>
         ))}
         {!sessions.length && !loading ? <div className="usage-empty-row">暂无有 Token 消耗的对话。</div> : null}

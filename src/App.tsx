@@ -538,16 +538,46 @@ function App() {
     }
   }, [refreshGatewayMetadata]);
 
+  const toggleOpenClawInfo = useCallback(() => {
+    setOpenClawInfoOpen((current) => !current);
+    if (!openClawInfoOpen) {
+      void refreshOpenClawStatus();
+    }
+  }, [openClawInfoOpen, refreshOpenClawStatus]);
+
   useEffect(() => {
     if (bootstrapStep !== "ready") {
       return;
     }
+    let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let frame: number | undefined;
+
+    const scheduleAfterPaint = (task: () => void) => {
+      frame = window.requestAnimationFrame(() => {
+        timeout = setTimeout(() => {
+          if (!cancelled) {
+            task();
+          }
+        }, 0);
+      });
+    };
+
     if (activeNav === "skills" || activeNav === "connections") {
-      void refreshGatewayMetadata();
+      scheduleAfterPaint(() => void refreshGatewayMetadata());
     }
     if (activeNav === "usage") {
-      void refreshUsage();
+      scheduleAfterPaint(() => void refreshUsage());
     }
+    return () => {
+      cancelled = true;
+      if (frame !== undefined) {
+        window.cancelAnimationFrame(frame);
+      }
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
   }, [activeNav, bootstrapStep, refreshGatewayMetadata, refreshUsage]);
 
   useEffect(() => {
@@ -996,15 +1026,10 @@ function App() {
         <NavSidebar
           activeNav={activeNav}
           onNavChange={handleNavChange}
-          onOpenLocalOpenClaw={() => void openLocalOpenClaw()}
           gatewayConnected={gatewayConnected}
           gatewayVersion={openClawStatus?.runtimeVersion}
           sessionCount={openClawStatus?.sessions?.count}
-          onReconnect={() => void refreshOpenClawStatus()}
-          onOpenStatus={() => {
-            setOpenClawInfoOpen(true);
-            void refreshOpenClawStatus();
-          }}
+          onOpenStatus={toggleOpenClawInfo}
         />
 
         {activeNav === "conversations" ? (
@@ -1117,31 +1142,32 @@ function App() {
       {openClawInfoOpen ? (
         <aside className="openclaw-info-drawer" role="dialog" aria-modal="true">
           <div className="openclaw-info-head">
-            <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
-            <button className="icon-only-button" type="button" onClick={() => setOpenClawInfoOpen(false)} title="关闭">×</button>
-          </div>
-          <div className="openclaw-info-status">
-            <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
-            <strong>{gatewayConnected ? "已连接" : "未连接"}</strong>
-            <span>{gatewayStatusText}</span>
-          </div>
-          <div className="openclaw-info-grid">
-            <span>版本</span><strong>{openClawStatus?.runtimeVersion || "-"}</strong>
-            <span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong>
-            <span>默认模型</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong>
-            <span>默认 Agent</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong>
-          </div>
-          {openClawStatus?.channelSummary?.length ? (
-            <div className="openclaw-info-list">
-              <strong>连接摘要</strong>
-              {openClawStatus.channelSummary.slice(0, 8).map((item, index) => (
-                <span key={`${item}-${index}`}>{item}</span>
-              ))}
+            <div className="openclaw-info-status">
+              <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
+              <div>
+                <strong>{gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接"}</strong>
+                <span>{gatewayStatusText}</span>
+              </div>
             </div>
-          ) : null}
+            <label className="openclaw-connect-switch" title="刷新 Gateway 连接状态">
+              <input
+                type="checkbox"
+                checked={gatewayConnected}
+                onChange={() => void refreshOpenClawStatus()}
+              />
+              <span />
+            </label>
+          </div>
+          <div className="openclaw-info-metrics">
+            <div><span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
+            <div><span>默认模型</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong></div>
+            <div><span>默认 Agent</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong></div>
+          </div>
           <div className="openclaw-info-actions">
-            <button className="ghost-button" type="button" onClick={() => void refreshOpenClawStatus()}>重连</button>
-            <button className="primary-action-button" type="button" onClick={() => void openLocalOpenClaw()}>打开 OpenClaw</button>
+            <button className="openclaw-home-button" type="button" onClick={() => void openLocalOpenClaw()} title="打开本地 OpenClaw">
+              <span>⌂</span>
+              打开本地 OpenClaw
+            </button>
           </div>
         </aside>
       ) : null}

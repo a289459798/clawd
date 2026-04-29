@@ -26,20 +26,16 @@ export function ImageLightbox({ src, onClose }: { src: string | null; onClose: (
 export function NavSidebar({
   activeNav,
   onNavChange,
-  onOpenLocalOpenClaw,
   gatewayConnected,
   gatewayVersion,
   sessionCount,
-  onReconnect,
   onOpenStatus,
 }: {
   activeNav: NavKey;
   onNavChange: (nav: NavKey) => void;
-  onOpenLocalOpenClaw: () => void;
   gatewayConnected?: boolean;
   gatewayVersion?: string | null;
   sessionCount?: number;
-  onReconnect?: () => void;
   onOpenStatus?: () => void;
 }) {
   const navItems: Array<{ key: NavKey; label: string; icon: string }> = [
@@ -73,10 +69,6 @@ export function NavSidebar({
         >
           <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
         </button>
-        <div className="openclaw-mini-actions">
-          <button className="nav-icon-button" onClick={onReconnect} title="重连 Gateway" type="button">↻</button>
-          <button className="nav-icon-button" onClick={onOpenLocalOpenClaw} title="打开本地 OpenClaw" type="button">⌂</button>
-        </div>
       </div>
     </aside>
   );

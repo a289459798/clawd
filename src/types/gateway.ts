@@ -153,12 +153,7 @@ export type GatewaySessionsUsageResult = {
     channel?: string;
     modelProvider?: string;
     model?: string;
-    usage?: {
-      totals?: GatewayUsageTotals;
-      messages?: number;
-      toolCalls?: number;
-      errors?: number;
-    } | null;
+    usage?: GatewayUsageTotals | null;
   }>;
   totals?: GatewayUsageTotals;
   aggregates?: {
@@ -179,7 +174,13 @@ export type GatewayUsageTotals = {
   totalTokens?: number;
   cached?: number;
   cost?: number;
+  totalCost?: number;
   estimatedCostUsd?: number;
+  inputCost?: number;
+  outputCost?: number;
+  cacheReadCost?: number;
+  cacheWriteCost?: number;
+  missingCostEntries?: number;
   messages?: number;
   toolCalls?: number;
   errors?: number;
