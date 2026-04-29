@@ -118,6 +118,12 @@ describe("buildSnapshotFromGateway", () => {
             displayName: "Cron: Memory Dreaming Promotion",
             model: "gpt-5.5",
             modelProvider: "openai-codex",
+            thinkingDefault: "medium",
+            thinkingLevels: [
+              { id: "off", label: "off" },
+              { id: "medium", label: "medium" },
+              { id: "xhigh", label: "xhigh" },
+            ],
           },
         ],
       },
@@ -128,6 +134,12 @@ describe("buildSnapshotFromGateway", () => {
       title: "5b7eb144",
       label: undefined,
       model: "gpt-5.5",
+      thinking_default: "medium",
+      thinking_levels: [
+        { id: "off", label: "off" },
+        { id: "medium", label: "medium" },
+        { id: "xhigh", label: "xhigh" },
+      ],
     });
   });
 });

@@ -7,6 +7,8 @@ export type SnapshotSession = {
   title: string;
   label?: string;
   model?: string;
+  thinking_default?: string;
+  thinking_levels?: Array<{ id: string; label?: string }>;
   updated_at?: number;
   channel?: string;
   session_file?: string;
@@ -254,6 +256,8 @@ export type GatewaySessionRow = {
   childSessions?: string[];
   modelProvider?: string;
   model?: string;
+  thinkingDefault?: string;
+  thinkingLevels?: Array<{ id: string; label?: string }>;
   contextTokens?: number;
   lastChannel?: string;
   lastTo?: string;

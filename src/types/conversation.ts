@@ -44,6 +44,8 @@ export type Conversation = {
   cacheWriteTokens?: number;
   totalTokens?: number;
   model: string;
+  thinkingDefault?: string;
+  thinkingOptions?: Array<{ value: string; label: string }>;
   workspace: string;
   visible: boolean;
   pinned?: boolean;

@@ -112,6 +112,8 @@ export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawS
       title,
       label: session.label,
       model: session.model,
+      thinking_default: session.thinkingDefault,
+      thinking_levels: session.thinkingLevels,
       updated_at: session.updatedAt ?? undefined,
       channel: session.channel ?? session.lastChannel,
       last_message: latestPreviewText(preview) ?? fallbackText,

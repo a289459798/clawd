@@ -688,10 +688,21 @@ function App() {
     return resolveConversationModel(conversation, modelOptions[0]?.value ?? "");
   }, [modelOptions]);
 
+  const resolveConversationDefaultThinking = useCallback((conversation: Conversation | null) => {
+    const options = conversation?.thinkingOptions ?? [];
+    const fallback = options[0]?.value ?? "off";
+    const candidate = conversation?.thinkingDefault ?? fallback;
+    return options.length === 0 || options.some((option) => option.value === candidate) ? candidate : fallback;
+  }, []);
+
   // Update composer model when conversation changes or previewMessages update
   useEffect(() => {
     setComposerModel(resolveConversationDefaultModel(activeConversation));
   }, [activeConversation?.id, resolveConversationDefaultModel]);
+
+  useEffect(() => {
+    setComposerThinking(resolveConversationDefaultThinking(activeConversation));
+  }, [activeConversation?.id, activeConversation?.thinkingDefault, activeConversation?.thinkingOptions, resolveConversationDefaultThinking]);
 
   // 创建本地草稿对话，不调用 API
   const handleCreateConversation = useCallback((agentId: string) => {
@@ -722,6 +733,8 @@ function App() {
         updatedAt: now,
         tokens: "--",
         model: defaultModel || "未配置",
+        thinkingDefault: "off",
+        thinkingOptions: [{ value: "off", label: "off" }],
         workspace: "未配置工作区",
         visible: true,
         previewMessages: [],

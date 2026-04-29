@@ -20,6 +20,12 @@ type ModelOption = {
   label: string;
 };
 
+const FALLBACK_THINKING_OPTIONS = [
+  { value: "off", label: "off" },
+  { value: "low", label: "low" },
+  { value: "high", label: "high" },
+];
+
 type ConversationComposerProps = {
   focused: boolean;
   value: string;
@@ -29,6 +35,7 @@ type ConversationComposerProps = {
   attachments: ComposerAttachment[];
   queuedMessages: QueuedComposerMessage[];
   modelOptions: ModelOption[];
+  thinkingOptions?: ModelOption[];
   modelsLoading?: boolean;
   onFocusChange: (focused: boolean) => void;
   onValueChange: (value: string) => void;
@@ -50,6 +57,7 @@ export function ConversationComposer({
   attachments,
   queuedMessages,
   modelOptions,
+  thinkingOptions,
   modelsLoading = false,
   onFocusChange,
   onValueChange,
@@ -62,6 +70,7 @@ export function ConversationComposer({
   onAbort,
 }: ConversationComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const resolvedThinkingOptions = thinkingOptions?.length ? thinkingOptions : FALLBACK_THINKING_OPTIONS;
 
   return (
     <div className={`conversation-composer ${focused ? "focused" : ""}`}>
@@ -142,10 +151,9 @@ export function ConversationComposer({
             )) : null}
           </select>
           <select className="composer-select" value={thinking} onChange={(e) => onThinkingChange(e.target.value)} title="思考模式">
-            <option value="" disabled>思考</option>
-            <option value="off">Off</option>
-            <option value="low">Low</option>
-            <option value="high">High</option>
+            {resolvedThinkingOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
           <div style={{ flex: 1 }} />
           {sending ? (

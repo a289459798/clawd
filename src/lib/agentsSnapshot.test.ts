@@ -59,4 +59,36 @@ describe("buildAgentsFromSnapshot", () => {
 
     expect(buildAgentsFromSnapshot(snapshot, [])[0]?.conversations[0]?.model).toBe("gpt-5.5");
   });
+
+  it("maps session thinking levels and default onto conversations", () => {
+    const snapshot: OpenClawSnapshot = {
+      agents: [{ id: "master", name: "Master" }],
+      sessions: [
+        {
+          id: "sess-1",
+          agent_id: "master",
+          key: "agent:master:direct:830d",
+          title: "Session",
+          thinking_default: "medium",
+          thinking_levels: [
+            { id: "off", label: "off" },
+            { id: "medium", label: "medium" },
+            { id: "xhigh", label: "xhigh" },
+          ],
+          preview_messages: [],
+        },
+      ],
+      connections: [],
+      skills: [],
+    };
+
+    expect(buildAgentsFromSnapshot(snapshot, [])[0]?.conversations[0]).toMatchObject({
+      thinkingDefault: "medium",
+      thinkingOptions: [
+        { value: "off", label: "off" },
+        { value: "medium", label: "medium" },
+        { value: "xhigh", label: "xhigh" },
+      ],
+    });
+  });
 });

@@ -171,6 +171,7 @@ export function ConversationWorkspace({
             attachments={composerAttachments}
             queuedMessages={activeQueuedMessages}
             modelOptions={ensureSelectedModelOption(modelOptions, composerModel)}
+            thinkingOptions={activeConversation.thinkingOptions}
             modelsLoading={modelsLoading}
             onFocusChange={onFocusChange}
             onValueChange={onValueChange}

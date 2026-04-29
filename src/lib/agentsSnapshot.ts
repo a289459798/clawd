@@ -65,6 +65,10 @@ export function buildAgentsFromSnapshot(
         const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message));
         const mergedPreviewMessages = sessionMessages as PreviewMessage[];
         const displayTitle = session.label || session.title;
+        const thinkingOptions = session.thinking_levels?.map((level) => ({
+          value: level.id,
+          label: level.label ?? level.id,
+        }));
 
         return {
           id: session.key,
@@ -95,6 +99,8 @@ export function buildAgentsFromSnapshot(
           cacheWriteTokens: session.cache_write_tokens,
           totalTokens: session.total_tokens,
           model: latestAssistantMessage?.model ?? session.model ?? agent.model ?? existing?.model ?? "未配置",
+          thinkingDefault: session.thinking_default,
+          thinkingOptions,
           workspace: agent.workspace ?? "未配置工作区",
           visible: existingConversation?.visible ?? true,
           pinned: sessionIndex === 0,
