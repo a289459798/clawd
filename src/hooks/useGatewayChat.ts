@@ -1,12 +1,10 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import type { Agent } from "../types/app";
 import type { MessagePart } from "../types/conversation";
-import type { GatewayChatEvent, GatewayHistoryResult } from "../types/gateway";
+import type { GatewayChatEvent } from "../types/gateway";
 import { patchConversation } from "../lib/agentsSnapshot";
 import { mapGatewayToolStreamToPart } from "../lib/toolStream";
 import { extractTextFromGatewayMessage, extractUsageFromGatewayMessage, mapGatewayContentToParts, mergeStreamingParts } from "../lib/gatewayMessages";
-import { mapNonEmptyGatewayHistoryMessages } from "../lib/conversationHistory";
 
 interface UseGatewayChatProps {
   enabled: boolean;
@@ -37,7 +35,6 @@ export function useGatewayChat({
 }: UseGatewayChatProps) {
   const activeConversationIdRef = useRef(activeConversationId);
   const activeRunIdRef = useRef(activeRunId);
-  const reloadedConversationIdsRef = useRef<Set<string>>(new Set());
   const gatewayEventUnlistenRef = useRef<null | (() => void)>(null);
 
   useEffect(() => {
@@ -130,42 +127,6 @@ export function useGatewayChat({
 
           // Delta stream handling
           if (chat.state === "delta") {
-            // Check if first delta of new run - reload conversation data
-            if (isCurrentConversation && chat.runId) {
-              const currentConversation = agents.flatMap((agent) => agent.conversations)
-                .find((conv) => conv.id === chat.sessionKey);
-              const previousStatus = currentConversation?.status;
-              
-              if (previousStatus && (previousStatus === "completed" || previousStatus === "idle") && chat.runId) {
-                const reloadKey = `${chat.sessionKey}:${chat.runId}`;
-                if (!reloadedConversationIdsRef.current.has(reloadKey)) {
-                  reloadedConversationIdsRef.current.add(reloadKey);
-                  void (async () => {
-                    try {
-                      const result = await invoke<GatewayHistoryResult>("gateway_chat_history", { 
-                        params: { sessionKey: chat.sessionKey, limit: 200 } 
-                      });
-                      if (Array.isArray(result?.messages)) {
-                        const mappedMessages = mapNonEmptyGatewayHistoryMessages(result);
-                        onAgentsChange((current) => current.map((agent) => ({
-                          ...agent,
-                          conversations: agent.conversations.map((conversation) => {
-                            if (conversation.id !== chat.sessionKey) return conversation;
-                            return {
-                              ...conversation,
-                              previewMessages: mappedMessages,
-                            };
-                          }),
-                        })));
-                      }
-                    } catch (error) {
-                      console.error("Failed to reload messages:", error);
-                    }
-                  })();
-                }
-              }
-            }
-
             const deltaText = extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
             if (!deltaText && deltaParts.length === 0) return;

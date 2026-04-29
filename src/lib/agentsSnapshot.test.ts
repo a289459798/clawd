@@ -1,8 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentsFromSnapshot } from "./agentsSnapshot";
+import { buildAgentsFromSnapshot, hasActiveAgentRun } from "./agentsSnapshot";
 import type { OpenClawSnapshot } from "../types/gateway";
 
 describe("buildAgentsFromSnapshot", () => {
+  it("detects active runs before expensive snapshot refreshes", () => {
+    const snapshot: OpenClawSnapshot = {
+      agents: [{ id: "main", name: "Main" }],
+      sessions: [],
+      connections: [],
+      skills: [],
+    };
+    const agents = buildAgentsFromSnapshot(snapshot, []);
+    expect(hasActiveAgentRun(agents)).toBe(false);
+    expect(hasActiveAgentRun([
+      {
+        ...agents[0]!,
+        conversations: [
+          {
+            id: "agent:main:direct:abc",
+            title: "Active",
+            status: "working",
+            lastMessage: "",
+            lastTime: "",
+            tokens: "-",
+            model: "gpt-5.5",
+            workspace: "",
+            visible: true,
+            runtime: { activeRunId: "run-1" },
+          },
+        ],
+      },
+    ])).toBe(true);
+  });
+
   it("places a priority agent at the top of the list", () => {
     const snapshot: OpenClawSnapshot = {
       agents: [

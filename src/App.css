@@ -478,6 +478,21 @@ p {
   min-width: 0;
 }
 
+.conversation-message-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message-stack.user {
+  align-items: flex-end;
+}
+
+.message-stack.assistant {
+  align-items: flex-start;
+}
+
 .message-stack:has(.message-bubble.user),
 .message-stack:has(.message-image-card.user) {
   align-items: flex-end;
@@ -2011,6 +2026,25 @@ p {
   border-radius: 14px;
   padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow-wrap: anywhere;
+}
+
+.conversation-message-list.conversation-mode .message-bubble {
+  width: auto;
+  max-width: min(72%, 760px);
+}
+
+.conversation-message-list.conversation-mode .message-bubble.user {
+  max-width: min(64%, 620px);
+}
+
+.conversation-message-list.conversation-mode .message-image-card {
+  width: auto;
+  max-width: min(64%, 520px);
+}
+
+.conversation-message-list.conversation-mode .message-image-card.assistant {
+  max-width: min(72%, 620px);
 }
 
 .message-bubble.assistant {
@@ -3635,6 +3669,13 @@ p {
 
   .message-bubble {
     max-width: 100%;
+  }
+
+  .conversation-message-list.conversation-mode .message-bubble,
+  .conversation-message-list.conversation-mode .message-bubble.user,
+  .conversation-message-list.conversation-mode .message-image-card,
+  .conversation-message-list.conversation-mode .message-image-card.assistant {
+    max-width: 88%;
   }
 
   .layout,

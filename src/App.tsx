@@ -16,7 +16,7 @@ import { useGatewayChat } from "./hooks/useGatewayChat";
 import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
 import { useMessageSender } from "./hooks/useMessageSender";
 import { useModels } from "./hooks/useModels";
-import { buildAgentsFromSnapshot, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
+import { buildAgentsFromSnapshot, hasActiveAgentRun, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
 import { connectionLabel, formatTokenCount, statusLabel } from "./lib/appFormatters";
 import { parseSenderMeta } from "./lib/messageMeta";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
@@ -245,6 +245,9 @@ function App() {
     const loadSnapshot = async () => {
       try {
         const currentAgentSnapshots = agentsRef.current;
+        if (hasActiveAgentRun(currentAgentSnapshots)) {
+          return;
+        }
         const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
         if (cancelled) {
           return;
@@ -258,15 +261,6 @@ function App() {
         } catch (error) {
           console.warn("Gateway snapshot unavailable, falling back to local OpenClaw snapshot", error);
         }
-
-        // Skip updating if there's an active run in progress to avoid overwriting runtime state
-        const hasActiveRun = currentAgentSnapshots.some((agent) =>
-          agent.conversations.some((conv) => conv.runtime?.activeRunId),
-        );
-        if (hasActiveRun) {
-          return;
-        }
-
         setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots, { preserveExistingConversations: true }));
         void refreshGatewayMetadata();
       } catch (error) {
@@ -283,6 +277,9 @@ function App() {
         await invoke("gateway_sessions_subscribe");
         const { listen } = await import("@tauri-apps/api/event");
         const unlisten = await listen("clawx://sessions-changed", () => {
+          if (hasActiveAgentRun(agentsRef.current)) {
+            return;
+          }
           if (refreshTimer) {
             clearTimeout(refreshTimer);
           }
@@ -376,9 +373,12 @@ function App() {
                   totalTokens: nextTotalTokens,
                   tokens: formatTokenCount(nextTotalTokens),
                   model: payload.session.model ?? currentConversation.model,
-                  previewMessages: currentConversation.runtime?.activeRunId
-                    ? mergeSnapshotMessagesPreservingCurrentOrder(currentConversation.previewMessages, nextPreviewMessages)
-                    : nextPreviewMessages,
+                  // Gateway session_patch often carries only a recent preview window. Replacing the full
+                  // list would drop earlier turns (e.g. after a run ends and activeRunId clears). Always merge.
+                  previewMessages: mergeSnapshotMessagesPreservingCurrentOrder(
+                    currentConversation.previewMessages ?? [],
+                    nextPreviewMessages,
+                  ),
                   runtime: nextRuntime,
                 }));
               }),
@@ -683,6 +683,11 @@ function App() {
   // Always get activeConversation from agents to ensure we have the latest data
   // (including previewMessages updated by gateway_chat_history)
   const activeConversation = findConversationById(agents, activeConversationId);
+  const activeConversationRef = useRef<Conversation | null>(null);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
     return resolveConversationModel(conversation, modelOptions[0]?.value ?? "");
@@ -792,9 +797,14 @@ function App() {
             // If preserveStatus is true, preserve all status-related fields
             // This is used when reloading data while already in the conversation
             if (preserveStatus) {
+              // Session events can trigger refresh after a run ends; chat.history may return only a recent
+              // window. Always merge so we never replace a longer local thread with a shorter RPC result.
               return {
                 ...conversation,
-                previewMessages: mappedMessages,
+                previewMessages: mergeSnapshotMessagesPreservingCurrentOrder(
+                  conversation.previewMessages ?? [],
+                  mappedMessages,
+                ),
                 lastMessage: lastAssistant?.text || conversation.lastMessage,
                 model: lastAssistant?.model || conversation.model,
                 inputTokens: totalInput,
@@ -840,6 +850,12 @@ function App() {
     }
   };
 
+  const openConversationDetailRef = useRef(openConversationDetail);
+
+  useEffect(() => {
+    openConversationDetailRef.current = openConversationDetail;
+  }, [openConversationDetail]);
+
   useEffect(() => {
     if (!activeConversationId || activeConversationId.startsWith("draft-") || bootstrapStep !== "ready") {
       return;
@@ -857,11 +873,17 @@ function App() {
           if (event.payload?.sessionKey !== activeConversationId) {
             return;
           }
+          if (activeConversationRef.current?.id === activeConversationId && activeConversationRef.current.runtime?.activeRunId) {
+            return;
+          }
           if (refreshTimer) {
             clearTimeout(refreshTimer);
           }
           refreshTimer = setTimeout(() => {
-            void openConversationDetail(activeConversationId, true);
+            if (activeConversationRef.current?.id === activeConversationId && activeConversationRef.current.runtime?.activeRunId) {
+              return;
+            }
+            void openConversationDetailRef.current(activeConversationId, true);
           }, 160);
         });
         cleanup = () => {

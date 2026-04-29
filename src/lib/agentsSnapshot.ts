@@ -25,6 +25,12 @@ export const patchConversation = (conversation: Conversation, updater: (conversa
   };
 };
 
+export function hasActiveAgentRun(agents: Agent[]) {
+  return agents.some((agent) =>
+    agent.conversations.some((conversation) => Boolean(conversation.runtime?.activeRunId)),
+  );
+}
+
 export function buildAgentsFromSnapshot(
   snapshot: OpenClawSnapshot,
   currentAgentSnapshots: Agent[],

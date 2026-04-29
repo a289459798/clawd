@@ -144,44 +144,36 @@ export function useMessageSender({
       }
     }
 
+    const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    onActiveRunIdChange(runId);
+
     onAgentsChange((current) => current.map((agent) => ({
       ...agent,
       conversations: agent.conversations.map((conversation) => {
         if (conversation.id !== realSessionKey) return conversation;
-        return {
-          ...conversation,
+        return patchConversation(conversation, (currentConversation) => ({
+          ...currentConversation,
           status: "working",
           lastRole: "user",
-          lastMessage: message || (attachments.length > 0 ? `[图片] ${attachments.map((item) => item.name).join(", ")}` : conversation.lastMessage),
+          lastMessage: message || (attachments.length > 0 ? `[图片] ${attachments.map((item) => item.name).join(", ")}` : currentConversation.lastMessage),
           updatedAt: Date.now(),
           lastTime: new Date().toLocaleString("zh-CN"),
           previewMessages: [
-            ...(conversation.previewMessages ?? []),
+            ...(currentConversation.previewMessages ?? []),
             { role: "user", text: message || attachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
           ],
-        };
+          runtime: {
+            ...currentConversation.runtime,
+            activeRunId: runId,
+            activeStartedAt: Date.now(),
+            lastEventAt: Date.now(),
+          },
+        }));
       }),
     })));
 
     try {
       await invoke("gateway_connect");
-      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      onActiveRunIdChange(runId);
-      onAgentsChange((current) => current.map((agent) => ({
-        ...agent,
-        conversations: agent.conversations.map((conversation) => {
-          if (conversation.id !== realSessionKey) return conversation;
-          return patchConversation(conversation, (currentConversation) => ({
-            ...currentConversation,
-            runtime: {
-              ...currentConversation.runtime,
-              activeRunId: runId,
-              activeStartedAt: Date.now(),
-              lastEventAt: Date.now(),
-            },
-          }));
-        }),
-      })));
 
       const updatedConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === realSessionKey);
       if (composerModel && composerModel !== updatedConversation?.model) {

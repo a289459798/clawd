@@ -2,7 +2,7 @@ import { useEffect, useState, type RefObject } from "react";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationDetail } from "./ConversationDetail";
 import { ConversationList } from "./ConversationList";
-import { ConversationMessageList } from "./ConversationMessageList";
+import { FocusAssistantMessageList, FullConversationMessageList } from "./ConversationMessageList";
 import { getConversationDetailState } from "../lib/conversationDetailState";
 import { ensureSelectedModelOption } from "../lib/modelOptions";
 import type { ComposerAttachment, ModelOption, QueuedComposerMessage } from "../types/app";
@@ -103,6 +103,78 @@ export function ConversationWorkspace({
     setDetailDisplayMode("focus");
   }, [activeConversation?.id]);
 
+  const renderFocusModeContent = () => {
+    if (!activeConversation) return null;
+    const detailState = getConversationDetailState(
+      activeConversation.previewMessages ?? [],
+      activeConversation.lastRole,
+      false,
+    );
+    const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isWaitingReply || detailState.isStillStreaming;
+    if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
+
+    return (
+      <>
+        {detailState.hasRenderableContent ? (
+          <FocusAssistantMessageList
+            messages={detailState.normalizedMessages}
+            conversationId={activeConversation.id}
+            onOpenImage={onOpenImage}
+            formatTokenCount={formatTokenCount}
+          />
+        ) : null}
+        {shouldShowInProgress ? (
+          <div className="thinking-indicator-fixed" role="status" aria-live="polite">
+            <div className="thinking-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
+  const handleDisplayModeChange = (mode: "focus" | "conversation") => {
+    shouldStickToBottomRef.current = true;
+    onJumpToBottomHidden();
+    setDetailDisplayMode(mode);
+  };
+
+  const renderConversationModeContent = () => {
+    if (!activeConversation) return null;
+    const detailState = getConversationDetailState(
+      activeConversation.previewMessages ?? [],
+      activeConversation.lastRole,
+      true,
+    );
+    const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isStillStreaming;
+    if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无对话内容</p>;
+
+    return (
+      <>
+        {detailState.hasRenderableContent ? (
+          <FullConversationMessageList
+            messages={detailState.normalizedMessages}
+            conversationId={activeConversation.id}
+            onOpenImage={onOpenImage}
+            formatTokenCount={formatTokenCount}
+          />
+        ) : null}
+        {shouldShowInProgress ? (
+          <div className="thinking-indicator-fixed" role="status" aria-live="polite">
+            <div className="thinking-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
   return (
     <section className="workspace-area chat-workspace-area">
       {activeConversation ? (
@@ -119,7 +191,7 @@ export function ConversationWorkspace({
             aiResponseScrollRef={aiResponseScrollRef}
             showJumpToBottom={showJumpToBottom}
             displayMode={detailDisplayMode}
-            onDisplayModeChange={setDetailDisplayMode}
+            onDisplayModeChange={handleDisplayModeChange}
             onJumpToBottom={() => {
               const container = aiResponseScrollRef.current;
               if (!container) return;
@@ -128,38 +200,7 @@ export function ConversationWorkspace({
               onJumpToBottomHidden();
             }}
             onUpdateTitle={onUpdateTitle}
-            conversationMessageList={(() => {
-              const detailState = getConversationDetailState(
-                activeConversation.previewMessages ?? [],
-                activeConversation.lastRole,
-                detailDisplayMode === "conversation",
-              );
-              const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isWaitingReply || detailState.isStillStreaming;
-              if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
-
-              return (
-                <>
-                  {detailState.hasRenderableContent ? (
-                    <ConversationMessageList
-                      messages={detailState.normalizedMessages}
-                      conversationId={activeConversation.id}
-                      onOpenImage={onOpenImage}
-                      formatTokenCount={formatTokenCount}
-                      showUserMessages={detailDisplayMode === "conversation"}
-                    />
-                  ) : null}
-                  {shouldShowInProgress && (
-                    <div className="thinking-indicator-fixed" role="status" aria-live="polite">
-                      <div className="thinking-dots" aria-hidden="true">
-                        <span />
-                        <span />
-                        <span />
-                      </div>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
+            conversationMessageList={detailDisplayMode === "focus" ? renderFocusModeContent() : renderConversationModeContent()}
           />
 
           <ConversationComposer

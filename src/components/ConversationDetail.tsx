@@ -62,18 +62,36 @@ export function ConversationDetail({
     setTitleInput(activeConversation.title);
   }, [activeConversation.title]);
 
-  // Auto scroll to bottom when entering conversation or when messages change
+  // Mode changes remount the content area, so wait for the new subtree before scrolling.
+  useEffect(() => {
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        const scrollContainer = aiResponseScrollRef.current;
+        if (!scrollContainer) return;
+        scrollContainer.scrollTo({
+          top: scrollContainer.scrollHeight,
+          behavior: "auto",
+        });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
+    };
+  }, [activeConversation.id, aiResponseScrollRef, displayMode]);
+
+  // Keep new incoming messages pinned to the latest reply by default.
   useEffect(() => {
     const scrollContainer = aiResponseScrollRef.current;
     if (!scrollContainer) return;
-    
-    // Use requestAnimationFrame to ensure content is rendered before scrolling
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
       scrollContainer.scrollTo({
         top: scrollContainer.scrollHeight,
         behavior: "auto",
       });
     });
+    return () => cancelAnimationFrame(frame);
   }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef]);
 
   return (
@@ -159,7 +177,7 @@ export function ConversationDetail({
 
       <div className="conversation-detail-scroll">
         <div className="conversation-window-page in-app">
-          <section className="conversation-turn-section">
+          <section className={`conversation-turn-section ${displayMode}-page`} key={`${activeConversation.id}-${displayMode}`}>
             {displayMode === "focus" ? (() => {
               const msgs = (activeConversation.previewMessages ?? []).filter((message) => !isInternalOpenClawMessage(message));
               const lastUserMsg = [...msgs].reverse().find((m) => m.role?.toLowerCase() === "user");

@@ -226,19 +226,25 @@ function StructuredMessageContent({
   return <>{elements}</>;
 }
 
-export function ConversationMessageList({
-  messages,
-  conversationId,
-  onOpenImage,
-  formatTokenCount,
-  showUserMessages = false,
-}: {
+type ConversationMessageListBaseProps = {
   messages: PreviewMessage[];
   conversationId: string;
   onOpenImage: (src: string) => void;
   formatTokenCount: (value?: number) => string;
-  showUserMessages?: boolean;
-}) {
+};
+
+type ConversationMessageListInternalProps = ConversationMessageListBaseProps & {
+  mode: "focus" | "conversation";
+};
+
+function ConversationMessageListInternal({
+  messages,
+  conversationId,
+  onOpenImage,
+  formatTokenCount,
+  mode,
+}: ConversationMessageListInternalProps) {
+  const showUserMessages = mode === "conversation";
   const { rows, lastAssistantMessage } = useMemo(() => {
     const normalizedMessages = messages
       .filter((message) => {
@@ -301,12 +307,12 @@ export function ConversationMessageList({
   }, [messages, showUserMessages]);
 
   return (
-    <>
+    <div className={`conversation-message-list ${mode}-mode`}>
       {rows.map((row, index) => {
         if (row.kind === "tool_group") {
           const mergedParts = row.items.flatMap((item) => item.message.parts ?? []);
           return (
-            <div className="message-stack tool-stack" key={`${conversationId}-tool-group-${index}`}>
+            <div className="message-stack assistant tool-stack" key={`${conversationId}-tool-group-${index}`}>
               <StructuredMessageContent
                 parts={mergedParts}
                 conversationId={`${conversationId}-tool-group-${index}`}
@@ -318,14 +324,15 @@ export function ConversationMessageList({
         }
 
         const { message } = row;
+        const messageRole = message.role?.toLowerCase() === "user" ? "user" : "assistant";
         const parts = message.parts?.length ? message.parts : [{ kind: "text", text: message.text } as MessagePart];
         return (
-          <div className="message-stack" key={`${conversationId}-message-${index}`}>
+          <div className={`message-stack ${messageRole}`} key={`${conversationId}-message-${index}`}>
             <StructuredMessageContent
               parts={parts}
               conversationId={`${conversationId}-${index}`}
               onOpenImage={onOpenImage}
-              imageVariant={message.role?.toLowerCase() === "user" ? "user" : "assistant"}
+              imageVariant={messageRole}
             />
           </div>
         );
@@ -342,6 +349,14 @@ export function ConversationMessageList({
           </span>
         </div>
       ) : null}
-    </>
+    </div>
   );
+}
+
+export function FocusAssistantMessageList(props: ConversationMessageListBaseProps) {
+  return <ConversationMessageListInternal {...props} mode="focus" />;
+}
+
+export function FullConversationMessageList(props: ConversationMessageListBaseProps) {
+  return <ConversationMessageListInternal {...props} mode="conversation" />;
 }

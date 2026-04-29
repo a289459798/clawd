@@ -11,9 +11,12 @@ export function extractUsageFromGatewayMessage(message?: GatewayMessage | null) 
 }
 
 export function stripInboundWrapperText(text: string) {
+  const metadataHeading = "(?:Conversation info|Sender|Chat history since last reply|Thread starter|Location)\\s+\\([^)]*(?:untrusted|for context)[^)]*\\):";
   return text
-    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*```json\n[\s\S]*?\n\s*```\n?/g, "")
-    .replace(/Sender\s+\(untrusted\s+metadata\):\s*\n\s*\{[\s\S]*?\n\s*\}\n?/g, "")
+    .replace(new RegExp(`${metadataHeading}\\s*\`\`\`json[\\s\\S]*?\`\`\`\\s*`, "gi"), "")
+    .replace(new RegExp(`${metadataHeading}\\s*\\n\\s*\`\`\`json\\n[\\s\\S]*?\\n\\s*\`\`\`\\n?`, "gi"), "")
+    .replace(new RegExp(`${metadataHeading}\\s*\\n\\s*\\{[\\s\\S]*?\\n\\s*\\}\\n?`, "gi"), "")
+    .replace(/Sender\s+\(untrusted\s+metadata\):\s*[^\n]*\n?/gi, "")
     .replace(/^\[[A-Za-z]+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*GMT[+-]\d+\]\s*/gm, "")
     .trim();
 }
@@ -61,13 +64,14 @@ export function extractTextFromGatewayMessage(message?: GatewayMessage | null) {
   }
   if (Array.isArray(message.content)) {
     if (message.content.length === 0) return "";
-    return message.content
+    const cleaned = stripInboundWrapperText(message.content
       .map((part) => {
         if (part.type === "text") return part.text ?? "";
         return "";
       })
       .join("\n")
-      .trim();
+      .trim());
+    return cleaned === "fetch failed" ? "" : cleaned;
   }
   return "";
 }
@@ -93,10 +97,9 @@ export function mapGatewayContentToParts(message?: GatewayMessage | null): Messa
   }
   if (Array.isArray(message.content)) {
     if (message.content.length === 0) return [];
-    return message.content.flatMap<MessagePart>((part) => {
+    const mappedParts = message.content.flatMap<MessagePart>((part) => {
       if (part.type === "text") {
-        const cleaned = stripInboundWrapperText(part.text ?? "");
-        return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+        return part.text ? [{ kind: "text", text: part.text }] : [];
       }
       if (part.type === "toolcall" || part.type === "toolCall") {
         return [{ kind: "tool_call", tool: part.name ?? "tool", args: typeof part.arguments === "string" ? part.arguments : JSON.stringify(part.arguments ?? {}, null, 2) }];
@@ -110,6 +113,11 @@ export function mapGatewayContentToParts(message?: GatewayMessage | null): Messa
         return src ? [{ kind: "image", data: src, mime_type: part.mimeType ?? part.mime_type, alt: part.text ?? part.alt }] : [];
       }
       return [];
+    });
+    return mergeStreamingParts(mappedParts).flatMap<MessagePart>((part) => {
+      if (part.kind !== "text") return [part];
+      const cleaned = stripInboundWrapperText(part.text);
+      return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
     });
   }
   if (typeof message.text === "string") {
