@@ -194,7 +194,10 @@ clawx 想解决的是以下几类需求：
 
 当前已实现：
 
-- 首次启动会先检查本机是否安装 OpenClaw；未安装时不进入主界面，并提示需先安装
+- 首次启动会先检查本机是否安装 OpenClaw；未安装时不进入主界面，并提供“立即安装”和“我已安装，重新检测”
+- “立即安装”会按当前平台打开系统终端并执行 OpenClaw 官方安装入口：
+  - macOS / Linux: 先运行 `curl -fsSL https://openclaw.ai/install.sh | bash`，失败时自动回退到 `curl -fsSL https://openclaw.ai/install-cli.sh | bash`
+  - Windows: `iwr -useb https://openclaw.ai/install.ps1 | iex`
 - 若已安装但 clawx 尚未绑定，会先征得用户同意，再把所需的 `gateway.controlUi.allowedOrigins` 配置写入 `~/.openclaw/openclaw.json`
 - 绑定完成后才进入主界面，避免出现“看得到 UI 但 Gateway 一直不可用”的假可用状态
 - 真实 agent 列表读取
@@ -365,9 +368,30 @@ clawx 的长期目标是做 OpenClaw 的本地桌面前端，而不是重新发�
 
 ### 桌面端
 - Tauri 2
-- Rust（当前仍基本是壳层）
+- Rust
 
-当前 Rust 端仍然很轻，后续需要承担更多 adapter / invoke bridge 的工作。
+Rust 端负责 Tauri 命令桥接、OpenClaw Gateway 代理、文件/目录选择、外部终端安装入口等能力。
+
+### 平台兼容开发规范
+
+clawx 的桌面能力必须兼容：
+
+- macOS
+- Windows
+
+Linux 当前保留基础兜底能力，但不是当前主要交付平台，也不能替代 macOS / Windows 的兼容性要求。
+
+平台相关逻辑集中在 Tauri 后端：
+
+- macOS 安装入口通过 Terminal 执行官方 shell 安装脚本
+- Windows 安装入口通过 PowerShell 执行官方 PowerShell 安装脚本
+- Linux 会尝试常见图形终端执行官方 shell 安装脚本
+
+安装脚本与系统要求以 OpenClaw 官方文档为准：
+
+- https://docs.openclaw.ai/install
+
+更完整的开发约束见根目录 `AGENTS.md`。
 
 ---
 
@@ -397,17 +421,51 @@ clawx 的长期目标是做 OpenClaw 的本地桌面前端，而不是重新发�
 
 ## 10. 本地开发
 
+### 前置要求
+
+通用：
+
+- Node.js 22.14+，推荐 Node 24
+- pnpm
+- Rust / Cargo
+
+macOS：
+
+- Xcode Command Line Tools
+- 系统 Terminal 可用
+
+Windows：
+
+- Windows 10/11
+- WebView2 Runtime
+- Microsoft C++ Build Tools
+- PowerShell 可用
+
+OpenClaw：
+
+- clawx 运行时依赖本机 OpenClaw Gateway
+- 推荐先按官方文档完成 OpenClaw 安装与 onboarding
+- 开发环境中也可以使用 OpenClaw 源码仓库，但当前 clawx 的安装检测仍以 `openclaw` 命令是否可用为准
+
 安装依赖：
 
 ```bash
 pnpm install
 ```
 
-启动前端开发环境：
+启动桌面开发环境：
 
 ```bash
 pnpm tauri dev
 ```
+
+仅启动前端开发环境：
+
+```bash
+pnpm dev
+```
+
+说明：仅前端模式适合看界面；涉及 Gateway、文件、安装入口、目录选择等能力时，需要运行 Tauri 桌面模式。
 
 仅构建前端：
 
@@ -420,6 +478,18 @@ pnpm build
 ```bash
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+### OpenClaw 安装引导
+
+如果启动时未检测到 OpenClaw，clawx 会停在引导页：
+
+- 点击“立即安装”：打开系统终端并运行对应平台的官方安装脚本
+- macOS / Linux 的标准安装器如果遇到全局 npm 权限问题，会自动回退到 local-prefix 安装器
+- local-prefix 安装后，`openclaw` 可能位于 `~/.openclaw/bin/openclaw`。clawx 会自动识别这个路径；如果希望在普通终端直接输入 `openclaw`，需要把 `~/.openclaw/bin` 加入 PATH
+- 安装完成后：回到 clawx 点击“我已安装，重新检测”
+- 检测通过后：继续进行 Gateway 绑定和连接测试
+
+当前安装入口只是启动官方安装流程，不会静默安装，也不会在后台隐藏安装输出。这样用户可以看到 OpenClaw onboarding 的提示、授权和错误信息。
 
 ---
 

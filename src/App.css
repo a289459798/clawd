@@ -80,6 +80,19 @@ body {
   font-size: 0.86rem;
 }
 
+.bootstrap-inline-status {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(82, 242, 197, 0.1);
+  color: rgba(244, 240, 230, 0.82);
+  font-size: 0.88rem;
+}
+
+.bootstrap-inline-status.danger {
+  background: rgba(240, 139, 125, 0.12);
+  color: #f0a39a;
+}
+
 .bootstrap-actions {
   display: flex;
   justify-content: flex-end;
@@ -2907,6 +2920,15 @@ p {
   line-height: 1.55;
 }
 
+.connection-card p {
+  display: -webkit-box;
+  min-height: 42px;
+  margin-top: 10px;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .skill-title {
   display: flex;
   align-items: center;
@@ -2964,35 +2986,104 @@ p {
   background: var(--green);
 }
 
-.skill-missing,
-.connection-config-key {
+.skill-missing {
   color: rgba(255, 255, 255, 0.38);
   font-size: 0.76rem;
 }
 
 .connection-list-panel {
   display: grid;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
 }
 
 .connection-card {
-  min-height: 128px;
+  min-height: 0;
+  padding: 14px;
+  border-radius: 10px;
 }
 
-.connection-card .card-row > div {
+.connection-card.is-checking {
+  border-color: rgba(82, 242, 197, 0.14);
+  background: linear-gradient(180deg, rgba(82, 242, 197, 0.045), rgba(25, 25, 25, 1) 46%);
+}
+
+.connection-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.connection-title-block {
   display: grid;
-  gap: 4px;
+  gap: 5px;
+  min-width: 0;
+}
+
+.connection-title-block strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 0.74rem;
+}
+
+.connection-meta-line span,
+.connection-meta-line code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-meta-line code {
+  color: rgba(82, 242, 197, 0.7);
+  font-size: 0.72rem;
+}
+
+.connection-version-line {
+  margin-top: 8px;
+  color: rgba(82, 242, 197, 0.72);
+  font-size: 0.76rem;
+}
+
+.channel-checking-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(82, 242, 197, 0.12);
+  color: rgba(82, 242, 197, 0.9);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.mini-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid rgba(82, 242, 197, 0.22);
+  border-top-color: rgba(82, 242, 197, 0.95);
+  animation: spin 0.72s linear infinite;
 }
 
 .connection-actions-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-end;
+  gap: 8px;
   margin-top: auto;
-  padding-top: 10px;
-  color: rgba(255, 255, 255, 0.42);
-  font-size: 0.8rem;
+  padding-top: 12px;
 }
 
 .connection-actions-row > div {
@@ -3003,23 +3094,19 @@ p {
   justify-content: flex-end;
 }
 
-.connection-actions-row code {
-  color: rgba(82, 242, 197, 0.76);
-  font-size: 0.76rem;
-}
-
 .connection-accounts {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .connection-accounts span {
-  padding: 4px 8px;
+  padding: 3px 7px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.58);
-  font-size: 0.76rem;
+  font-size: 0.72rem;
 }
 
 .ghost-link-button {
@@ -3033,6 +3120,19 @@ p {
   color: rgba(255, 255, 255, 0.72);
   text-decoration: none;
   font-size: 0.8rem;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.ghost-link-button.primary-action {
+  border-color: rgba(82, 242, 197, 0.35);
+  color: #52f2c5;
+  background: rgba(82, 242, 197, 0.08);
+}
+
+.ghost-link-button:disabled {
+  opacity: 0.48;
+  cursor: default;
 }
 
 .qr-login-panel {
@@ -4132,4 +4232,10 @@ p {
   border-bottom-left-radius: 10px;
   border-bottom-right-radius: 10px;
   background: rgba(255, 255, 255, 0.015);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

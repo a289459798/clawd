@@ -22,7 +22,7 @@ import { parseSenderMeta } from "./lib/messageMeta";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import type { Conversation, PreviewMessage } from "./types/conversation";
-import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill } from "./types/app";
+import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsStatusResult, GatewayHistoryResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
@@ -112,11 +112,12 @@ function App() {
   const [skills, setSkills] = useState<Skill[]>(fallbackSkills);
   const [connections, setConnections] = useState<ChannelConnection[]>(fallbackConnections);
   const [metadataLoading, setMetadataLoading] = useState(false);
+  const [weixinStatus, setWeixinStatus] = useState<WeixinPluginStatus | null>(null);
+  const [weixinBusy, setWeixinBusy] = useState(false);
+  const [weixinMessage, setWeixinMessage] = useState<string | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
-  const [weixinQrDataUrl, setWeixinQrDataUrl] = useState<string | null>(null);
-  const [weixinQrMessage, setWeixinQrMessage] = useState<string | null>(null);
   const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -177,6 +178,19 @@ function App() {
     }
   }, []);
 
+  const refreshWeixinPluginStatus = useCallback(async () => {
+    setWeixinBusy(true);
+    try {
+      const status = await invoke<WeixinPluginStatus>("weixin_plugin_status");
+      setWeixinStatus(status);
+    } catch (error) {
+      console.warn("Failed to refresh WeChat plugin status", error);
+      setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件状态检测失败");
+    } finally {
+      setWeixinBusy(false);
+    }
+  }, []);
+
   const refreshGatewayMetadata = useCallback(async () => {
     setMetadataLoading(true);
     try {
@@ -193,6 +207,37 @@ function App() {
       setMetadataLoading(false);
     }
   }, []);
+
+  const refreshGatewayConnections = useCallback(async () => {
+    setMetadataLoading(true);
+    try {
+      await invoke("gateway_connect");
+      const channelsResult = await invoke<GatewayChannelsStatusResult>("gateway_channels_status", {
+        params: { probe: false, timeoutMs: 2000 },
+      });
+      setConnections(mapGatewayChannels(channelsResult));
+    } catch (error) {
+      console.warn("Failed to refresh Gateway connections", error);
+    } finally {
+      setMetadataLoading(false);
+    }
+  }, []);
+
+  const ensureWeixinPluginEnabled = useCallback(async () => {
+    setWeixinBusy(true);
+    setWeixinMessage(null);
+    try {
+      const message = await invoke<string>("ensure_weixin_plugin_enabled");
+      setWeixinMessage(message);
+      await refreshWeixinPluginStatus();
+      await refreshGatewayMetadata();
+    } catch (error) {
+      console.error("Failed to enable WeChat plugin", error);
+      setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件启用失败");
+    } finally {
+      setWeixinBusy(false);
+    }
+  }, [refreshGatewayMetadata, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     void loadBootstrapStatus();
@@ -504,9 +549,6 @@ function App() {
 
   const handleNavChange = useCallback((nav: NavKey) => {
     if (nav === activeNav) return;
-    if (nav === "skills" || nav === "connections") {
-      setMetadataLoading(true);
-    }
     if (nav === "usage") {
       setUsageLoading(true);
     }
@@ -529,17 +571,6 @@ function App() {
     }
   }, []);
 
-  const handleWeixinLogin = useCallback(async () => {
-    setWeixinQrDataUrl(null);
-    setWeixinQrMessage("正在打开终端执行 openclaw channels login --channel openclaw-weixin ...");
-    try {
-      const message = await invoke<string>("open_weixin_login_terminal");
-      setWeixinQrMessage(message);
-    } catch (error) {
-      setWeixinQrMessage(error instanceof Error ? error.message : String(error));
-    }
-  }, [refreshGatewayMetadata]);
-
   const toggleOpenClawInfo = useCallback(() => {
     setOpenClawInfoOpen((current) => !current);
     if (!openClawInfoOpen) {
@@ -552,35 +583,37 @@ function App() {
       return;
     }
     let cancelled = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let frame: number | undefined;
+    const timeouts: Array<ReturnType<typeof setTimeout>> = [];
+    const frames: number[] = [];
 
-    const scheduleAfterPaint = (task: () => void) => {
-      frame = window.requestAnimationFrame(() => {
-        timeout = setTimeout(() => {
+    const scheduleAfterPaint = (task: () => void, delay = 0) => {
+      const frame = window.requestAnimationFrame(() => {
+        const timeout = setTimeout(() => {
           if (!cancelled) {
             task();
           }
-        }, 0);
+        }, delay);
+        timeouts.push(timeout);
       });
+      frames.push(frame);
     };
 
-    if (activeNav === "skills" || activeNav === "connections") {
+    if (activeNav === "skills") {
       scheduleAfterPaint(() => void refreshGatewayMetadata());
+    }
+    if (activeNav === "connections") {
+      scheduleAfterPaint(() => void refreshGatewayConnections());
+      scheduleAfterPaint(() => void refreshWeixinPluginStatus(), 350);
     }
     if (activeNav === "usage") {
       scheduleAfterPaint(() => void refreshUsage());
     }
     return () => {
       cancelled = true;
-      if (frame !== undefined) {
-        window.cancelAnimationFrame(frame);
-      }
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      frames.forEach((frame) => window.cancelAnimationFrame(frame));
+      timeouts.forEach((timeout) => clearTimeout(timeout));
     };
-  }, [activeNav, bootstrapStep, refreshGatewayMetadata, refreshUsage]);
+  }, [activeNav, bootstrapStep, refreshGatewayConnections, refreshGatewayMetadata, refreshUsage, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     if (bootstrapStep !== "ready") {
@@ -598,6 +631,26 @@ function App() {
     }));
     await refreshGatewayMetadata();
   }, [loadGatewaySnapshot, refreshGatewayMetadata]);
+
+  const runWeixinTerminalAction = useCallback(async (command: "open_weixin_plugin_install_terminal" | "open_weixin_plugin_update_terminal" | "open_weixin_login_terminal") => {
+    setWeixinBusy(true);
+    setWeixinMessage(null);
+    try {
+      const message = await invoke<string>(command);
+      setWeixinMessage(message);
+      if (command !== "open_weixin_login_terminal") {
+        window.setTimeout(() => {
+          void refreshWeixinPluginStatus();
+          void refreshGatewayMetadata();
+        }, 1500);
+      }
+    } catch (error) {
+      console.error(`Failed to run ${command}`, error);
+      setWeixinMessage(error instanceof Error ? error.message : "WeChat 操作失败");
+    } finally {
+      setWeixinBusy(false);
+    }
+  }, [refreshGatewayMetadata, refreshWeixinPluginStatus]);
 
   const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string }) => {
     setAgentCreating(true);
@@ -1187,9 +1240,14 @@ function App() {
             connections={connections}
             connectionLabel={connectionLabel}
             loading={metadataLoading}
-            qrDataUrl={weixinQrDataUrl}
-            qrMessage={weixinQrMessage}
-            onWeixinLogin={() => void handleWeixinLogin()}
+            weixinStatus={weixinStatus}
+            weixinBusy={weixinBusy}
+            weixinMessage={weixinMessage}
+            onRefreshWeixinStatus={() => void refreshWeixinPluginStatus()}
+            onEnableWeixin={() => void ensureWeixinPluginEnabled()}
+            onInstallWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_install_terminal")}
+            onUpdateWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_update_terminal")}
+            onLoginWeixin={() => void runWeixinTerminalAction("open_weixin_login_terminal")}
           />
         ) : null}
 

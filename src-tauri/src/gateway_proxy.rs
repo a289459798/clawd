@@ -4,6 +4,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpStream;
@@ -361,7 +362,7 @@ fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
         private_key_pem: Option<String>,
     }
 
-    let stored = if identity_path.exists() {
+    let mut stored = if identity_path.exists() {
         let content = fs::read_to_string(&identity_path)
             .map_err(|error| format!("failed to read {}: {error}", identity_path.display()))?;
         match serde_json::from_str::<StoredDeviceIdentity>(&content) {
@@ -386,8 +387,9 @@ fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
         }
     } else {
         let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key: VerifyingKey = signing_key.verifying_key();
         let stored = StoredDeviceIdentity {
-            device_id: format!("clawx-{}", rand::random::<u64>()),
+            device_id: device_id_from_public_key_bytes(&verifying_key.to_bytes()),
             private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
         };
         let content = serde_json::to_string_pretty(&stored)
@@ -405,13 +407,29 @@ fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
         .map_err(|_| "stored private key must be 32 bytes".to_string())?;
     let signing_key = SigningKey::from_bytes(&private_key_array);
     let verifying_key: VerifyingKey = signing_key.verifying_key();
-    let public_key = URL_SAFE_NO_PAD.encode(verifying_key.to_bytes());
+    let public_key_bytes = verifying_key.to_bytes();
+    let public_key = URL_SAFE_NO_PAD.encode(public_key_bytes);
+    let expected_device_id = device_id_from_public_key_bytes(&public_key_bytes);
+    if stored.device_id != expected_device_id {
+        stored.device_id = expected_device_id.clone();
+        let content = serde_json::to_string_pretty(&stored)
+            .map_err(|error| format!("failed to serialize repaired device identity: {error}"))?;
+        fs::write(&identity_path, content)
+            .map_err(|error| format!("failed to write {}: {error}", identity_path.display()))?;
+    }
 
     Ok(DeviceIdentity {
         device_id: stored.device_id,
         public_key,
         signing_key,
     })
+}
+
+fn device_id_from_public_key_bytes(public_key: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(public_key);
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn sign_connect_payload_v3(

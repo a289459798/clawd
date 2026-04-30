@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -121,6 +121,17 @@ struct ClawxBootstrapStatus {
     binding_writes: Vec<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WeixinPluginStatus {
+    installed: bool,
+    enabled: bool,
+    installed_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: bool,
+    latest_check_error: Option<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSessionPatch {
@@ -156,8 +167,14 @@ struct RealtimeState {
 }
 
 fn openclaw_config_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    Ok(PathBuf::from(home).join(".openclaw/openclaw.json"))
+    Ok(home_dir()?.join(".openclaw/openclaw.json"))
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .map_err(|error| format!("home directory not found: {error}"))
 }
 
 fn clawx_recommended_origin() -> String {
@@ -167,6 +184,63 @@ fn clawx_recommended_origin() -> String {
 fn sessions_store_path(agent_id: &str) -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
     Ok(PathBuf::from(home).join(format!(".openclaw/agents/{agent_id}/sessions/sessions.json")))
+}
+
+fn local_prefix_openclaw_path() -> Option<PathBuf> {
+    let home = home_dir().ok()?;
+    let bin_dir = home.join(".openclaw/bin");
+    let candidates = if cfg!(windows) {
+        vec![bin_dir.join("openclaw.cmd"), bin_dir.join("openclaw.exe"), bin_dir.join("openclaw")]
+    } else {
+        vec![bin_dir.join("openclaw")]
+    };
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn resolve_openclaw_command() -> Option<PathBuf> {
+    if cfg!(windows) {
+        let path_output = Command::new("cmd")
+            .args(["/C", "where", "openclaw"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(PathBuf::from)
+            });
+
+        return path_output.or_else(local_prefix_openclaw_path);
+    }
+
+    let path_output = Command::new("sh")
+        .arg("-lc")
+        .arg("command -v openclaw")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { None } else { Some(PathBuf::from(path)) }
+        });
+
+    path_output.or_else(local_prefix_openclaw_path)
+}
+
+fn run_openclaw_command(args: &[&str]) -> Result<Output, String> {
+    let command_path = resolve_openclaw_command().ok_or_else(|| {
+        "OpenClaw command not found. Expected openclaw in PATH or ~/.openclaw/bin/openclaw".to_string()
+    })?;
+    Command::new(&command_path)
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run {} {}: {error}", command_path.display(), args.join(" ")))
 }
 
 fn session_title_from_key(key: &str) -> String {
@@ -786,10 +860,7 @@ fn unsubscribe_gateway_realtime(subscription_id: u64, state: State<Arc<RealtimeS
 
 #[tauri::command]
 fn resolve_dashboard_url() -> Result<String, String> {
-    let output = Command::new("openclaw")
-        .args(["dashboard", "--no-open"])
-        .output()
-        .map_err(|error| format!("failed to run openclaw dashboard --no-open: {error}"))?;
+    let output = run_openclaw_command(&["dashboard", "--no-open"])?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -933,18 +1004,17 @@ fn load_session_record(session_key: String) -> Result<SessionRecordResult, Strin
 #[tauri::command]
 fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
-    let openclaw_path = Command::new("sh")
-        .arg("-lc")
-        .arg("command -v openclaw")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() { None } else { Some(path) }
-        });
+    let openclaw_path = resolve_openclaw_command()
+        .filter(|path| {
+            Command::new(path)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        })
+        .map(|path| path.display().to_string());
 
     let config_exists = config_path.exists();
     let mut binding_configured = false;
@@ -1069,18 +1139,283 @@ fn pick_workspace_directory() -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn open_weixin_login_terminal() -> Result<String, String> {
+    let login_command = openclaw_terminal_command(&["channels", "login", "--channel", "openclaw-weixin"])?;
+    open_terminal_command(&login_command, "openclaw-weixin login")?;
+    Ok("已打开终端，请在终端中扫描 openclaw-weixin 登录二维码。".to_string())
+}
+
+fn applescript_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
+    let command_path = resolve_openclaw_command().ok_or_else(|| {
+        "OpenClaw command not found. Expected openclaw in PATH or ~/.openclaw/bin/openclaw".to_string()
+    })?;
+    let quote = if cfg!(windows) { powershell_quote } else { shell_quote };
+    let mut parts = vec![quote(&command_path.to_string_lossy())];
+    parts.extend(args.iter().map(|arg| quote(arg)));
+    Ok(parts.join(" "))
+}
+
+fn open_terminal_command_macos(command_line: &str, label: &str) -> Result<(), String> {
     let status = Command::new("osascript")
         .arg("-e")
-        .arg("tell application \"Terminal\" to do script \"openclaw channels login --channel openclaw-weixin\"")
+        .arg(format!("tell application \"Terminal\" to do script {}", applescript_quote(command_line)))
         .arg("-e")
         .arg("tell application \"Terminal\" to activate")
         .status()
         .map_err(|error| format!("failed to open Terminal: {error}"))?;
     if status.success() {
-        Ok("已打开终端，请在终端中扫描 openclaw-weixin 登录二维码。".to_string())
+        Ok(())
     } else {
-        Err(format!("openclaw-weixin login terminal exited with status {status}"))
+        Err(format!("{label} terminal exited with status {status}"))
     }
+}
+
+fn open_terminal_command_windows(command_line: &str, label: &str) -> Result<(), String> {
+    let status = Command::new("powershell")
+        .args(["-NoExit", "-ExecutionPolicy", "Bypass", "-Command", command_line])
+        .status()
+        .map_err(|error| format!("failed to open PowerShell: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{label} PowerShell exited with status {status}"))
+    }
+}
+
+fn open_terminal_command_linux(command_line: &str, label: &str) -> Result<(), String> {
+    let terminal_candidates: [(&str, &[&str]); 5] = [
+        ("x-terminal-emulator", &["-e", "sh", "-lc"]),
+        ("gnome-terminal", &["--", "sh", "-lc"]),
+        ("konsole", &["-e", "sh", "-lc"]),
+        ("xfce4-terminal", &["-e", "sh", "-lc"]),
+        ("xterm", &["-e", "sh", "-lc"]),
+    ];
+
+    for (program, args) in terminal_candidates {
+        let mut command = Command::new(program);
+        command.args(args).arg(command_line);
+        match command.status() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(_) => continue,
+            Err(_) => continue,
+        }
+    }
+
+    Err(format!("failed to open a terminal for {label}"))
+}
+
+fn open_terminal_command(command_line: &str, label: &str) -> Result<(), String> {
+    match std::env::consts::OS {
+        "macos" => open_terminal_command_macos(command_line, label),
+        "windows" => open_terminal_command_windows(command_line, label),
+        "linux" => open_terminal_command_linux(command_line, label),
+        other => Err(format!("unsupported platform for terminal command: {other}")),
+    }
+}
+
+fn npm_command_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" }));
+
+    if let Ok(home) = home_dir() {
+        if let Ok(entries) = fs::read_dir(home.join(".openclaw/tools")) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if !name.starts_with("node-v") {
+                    continue;
+                }
+                let npm_path = if cfg!(windows) {
+                    path.join("npm.cmd")
+                } else {
+                    path.join("bin/npm")
+                };
+                if npm_path.is_file() {
+                    candidates.push(npm_path);
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+fn latest_npm_package_version(package_name: &str) -> Result<String, String> {
+    let mut errors = Vec::new();
+    for npm in npm_command_candidates() {
+        let output = Command::new(&npm)
+            .args(["view", package_name, "version", "--json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        let Ok(output) = output else {
+            errors.push(format!("{}: command failed to start", npm.display()));
+            continue;
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            errors.push(if stderr.is_empty() { format!("{} exited with {}", npm.display(), output.status) } else { stderr });
+            continue;
+        }
+        let raw = String::from_utf8_lossy(&output.stdout).trim().trim_matches('"').to_string();
+        if !raw.is_empty() {
+            return Ok(raw);
+        }
+    }
+    Err(if errors.is_empty() { "npm command not found".to_string() } else { errors.join("; ") })
+}
+
+fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
+    let parse = |value: &str| {
+        value
+            .split(|character: char| character == '.' || character == '-' || character == '+')
+            .take(3)
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    let mut left_parts = parse(left);
+    let mut right_parts = parse(right);
+    left_parts.resize(3, 0);
+    right_parts.resize(3, 0);
+    left_parts.cmp(&right_parts)
+}
+
+fn installed_plugin_from_registry(plugin_id: &str, package_name: &str) -> Option<(String, bool)> {
+    let output = run_openclaw_command(&["plugins", "list", "--json"]).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let json: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let plugins = json.get("plugins").and_then(Value::as_array)?;
+    plugins.iter().find_map(|plugin| {
+        let id_matches = plugin.get("id").and_then(Value::as_str) == Some(plugin_id);
+        let name_matches = plugin.get("name").and_then(Value::as_str) == Some(package_name);
+        if !id_matches && !name_matches {
+            return None;
+        }
+        let version = plugin.get("version").and_then(Value::as_str).unwrap_or("").to_string();
+        let enabled = plugin.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        Some((version, enabled))
+    })
+}
+
+fn weixin_plugin_status_blocking() -> WeixinPluginStatus {
+    const PACKAGE_NAME: &str = "@tencent-weixin/openclaw-weixin";
+    const PLUGIN_ID: &str = "openclaw-weixin";
+
+    let installed = installed_plugin_from_registry(PLUGIN_ID, PACKAGE_NAME);
+    let (latest_version, latest_check_error) = if installed.is_some() {
+        match latest_npm_package_version(PACKAGE_NAME) {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
+
+    let installed_version = installed.as_ref().map(|(version, _)| version.clone()).filter(|version| !version.is_empty());
+    let update_available = installed_version
+        .as_deref()
+        .zip(latest_version.as_deref())
+        .map(|(installed, latest)| compare_semver(installed, latest) == std::cmp::Ordering::Less)
+        .unwrap_or(false);
+
+    WeixinPluginStatus {
+        installed: installed.is_some(),
+        enabled: installed.as_ref().map(|(_, enabled)| *enabled).unwrap_or(false),
+        installed_version,
+        latest_version,
+        update_available,
+        latest_check_error,
+    }
+}
+
+#[tauri::command]
+async fn weixin_plugin_status() -> Result<WeixinPluginStatus, String> {
+    tauri::async_runtime::spawn_blocking(weixin_plugin_status_blocking)
+        .await
+        .map_err(|error| format!("failed to check WeChat plugin status: {error}"))
+}
+
+fn ensure_weixin_plugin_enabled_blocking() -> Result<String, String> {
+    let enable_output = run_openclaw_command(&["config", "set", "plugins.entries.openclaw-weixin.enabled", "true"])?;
+    if !enable_output.status.success() {
+        return Err(String::from_utf8_lossy(&enable_output.stderr).trim().to_string());
+    }
+
+    let restart_output = run_openclaw_command(&["gateway", "restart"])?;
+    if !restart_output.status.success() {
+        let stderr = String::from_utf8_lossy(&restart_output.stderr).trim().to_string();
+        return Ok(if stderr.is_empty() {
+            "WeChat 插件已启用，但 Gateway 重启状态未知。".to_string()
+        } else {
+            format!("WeChat 插件已启用，但 Gateway 重启失败：{stderr}")
+        });
+    }
+
+    Ok("WeChat 插件已启用，并已重启 Gateway。".to_string())
+}
+
+#[tauri::command]
+async fn ensure_weixin_plugin_enabled() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(ensure_weixin_plugin_enabled_blocking)
+        .await
+        .map_err(|error| format!("failed to enable WeChat plugin: {error}"))?
+}
+
+#[tauri::command]
+fn open_weixin_plugin_install_terminal() -> Result<String, String> {
+    if installed_plugin_from_registry("openclaw-weixin", "@tencent-weixin/openclaw-weixin").is_some() {
+        return ensure_weixin_plugin_enabled_blocking();
+    }
+
+    let install = openclaw_terminal_command(&["plugins", "install", "npm:@tencent-weixin/openclaw-weixin"])?;
+    let enable = openclaw_terminal_command(&["config", "set", "plugins.entries.openclaw-weixin.enabled", "true"])?;
+    let restart = openclaw_terminal_command(&["gateway", "restart"])?;
+    let command_line = if cfg!(windows) {
+        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {enable}; {restart}; Write-Host 'WeChat plugin installed. Return to clawx and refresh connections.' }}")
+    } else {
+        format!("{install} && {enable} && {restart}; echo 'WeChat plugin install flow finished. Return to clawx and refresh connections.'")
+    };
+    open_terminal_command(&command_line, "openclaw-weixin install")?;
+    Ok("已打开终端安装 WeChat 插件。安装完成后请回到连接页刷新状态。".to_string())
+}
+
+#[tauri::command]
+fn open_weixin_plugin_update_terminal() -> Result<String, String> {
+    let update = openclaw_terminal_command(&["plugins", "update", "@tencent-weixin/openclaw-weixin"])?;
+    let restart = openclaw_terminal_command(&["gateway", "restart"])?;
+    let command_line = if cfg!(windows) {
+        format!("{update}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'WeChat plugin updated. Return to clawx and refresh connections.' }}")
+    } else {
+        format!("{update} && {restart}; echo 'WeChat plugin update flow finished. Return to clawx and refresh connections.'")
+    };
+    open_terminal_command(&command_line, "openclaw-weixin update")?;
+    Ok("已打开终端更新 WeChat 插件。更新完成后请回到连接页刷新状态。".to_string())
+}
+
+#[tauri::command]
+fn open_openclaw_install_terminal() -> Result<String, String> {
+    let install_command = if cfg!(windows) {
+        "iwr -useb https://openclaw.ai/install.ps1 | iex"
+    } else {
+        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw install finished. Return to clawx and click re-detect.'; else echo 'Standard installer failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
+    };
+    open_terminal_command(install_command, "OpenClaw install")?;
+    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 clawx 重新检测。".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1125,7 +1460,12 @@ pub fn run() {
             gateway_proxy::gateway_sessions_create,
             gateway_proxy::gateway_sessions_patch,
             pick_workspace_directory,
+            weixin_plugin_status,
+            ensure_weixin_plugin_enabled,
             open_weixin_login_terminal,
+            open_weixin_plugin_install_terminal,
+            open_weixin_plugin_update_terminal,
+            open_openclaw_install_terminal,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])

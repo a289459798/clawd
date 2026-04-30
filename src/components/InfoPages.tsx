@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import type { ChannelConnection, Skill } from "../types/app";
+import { useMemo } from "react";
+import type { ChannelConnection, Skill, WeixinPluginStatus } from "../types/app";
 import type { GatewaySessionsUsageResult, GatewayUsageTotals } from "../types/gateway";
 
 const supportedChannels = [
@@ -49,51 +49,6 @@ const connectionRank: Record<ChannelConnection["status"], number> = {
   disabled: 2,
 };
 
-const channelConfigFields: Record<string, Array<{ key: string; label: string; secret?: boolean }>> = {
-  feishu: [
-    { key: "enabled", label: "启用" },
-    { key: "appId", label: "App ID" },
-    { key: "appSecret", label: "App Secret", secret: true },
-    { key: "verificationToken", label: "Verification Token", secret: true },
-    { key: "encryptKey", label: "Encrypt Key", secret: true },
-    { key: "groupPolicy", label: "群聊策略" },
-  ],
-  "openclaw-weixin": [
-    { key: "enabled", label: "启用" },
-    { key: "accountId", label: "账号 ID" },
-    { key: "stateDir", label: "登录状态目录" },
-  ],
-  whatsapp: [
-    { key: "enabled", label: "启用" },
-    { key: "sessionDir", label: "会话状态目录" },
-    { key: "dmPolicy", label: "私聊策略" },
-  ],
-  telegram: [
-    { key: "enabled", label: "启用" },
-    { key: "botToken", label: "Bot Token", secret: true },
-    { key: "groupPolicy", label: "群聊策略" },
-  ],
-  discord: [
-    { key: "enabled", label: "启用" },
-    { key: "botToken", label: "Bot Token", secret: true },
-    { key: "applicationId", label: "Application ID" },
-  ],
-  slack: [
-    { key: "enabled", label: "启用" },
-    { key: "botToken", label: "Bot Token", secret: true },
-    { key: "appToken", label: "App Token", secret: true },
-    { key: "signingSecret", label: "Signing Secret", secret: true },
-  ],
-};
-
-function getChannelFields(id: string) {
-  return channelConfigFields[id] ?? [
-    { key: "enabled", label: "启用" },
-    { key: "accountId", label: "账号 ID" },
-    { key: "allowFrom", label: "允许来源" },
-  ];
-}
-
 export function SkillsPage({
   skills,
   loading,
@@ -137,18 +92,27 @@ export function ConnectionsPage({
   connections,
   connectionLabel,
   loading,
-  qrDataUrl,
-  qrMessage,
-  onWeixinLogin,
+  weixinStatus,
+  weixinBusy,
+  weixinMessage,
+  onRefreshWeixinStatus,
+  onEnableWeixin,
+  onInstallWeixin,
+  onUpdateWeixin,
+  onLoginWeixin,
 }: {
   connections: ChannelConnection[];
   connectionLabel: Record<ChannelConnection["status"], string>;
   loading: boolean;
-  qrDataUrl: string | null;
-  qrMessage: string | null;
-  onWeixinLogin: () => void;
+  weixinStatus: WeixinPluginStatus | null;
+  weixinBusy: boolean;
+  weixinMessage: string | null;
+  onRefreshWeixinStatus: () => void;
+  onEnableWeixin: () => void;
+  onInstallWeixin: () => void;
+  onUpdateWeixin: () => void;
+  onLoginWeixin: () => void;
 }) {
-  const [configuring, setConfiguring] = useState<(ChannelConnection & { docsUrl?: string; packageName?: string }) | null>(null);
   const connectionMap = new Map(connections.map((connection) => [connection.id, connection]));
   const rows = supportedChannels.map((channel) => {
     const gatewayConnection = connectionMap.get(channel.id);
@@ -169,88 +133,98 @@ export function ConnectionsPage({
     <section className="single-page">
       {loading ? <div className="inline-page-status">正在同步连接状态...</div> : null}
       <div className="connection-list-panel">
-        {rows.map((connection) => (
-          <article className="info-card connection-card" key={connection.id}>
-            <div className="card-row">
-              <div>
-                <strong>{connection.name}</strong>
-                <span className="connection-config-key">{connection.config}</span>
+        {rows.map((connection) => {
+          const isWeixin = connection.id === "openclaw-weixin";
+          const displayStatus = isWeixin && weixinStatus?.enabled && connection.status === "disabled" ? "warning" : connection.status;
+          const displayStatusLabel = isWeixin && weixinStatus?.enabled && connection.status !== "connected"
+            ? "已启用"
+            : connectionLabel[connection.status];
+          const weixinVersionText = weixinStatus?.installed
+            ? [
+                weixinStatus.installedVersion ? `已安装 v${weixinStatus.installedVersion}` : "已安装",
+                weixinStatus.latestVersion ? `最新 v${weixinStatus.latestVersion}` : weixinStatus.latestCheckError ? "最新版检测失败" : null,
+              ].filter(Boolean).join(" · ")
+            : weixinBusy
+              ? "正在检测安装状态..."
+            : "未安装";
+
+          return (
+            <article className={`info-card connection-card ${isWeixin && weixinBusy ? "is-checking" : ""}`} key={connection.id}>
+              <div className="connection-card-head">
+                <div className="connection-title-block">
+                  <strong>{connection.name}</strong>
+                  <div className="connection-meta-line">
+                    {connection.packageName ? <code>{connection.packageName}</code> : null}
+                  </div>
+                </div>
+                {isWeixin && weixinBusy ? (
+                  <span className="channel-checking-pill"><span className="mini-spinner" />检测中</span>
+                ) : (
+                  <span className={`toggle-badge ${displayStatus}`}>{displayStatusLabel}</span>
+                )}
               </div>
-              <span className={`toggle-badge ${connection.status}`}>{connectionLabel[connection.status]}</span>
-            </div>
-            <p>{connection.detail}</p>
-            {connection.accounts?.length ? (
-              <div className="connection-accounts">
-                {connection.accounts.map((account) => (
-                  <span key={account.accountId}>
-                    {account.name || account.accountId} · {account.connected ? "已连接" : account.configured ? "已配置" : "待配置"}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            <div className="connection-actions-row">
-              <span>{connection.activity}</span>
-              <div>
-                {connection.packageName ? <code>{connection.packageName}</code> : null}
-                <button className="ghost-button tiny-button" type="button" onClick={() => setConfiguring(connection)}>
-                  配置
-                </button>
-                {connection.id === "openclaw-weixin" ? (
-                  <button className="ghost-button tiny-button" type="button" onClick={onWeixinLogin}>
-                    查看二维码
-                  </button>
-                ) : null}
-                {connection.docsUrl ? (
-                  <a className="ghost-link-button" href={connection.docsUrl} target="_blank" rel="noreferrer">
-                    文档
-                  </a>
-                ) : null}
-              </div>
-            </div>
-          </article>
-        ))}
-      </div>
-      {qrDataUrl || qrMessage ? (
-        <div className="qr-login-panel">
-          <div>
-            <strong>微信扫码登录</strong>
-            <p>{qrMessage || "请使用微信扫描二维码完成插件登录。"}</p>
-          </div>
-          {qrDataUrl ? <img src={qrDataUrl} alt="微信登录二维码" /> : null}
-        </div>
-      ) : null}
-      {configuring ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setConfiguring(null)}>
-          <section className="channel-config-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="agent-create-header">
-              <div>
-                <h2>{configuring.name} 配置</h2>
-                <span>{configuring.config}</span>
-              </div>
-              <button className="icon-only-button" type="button" onClick={() => setConfiguring(null)} title="关闭">×</button>
-            </div>
-            <div className="channel-config-body">
-              {getChannelFields(configuring.id).map((field) => (
-                <label key={field.key}>
-                  <span>{field.label}</span>
-                  <input type={field.secret ? "password" : "text"} placeholder={`${configuring.config}.${field.key}`} />
-                </label>
-              ))}
-              {configuring.id === "openclaw-weixin" ? (
-                <div className="channel-config-note">
-                  需要安装 <code>@tencent-weixin/openclaw-weixin</code>，安装后可通过二维码登录。
+              <p>{connection.detail}</p>
+              {isWeixin ? <div className="connection-version-line">{weixinVersionText}</div> : null}
+              {connection.accounts?.length ? (
+                <div className="connection-accounts">
+                  {connection.accounts.map((account) => (
+                    <span key={account.accountId}>
+                      {account.name || account.accountId} · {account.connected ? "已连接" : account.configured ? "已配置" : "待配置"}
+                    </span>
+                  ))}
                 </div>
               ) : null}
-            </div>
-            <div className="agent-create-actions">
-              {configuring.docsUrl ? (
-                <a className="ghost-link-button" href={configuring.docsUrl} target="_blank" rel="noreferrer">查看文档</a>
+              <div className="connection-actions-row">
+                <div>
+                  {isWeixin ? (
+                    <>
+                      <button className="ghost-link-button" type="button" onClick={onRefreshWeixinStatus} disabled={weixinBusy}>
+                        {weixinBusy ? "检测中" : "重新检测"}
+                      </button>
+                      {weixinStatus?.installed ? (
+                        <>
+                          {!weixinStatus.enabled ? (
+                            <button className="ghost-link-button primary-action" type="button" onClick={onEnableWeixin} disabled={weixinBusy}>
+                              启用
+                            </button>
+                          ) : null}
+                          {weixinStatus.enabled && weixinStatus.updateAvailable ? (
+                            <button className="ghost-link-button primary-action" type="button" onClick={onUpdateWeixin} disabled={weixinBusy}>
+                              更新
+                            </button>
+                          ) : null}
+                          {weixinStatus.enabled ? (
+                            <button className="ghost-link-button primary-action" type="button" onClick={onLoginWeixin} disabled={weixinBusy}>
+                              登录
+                            </button>
+                          ) : null}
+                        </>
+                      ) : (
+                        <button className="ghost-link-button primary-action" type="button" onClick={onInstallWeixin} disabled={weixinBusy}>
+                          安装
+                        </button>
+                      )}
+                    </>
+                  ) : null}
+                  {connection.docsUrl ? (
+                    <a className="ghost-link-button" href={connection.docsUrl} target="_blank" rel="noreferrer">
+                      文档
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+              {isWeixin && weixinMessage ? (
+                <div className="qr-login-panel">
+                  <div>
+                    <strong>WeChat 登录</strong>
+                    <p>{weixinMessage}</p>
+                  </div>
+                </div>
               ) : null}
-              <button className="primary-action-button" type="button" onClick={() => setConfiguring(null)}>完成</button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }

@@ -71,6 +71,15 @@ export type ClawxBootstrapStatus = {
   bindingWrites: string[];
 };
 
+export type WeixinPluginStatus = {
+  installed: boolean;
+  enabled: boolean;
+  installedVersion?: string | null;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  latestCheckError?: string | null;
+};
+
 export type ComposerAttachment = {
   id: string;
   name: string;

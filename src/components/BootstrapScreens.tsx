@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ClawxBootstrapStatus } from "../types/app";
 
 type BootstrapScreensProps = {
@@ -23,6 +25,24 @@ export function BootstrapScreens({
   onBindOpenClaw,
   onSetBootstrapStep,
 }: BootstrapScreensProps) {
+  const [installingOpenClaw, setInstallingOpenClaw] = useState(false);
+  const [installMessage, setInstallMessage] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+
+  const startOpenClawInstall = async () => {
+    setInstallingOpenClaw(true);
+    setInstallError(null);
+    setInstallMessage(null);
+    try {
+      const message = await invoke<string>("open_openclaw_install_terminal");
+      setInstallMessage(message);
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setInstallingOpenClaw(false);
+    }
+  };
+
   if (bootstrapLoading) {
     return (
       <main className="bootstrap-screen">
@@ -64,9 +84,14 @@ export function BootstrapScreens({
             <span>步骤 2/3，等待安装 OpenClaw</span>
             <span>期望配置路径: {bootstrapStatus?.configPath ?? "~/.openclaw/openclaw.json"}</span>
           </div>
+          {installMessage ? <p className="bootstrap-inline-status">{installMessage}</p> : null}
+          {installError ? <p className="bootstrap-inline-status danger">{installError}</p> : null}
           <div className="bootstrap-actions">
             <button className="ghost-button" type="button" onClick={onLoadBootstrapStatus}>
               我已安装，重新检测
+            </button>
+            <button className="primary-button" type="button" onClick={() => void startOpenClawInstall()} disabled={installingOpenClaw}>
+              {installingOpenClaw ? "正在打开终端..." : "立即安装"}
             </button>
           </div>
         </div>
