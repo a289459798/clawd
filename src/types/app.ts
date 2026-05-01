@@ -80,6 +80,15 @@ export type WeixinPluginStatus = {
   latestCheckError?: string | null;
 };
 
+export type OpenClawCliStatus = {
+  installed: boolean;
+  path?: string | null;
+  installedVersion?: string | null;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  latestCheckError?: string | null;
+};
+
 export type ComposerAttachment = {
   id: string;
   name: string;

@@ -22,7 +22,7 @@ import { parseSenderMeta } from "./lib/messageMeta";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import type { Conversation, PreviewMessage } from "./types/conversation";
-import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
+import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsStatusResult, GatewayHistoryResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
@@ -119,6 +119,9 @@ function App() {
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
+  const [openClawCliStatus, setOpenClawCliStatus] = useState<OpenClawCliStatus | null>(null);
+  const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
+  const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
   const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -516,6 +519,33 @@ function App() {
     }
   }, [refreshGatewayStatus]);
 
+  const refreshOpenClawCliStatus = useCallback(async () => {
+    try {
+      const status = await invoke<OpenClawCliStatus>("openclaw_cli_status");
+      setOpenClawCliStatus(status);
+    } catch (error) {
+      console.warn("Failed to load OpenClaw CLI version status", error);
+    }
+  }, []);
+
+  const runOpenClawUpdate = useCallback(async () => {
+    setOpenClawUpdateBusy(true);
+    setOpenClawUpdateMessage(null);
+    try {
+      const message = await invoke<string>("open_openclaw_update_terminal");
+      setOpenClawUpdateMessage(message);
+      window.setTimeout(() => {
+        void refreshOpenClawCliStatus();
+        void refreshOpenClawStatus();
+      }, 1500);
+    } catch (error) {
+      console.error("Failed to open OpenClaw update terminal", error);
+      setOpenClawUpdateMessage(error instanceof Error ? error.message : "OpenClaw 更新失败");
+    } finally {
+      setOpenClawUpdateBusy(false);
+    }
+  }, [refreshOpenClawCliStatus, refreshOpenClawStatus]);
+
   const openLocalOpenClaw = async () => {
     try {
       const dashboardUrl = await invoke<string>("resolve_dashboard_url");
@@ -577,8 +607,9 @@ function App() {
     setOpenClawInfoOpen((current) => !current);
     if (!openClawInfoOpen) {
       void refreshOpenClawStatus();
+      void refreshOpenClawCliStatus();
     }
-  }, [openClawInfoOpen, refreshOpenClawStatus]);
+  }, [openClawInfoOpen, refreshOpenClawCliStatus, refreshOpenClawStatus]);
 
   useEffect(() => {
     if (bootstrapStep !== "ready") {
@@ -622,7 +653,8 @@ function App() {
       return;
     }
     void refreshOpenClawStatus();
-  }, [bootstrapStep, refreshOpenClawStatus]);
+    void refreshOpenClawCliStatus();
+  }, [bootstrapStep, refreshOpenClawCliStatus, refreshOpenClawStatus]);
 
   const refreshGatewaySnapshot = useCallback(async (options?: { priorityAgentId?: string }) => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
@@ -1172,6 +1204,7 @@ function App() {
           onNavChange={handleNavChange}
           gatewayConnected={gatewayConnected}
           gatewayVersion={openClawStatus?.runtimeVersion}
+          updateAvailable={openClawCliStatus?.updateAvailable}
           sessionCount={openClawStatus?.sessions?.count}
           onOpenStatus={toggleOpenClawInfo}
         />
@@ -1313,6 +1346,25 @@ function App() {
             <div><span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
             <div><span>默认模型</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong></div>
             <div><span>默认 Agent</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong></div>
+          </div>
+          <div className={`openclaw-update-panel ${openClawCliStatus?.updateAvailable ? "available" : ""}`}>
+            <div className="openclaw-update-row">
+              <span>当前版本</span>
+              <strong>{openClawCliStatus?.installedVersion || openClawStatus?.runtimeVersion || "-"}</strong>
+            </div>
+            <div className="openclaw-update-row">
+              <span>最新版本</span>
+              <strong>{openClawCliStatus?.latestVersion || (openClawCliStatus?.latestCheckError ? "检测失败" : "-")}</strong>
+            </div>
+            {openClawCliStatus?.latestCheckError ? (
+              <p className="openclaw-update-note">{openClawCliStatus.latestCheckError}</p>
+            ) : null}
+            {openClawUpdateMessage ? <p className="openclaw-update-note">{openClawUpdateMessage}</p> : null}
+            {openClawCliStatus?.updateAvailable ? (
+              <button className="openclaw-update-button" type="button" onClick={() => void runOpenClawUpdate()} disabled={openClawUpdateBusy}>
+                {openClawUpdateBusy ? "正在打开终端..." : "更新 OpenClaw"}
+              </button>
+            ) : null}
           </div>
           <div className="openclaw-info-actions">
             <button className="openclaw-home-button" type="button" onClick={() => void openLocalOpenClaw()} title="打开本地 OpenClaw">

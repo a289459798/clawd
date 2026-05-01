@@ -132,6 +132,17 @@ struct WeixinPluginStatus {
     latest_check_error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawCliStatus {
+    installed: bool,
+    path: Option<String>,
+    installed_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: bool,
+    latest_check_error: Option<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSessionPatch {
@@ -1278,6 +1289,27 @@ fn latest_npm_package_version(package_name: &str) -> Result<String, String> {
     Err(if errors.is_empty() { "npm command not found".to_string() } else { errors.join("; ") })
 }
 
+fn extract_semver(value: &str) -> Option<String> {
+    value
+        .split_whitespace()
+        .find_map(|part| {
+            let candidate = part
+                .trim_matches(|character: char| {
+                    !character.is_ascii_alphanumeric() && character != '.' && character != '-' && character != '+'
+                });
+            let mut pieces = candidate.split('.');
+            let major = pieces.next()?;
+            let minor = pieces.next()?;
+            if major.chars().all(|character| character.is_ascii_digit())
+                && minor.chars().all(|character| character.is_ascii_digit())
+            {
+                Some(candidate.to_string())
+            } else {
+                None
+            }
+        })
+}
+
 fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
     let parse = |value: &str| {
         value
@@ -1291,6 +1323,54 @@ fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
     left_parts.resize(3, 0);
     right_parts.resize(3, 0);
     left_parts.cmp(&right_parts)
+}
+
+fn openclaw_cli_status_blocking() -> OpenClawCliStatus {
+    let command_path = resolve_openclaw_command().filter(|path| path.is_file());
+    let installed_version = command_path.as_ref().and_then(|path| {
+        let output = Command::new(path)
+            .arg("--version")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let raw = String::from_utf8_lossy(&output.stdout);
+        extract_semver(&raw)
+    });
+
+    let (latest_version, latest_check_error) = if command_path.is_some() {
+        match latest_npm_package_version("openclaw") {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
+
+    let update_available = installed_version
+        .as_deref()
+        .zip(latest_version.as_deref())
+        .map(|(installed, latest)| compare_semver(installed, latest) == std::cmp::Ordering::Less)
+        .unwrap_or(false);
+
+    OpenClawCliStatus {
+        installed: command_path.is_some(),
+        path: command_path.map(|path| path.display().to_string()),
+        installed_version,
+        latest_version,
+        update_available,
+        latest_check_error,
+    }
+}
+
+#[tauri::command]
+async fn openclaw_cli_status() -> Result<OpenClawCliStatus, String> {
+    tauri::async_runtime::spawn_blocking(openclaw_cli_status_blocking)
+        .await
+        .map_err(|error| format!("failed to check OpenClaw CLI status: {error}"))
 }
 
 fn installed_plugin_from_registry(plugin_id: &str, package_name: &str) -> Option<(String, bool)> {
@@ -1418,6 +1498,17 @@ fn open_openclaw_install_terminal() -> Result<String, String> {
     Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 clawx 重新检测。".to_string())
 }
 
+#[tauri::command]
+fn open_openclaw_update_terminal() -> Result<String, String> {
+    let update_command = if cfg!(windows) {
+        "iwr -useb https://openclaw.ai/install.ps1 | iex"
+    } else {
+        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw update finished. Return to clawx and refresh status.'; else echo 'Standard updater failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
+    };
+    open_terminal_command(update_command, "OpenClaw update")?;
+    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 clawx 刷新状态。".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1460,12 +1551,14 @@ pub fn run() {
             gateway_proxy::gateway_sessions_create,
             gateway_proxy::gateway_sessions_patch,
             pick_workspace_directory,
+            openclaw_cli_status,
             weixin_plugin_status,
             ensure_weixin_plugin_enabled,
             open_weixin_login_terminal,
             open_weixin_plugin_install_terminal,
             open_weixin_plugin_update_terminal,
             open_openclaw_install_terminal,
+            open_openclaw_update_terminal,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])

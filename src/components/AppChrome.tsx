@@ -28,6 +28,7 @@ export function NavSidebar({
   onNavChange,
   gatewayConnected,
   gatewayVersion,
+  updateAvailable,
   sessionCount,
   onOpenStatus,
 }: {
@@ -35,6 +36,7 @@ export function NavSidebar({
   onNavChange: (nav: NavKey) => void;
   gatewayConnected?: boolean;
   gatewayVersion?: string | null;
+  updateAvailable?: boolean;
   sessionCount?: number;
   onOpenStatus?: () => void;
 }) {
@@ -47,6 +49,7 @@ export function NavSidebar({
   const openClawTitle = [
     gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接",
     gatewayVersion ? `版本 ${gatewayVersion}` : "",
+    updateAvailable ? "有可用更新" : "",
     typeof sessionCount === "number" ? `${sessionCount} 个会话` : "",
   ].filter(Boolean).join(" · ");
   return (
@@ -68,6 +71,7 @@ export function NavSidebar({
           onClick={onOpenStatus}
         >
           <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
+          {updateAvailable ? <span className="openclaw-update-badge">有更新</span> : null}
         </button>
       </div>
     </aside>
