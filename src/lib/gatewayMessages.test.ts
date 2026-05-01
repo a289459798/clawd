@@ -34,4 +34,20 @@ describe("stripInboundWrapperText", () => {
     expect(extractTextFromGatewayMessage(message)).toBe("实际消息");
     expect(mapGatewayContentToParts(message)).toEqual([{ kind: "text", text: "实际消息" }]);
   });
+
+  it("treats metadata-only gateway-client messages as internal", async () => {
+    const { isInternalOpenClawMessage } = await import("./gatewayMessages");
+    const message = {
+      role: "assistant",
+      senderLabel: "gateway-client",
+      text: [
+        "Sender (untrusted metadata):",
+        "```json",
+        '{"label":"gateway-client","id":"gateway-client"}',
+        "```",
+      ].join("\n"),
+    };
+
+    expect(isInternalOpenClawMessage(message)).toBe(true);
+  });
 });

@@ -106,6 +106,7 @@ function App() {
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">("updated");
+  const [openedConversationIds, setOpenedConversationIds] = useState<Record<string, true>>({});
   const [agents, setAgents] = useState(agentsSeed);
   const [expandedConversationId, setExpandedConversationId] = useState("");
   const [showResourceSidebar, setShowResourceSidebar] = useState(true);
@@ -128,6 +129,7 @@ function App() {
   const [composerThinking, setComposerThinking] = useState("off");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [queuedMessagesByConversation, setQueuedMessagesByConversation] = useState<Record<string, QueuedComposerMessage[]>>({});
+  const [sendErrorsByConversation, setSendErrorsByConversation] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoSendingQueuedMessageRef = useRef<string | null>(null);
@@ -684,7 +686,6 @@ function App() {
     enabled: bootstrapStep === "ready",
     activeConversationId,
     activeRunId,
-    agents,
     onAgentsChange: setAgents,
     onActiveRunIdChange: setActiveRunId,
     onSendingChange: setSending,
@@ -699,7 +700,11 @@ function App() {
   const filteredVisibleConversations = useMemo(() => {
     const query = conversationSearch.trim().toLowerCase();
     const now = Date.now();
+    const selectedConversationIds = new Set([activeConversationId, expandedConversationId].filter(Boolean));
     const recentConversations = visibleConversations.filter((conversation) => {
+      if (selectedConversationIds.has(conversation.id) || openedConversationIds[conversation.id]) {
+        return true;
+      }
       if (conversation.isDraft || conversation.status === "working") {
         return true;
       }
@@ -731,7 +736,7 @@ function App() {
       }
       return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
     });
-  }, [conversationSearch, conversationSort, visibleConversations]);
+  }, [activeConversationId, conversationSearch, conversationSort, expandedConversationId, openedConversationIds, visibleConversations]);
 
   // Always get activeConversation from agents to ensure we have the latest data
   // (including previewMessages updated by gateway_chat_history)
@@ -748,9 +753,10 @@ function App() {
 
   const resolveConversationDefaultThinking = useCallback((conversation: Conversation | null) => {
     const options = conversation?.thinkingOptions ?? [];
-    const fallback = options[0]?.value ?? "off";
-    const candidate = conversation?.thinkingDefault ?? fallback;
-    return options.length === 0 || options.some((option) => option.value === candidate) ? candidate : fallback;
+    if (options.length === 0 || options.some((option) => option.value === "off")) {
+      return "off";
+    }
+    return options[0]?.value ?? "off";
   }, []);
 
   // Update composer model when conversation changes or previewMessages update
@@ -771,6 +777,7 @@ function App() {
 
     if (existingDraft) {
       // 如果存在草稿，直接打开现有的
+      setOpenedConversationIds((current) => ({ ...current, [existingDraft.id]: true }));
       setExpandedConversationId(existingDraft.id);
       setActiveConversationId(existingDraft.id);
       return;
@@ -804,6 +811,7 @@ function App() {
         conversations: [nextConversation, ...agent.conversations],
       };
     }));
+    setOpenedConversationIds((current) => ({ ...current, [draftId]: true }));
     setExpandedConversationId(draftId);
     setActiveConversationId(draftId);
   }, [agents, modelOptions]);
@@ -823,13 +831,27 @@ function App() {
     );
 
     if (visible) {
+      setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
       setExpandedConversationId(conversationId);
     } else if (expandedConversationId === conversationId) {
+      setOpenedConversationIds((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
       setExpandedConversationId("");
+    } else {
+      setOpenedConversationIds((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
     }
   };
 
   const openConversationDetail = async (conversationId: string, preserveStatus = false) => {
+    setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
+    setExpandedConversationId(conversationId);
     setActiveConversationId(conversationId);
     setUserExpanded(false);
     try {
@@ -977,6 +999,7 @@ function App() {
   }, []);
 
   const activeQueuedMessages = activeConversationId ? queuedMessagesByConversation[activeConversationId] ?? [] : [];
+  const activeSendError = activeConversationId ? sendErrorsByConversation[activeConversationId] ?? null : null;
 
   const enqueueComposerMessage = useCallback((conversationId: string, text: string, attachments: ComposerAttachment[]) => {
     const item: QueuedComposerMessage = {
@@ -1015,6 +1038,16 @@ function App() {
     onActiveRunIdChange: setActiveRunId,
     onComposerValueChange: setComposerValue,
     onComposerAttachmentsChange: setComposerAttachments,
+    onConversationSendError: (conversationId, error) => {
+      setSendErrorsByConversation((current) => {
+        if (error) {
+          return { ...current, [conversationId]: error };
+        }
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+    },
     refreshGatewayStatus,
   });
 
@@ -1177,6 +1210,7 @@ function App() {
               sending={sending}
               composerAttachments={composerAttachments}
               activeQueuedMessages={activeQueuedMessages}
+              gatewayError={activeSendError}
               modelOptions={modelOptions}
               modelsLoading={modelsLoading}
               onBack={() => setActiveConversationId(null)}

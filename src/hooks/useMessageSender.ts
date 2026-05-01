@@ -20,7 +20,27 @@ interface UseMessageSenderProps {
   onActiveRunIdChange: (runId: string | null) => void;
   onComposerValueChange: (value: string) => void;
   onComposerAttachmentsChange: (attachments: ComposerAttachment[]) => void;
+  onConversationSendError: (conversationId: string, error: string | null) => void;
   refreshGatewayStatus: () => Promise<void>;
+}
+
+type GatewayChatSendResult = {
+  runId?: string;
+  status?: string;
+};
+
+function assertGatewayChatSendStarted(value: unknown): GatewayChatSendResult {
+  if (typeof value === "string") {
+    throw new Error(value);
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("gateway_chat_send 返回格式异常");
+  }
+  const result = value as GatewayChatSendResult;
+  if (result.status !== "started") {
+    throw new Error(`gateway_chat_send 返回状态异常: ${JSON.stringify(value)}`);
+  }
+  return result;
 }
 
 export function useMessageSender({
@@ -39,6 +59,7 @@ export function useMessageSender({
   onActiveRunIdChange,
   onComposerValueChange,
   onComposerAttachmentsChange,
+  onConversationSendError,
   refreshGatewayStatus,
 }: UseMessageSenderProps) {
   const activeConversationIdRef = useRef(activeConversationId);
@@ -81,6 +102,7 @@ export function useMessageSender({
     })));
 
     onGatewayError(null);
+    onConversationSendError(conversationId, null);
     onSendingChange(true);
 
     // Check if draft conversation
@@ -104,6 +126,7 @@ export function useMessageSender({
           throw new Error("创建会话失败，未返回 session key");
         }
         realSessionKey = result.key;
+        onConversationSendError(realSessionKey, null);
 
         // Update conversation ID
         onAgentsChange((current) => current.map((agent) => ({
@@ -147,6 +170,7 @@ export function useMessageSender({
     const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     onActiveRunIdChange(runId);
 
+    const optimisticTimestamp = Date.now();
     onAgentsChange((current) => current.map((agent) => ({
       ...agent,
       conversations: agent.conversations.map((conversation) => {
@@ -156,17 +180,17 @@ export function useMessageSender({
           status: "working",
           lastRole: "user",
           lastMessage: message || (attachments.length > 0 ? `[图片] ${attachments.map((item) => item.name).join(", ")}` : currentConversation.lastMessage),
-          updatedAt: Date.now(),
+          updatedAt: optimisticTimestamp,
           lastTime: new Date().toLocaleString("zh-CN"),
           previewMessages: [
             ...(currentConversation.previewMessages ?? []),
-            { role: "user", text: message || attachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts },
+            { role: "user", text: message || attachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts, timestamp: optimisticTimestamp },
           ],
           runtime: {
             ...currentConversation.runtime,
             activeRunId: runId,
-            activeStartedAt: Date.now(),
-            lastEventAt: Date.now(),
+            activeStartedAt: optimisticTimestamp,
+            lastEventAt: optimisticTimestamp,
           },
         }));
       }),
@@ -185,7 +209,7 @@ export function useMessageSender({
         });
       }
 
-      await invoke("gateway_chat_send", {
+      const chatSendResult = await invoke<unknown>("gateway_chat_send", {
         params: {
           sessionKey: realSessionKey,
           message,
@@ -194,13 +218,36 @@ export function useMessageSender({
           attachments: attachments.map((item) => ({ dataUrl: item.dataUrl, mimeType: item.mimeType })),
         },
       });
+      const started = assertGatewayChatSendStarted(chatSendResult);
+      if (started.runId && started.runId !== runId) {
+        onActiveRunIdChange(started.runId);
+      }
       await refreshGatewayStatus();
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       onGatewayError(messageText);
+      onConversationSendError(realSessionKey, messageText);
       onGatewayStatusTextChange(`Gateway 请求失败: ${messageText}`);
       onSendingChange(false);
       onActiveRunIdChange(null);
+      onAgentsChange((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) => {
+          if (conversation.id !== realSessionKey) return conversation;
+          return patchConversation(conversation, (currentConversation) => ({
+            ...currentConversation,
+            latestEventType: "error",
+            runtime: {
+              ...currentConversation.runtime,
+              activeRunId: undefined,
+              activeStartedAt: undefined,
+              lastEventAt: Date.now(),
+              lastTerminalAt: Date.now(),
+              lastTerminalReason: "error",
+            },
+          }));
+        }),
+      })));
       if (options?.restoreToComposerOnError) {
         onComposerValueChange(message);
         onComposerAttachmentsChange(attachments);
@@ -213,7 +260,7 @@ export function useMessageSender({
       }
       await refreshGatewayStatus();
     }
-  }, [agents, composerModel, composerThinking, onAgentsChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, onComposerValueChange, onComposerAttachmentsChange, onQueuedMessagesChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
+  }, [agents, composerModel, composerThinking, onAgentsChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, onComposerValueChange, onComposerAttachmentsChange, onConversationSendError, onQueuedMessagesChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
 
   return {
     sendMessageToConversation,

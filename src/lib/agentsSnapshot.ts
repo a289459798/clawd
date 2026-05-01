@@ -11,6 +11,9 @@ export const deriveConversationStatus = (runtime?: ConversationRuntime) => {
   if (runtime?.activeRunId) {
     return "working" as const;
   }
+  if (runtime?.lastTerminalReason === "error" || runtime?.lastTerminalReason === "failed") {
+    return "idle" as const;
+  }
   if (runtime?.lastTerminalAt && now - runtime.lastTerminalAt <= COMPLETED_RECENT_WINDOW_MS) {
     return "completed" as const;
   }

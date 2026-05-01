@@ -42,6 +42,9 @@ export function isInternalOpenClawMessage(message?: { role?: string; text?: stri
   const isAsyncCompletionEvent = rawText.includes("An async command completion event was triggered")
     || (rawText.includes("Exec completed") && rawText.includes("user delivery is disabled"));
 
+  if (rawText.includes("Sender (untrusted metadata)") && cleanedText.length === 0) return true;
+  if (rawText.includes("Conversation info (untrusted metadata)") && cleanedText.length === 0) return true;
+  if (sender === "gateway-client" && rawText.includes("Sender (untrusted metadata)")) return true;
   // Only trust the gateway-client label for known internal completion/heartbeat payloads.
   // This avoids hiding a legitimate user/assistant message just because text mentions gateway-client.
   if (sender === "gateway-client" && (isAsyncCompletionEvent || cleanedText === "HEARTBEAT_OK")) return true;

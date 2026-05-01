@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { getLatestUserMessage } from "../lib/conversationDetailState";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
 import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
 
@@ -11,6 +12,7 @@ type ConversationDetailProps = {
   onBack: (resetUserExpanded: () => void) => void;
   resetUserExpanded: () => void;
   conversationMessageList: React.ReactNode;
+  gatewayError: string | null;
   aiResponseScrollRef: React.RefObject<HTMLDivElement | null>;
   parseSenderMeta: (text: string) => { label?: string; time?: string; cleanText: string };
   userExpanded: boolean;
@@ -44,6 +46,7 @@ export function ConversationDetail({
   onBack,
   resetUserExpanded,
   conversationMessageList,
+  gatewayError,
   aiResponseScrollRef,
   parseSenderMeta,
   userExpanded,
@@ -180,7 +183,7 @@ export function ConversationDetail({
           <section className={`conversation-turn-section ${displayMode}-page`} key={`${activeConversation.id}-${displayMode}`}>
             {displayMode === "focus" ? (() => {
               const msgs = (activeConversation.previewMessages ?? []).filter((message) => !isInternalOpenClawMessage(message));
-              const lastUserMsg = [...msgs].reverse().find((m) => m.role?.toLowerCase() === "user");
+              const lastUserMsg = getLatestUserMessage(msgs);
               const rawText = lastUserMsg?.text ?? "";
               const parsed = parseSenderMeta(rawText);
               // Use senderLabel and timestamp from message if available, otherwise fall back to parsed values
@@ -223,6 +226,12 @@ export function ConversationDetail({
             })() : null}
             <div className="ai-response-scroll" ref={aiResponseScrollRef}>
               {conversationMessageList}
+              {gatewayError ? (
+                <div className="conversation-bottom-error" role="alert">
+                  <strong>发送失败</strong>
+                  <span>{gatewayError}</span>
+                </div>
+              ) : null}
             </div>
             {showJumpToBottom ? (
               <button className="jump-to-bottom-button" type="button" onClick={onJumpToBottom} title="回到底部">

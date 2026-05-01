@@ -15,7 +15,7 @@ import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
-import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
+import { isInternalOpenClawMessage, stripInboundWrapperText } from "../lib/gatewayMessages";
 import type { MessagePart, PreviewMessage } from "../types/conversation";
 
 SyntaxHighlighter.registerLanguage("bash", bash);
@@ -226,6 +226,41 @@ function StructuredMessageContent({
   return <>{elements}</>;
 }
 
+function hasMessageMeta(message: PreviewMessage) {
+  return Boolean(
+    message.model
+    || message.input_tokens
+    || message.output_tokens
+    || message.cache_read_tokens
+    || message.cache_write_tokens,
+  );
+}
+
+function MessageMeta({
+  message,
+  formatTokenCount,
+  role,
+}: {
+  message: PreviewMessage;
+  formatTokenCount: (value?: number) => string;
+  role: "user" | "assistant";
+}) {
+  if (role !== "assistant" || !hasMessageMeta(message)) return null;
+
+  return (
+    <div className="message-meta">
+      <span className="message-meta-model">{message.model || "模型未返回"}</span>
+      <span className="message-meta-divider">·</span>
+      <span className="message-meta-tokens">
+        <span className="token-item">↑{formatTokenCount(message.output_tokens)}</span>
+        <span className="token-item">↓{formatTokenCount(message.input_tokens)}</span>
+        {message.cache_read_tokens ? <span className="token-item">R{formatTokenCount(message.cache_read_tokens)}</span> : null}
+        {message.cache_write_tokens ? <span className="token-item">W{formatTokenCount(message.cache_write_tokens)}</span> : null}
+      </span>
+    </div>
+  );
+}
+
 type ConversationMessageListBaseProps = {
   messages: PreviewMessage[];
   conversationId: string;
@@ -245,23 +280,71 @@ function ConversationMessageListInternal({
   mode,
 }: ConversationMessageListInternalProps) {
   const showUserMessages = mode === "conversation";
-  const { rows, lastAssistantMessage } = useMemo(() => {
+  const rows = useMemo(() => {
+    const cleanText = (value?: string) => stripInboundWrapperText((value ?? "").replace(/^__streaming__(?:[^_]+__)?/, "")).trim();
+    const collapseRepeatedText = (value: string) => {
+      const text = value.trim();
+      if (!text) return "";
+      for (let size = 1; size <= Math.floor(text.length / 2); size += 1) {
+        if (text.length % size !== 0) continue;
+        const unit = text.slice(0, size);
+        if (unit.repeat(text.length / size) === text) return unit.trim();
+      }
+      return text;
+    };
+    const cleanParts = (parts: MessagePart[] = []) => parts
+      .filter((part) => part.kind !== "tool_result")
+      .flatMap<MessagePart>((part) => {
+        if (part.kind !== "text") return [part];
+        const text = collapseRepeatedText(cleanText(part.text));
+        return text ? [{ ...part, text }] : [];
+      });
     const normalizedMessages = messages
       .filter((message) => {
         if (isInternalOpenClawMessage(message)) return false;
         const role = message.role?.toLowerCase();
         if (role === "user" && !showUserMessages) return false;
-        const parts = message.parts ?? [];
+        const parts = cleanParts(message.parts ?? []);
         const hasVisiblePart = parts.some((part) => part.kind !== "tool_result" && (part.kind !== "text" || part.text?.trim()));
-        const text = (message.text ?? "").trim().toLowerCase();
+        const text = cleanText(message.text).toLowerCase();
         if (role === "toolresult" || role === "tool_result") return false;
         if (text.startsWith("tool_result:") || text.startsWith("toolresult:")) return false;
         return hasVisiblePart || Boolean(text.trim());
       })
       .map((message) => ({
         ...message,
-        parts: (message.parts ?? []).filter((part) => part.kind !== "tool_result"),
+        text: collapseRepeatedText(cleanText(message.text)),
+        parts: cleanParts(message.parts ?? []),
       }));
+    const collapsedMessages = normalizedMessages.reduce<PreviewMessage[]>((acc, message) => {
+      const previous = acc[acc.length - 1];
+      const role = message.role?.toLowerCase();
+      if (previous?.role?.toLowerCase() === "user" && role === "user") {
+        const previousText = cleanText(previous.text);
+        const nextText = cleanText(message.text);
+        if (previousText && nextText && previousText === nextText) {
+          acc[acc.length - 1] = message.timestamp && (!previous.timestamp || message.timestamp >= previous.timestamp) ? message : previous;
+          return acc;
+        }
+      }
+      if (previous?.role?.toLowerCase() === "assistant" && role === "assistant") {
+        const previousText = cleanText(previous.text);
+        const nextText = cleanText(message.text);
+        const previousHasTools = (previous.parts ?? []).some((part) => part.kind === "tool_call");
+        const nextHasTools = (message.parts ?? []).some((part) => part.kind === "tool_call");
+        if (!previousHasTools && !nextHasTools && previousText && nextText) {
+          if (nextText === previousText || nextText.includes(previousText)) {
+            acc[acc.length - 1] = message;
+            return acc;
+          }
+          if (previousText.includes(nextText)) {
+            return acc;
+          }
+        }
+      }
+      acc.push(message);
+      return acc;
+    }, []);
 
     const rows: Array<
       | { kind: "message"; message: PreviewMessage; index: number }
@@ -282,7 +365,7 @@ function ConversationMessageListInternal({
       }
     };
 
-    normalizedMessages.forEach((message, index) => {
+    collapsedMessages.forEach((message, index) => {
       if (isToolOnlyMessage(message)) {
         pendingToolMessages.push({ message, index });
         return;
@@ -292,18 +375,7 @@ function ConversationMessageListInternal({
     });
     flushToolMessages();
 
-    const lastAssistantMessage = [...normalizedMessages]
-      .reverse()
-      .find((m) => {
-        const role = m.role?.toLowerCase();
-        if (role !== "assistant") return false;
-        const parts = m.parts ?? [];
-        const hasTextContent = parts.some((p) => p.kind === "text" && p.text?.trim());
-        const hasImageContent = parts.some((p) => p.kind === "image");
-        return hasTextContent || hasImageContent || (!parts.length && m.text?.trim());
-      });
-
-    return { rows, lastAssistantMessage };
+    return rows;
   }, [messages, showUserMessages]);
 
   return (
@@ -334,21 +406,10 @@ function ConversationMessageListInternal({
               onOpenImage={onOpenImage}
               imageVariant={messageRole}
             />
+            <MessageMeta message={message} formatTokenCount={formatTokenCount} role={messageRole} />
           </div>
         );
       })}
-
-      {lastAssistantMessage?.model ? (
-        <div className="conversation-model-footer" key={`${conversationId}-model-footer`}>
-          <span className="conversation-model-name">{lastAssistantMessage.model}</span>
-          <span className="conversation-model-divider">·</span>
-          <span className="conversation-model-tokens">
-            <span className="token-item">↑{formatTokenCount(lastAssistantMessage.output_tokens)}</span>
-            <span className="token-item">↓{formatTokenCount(lastAssistantMessage.input_tokens)}</span>
-            <span className="token-item">R{formatTokenCount(lastAssistantMessage.cache_read_tokens)}</span>
-          </span>
-        </div>
-      ) : null}
     </div>
   );
 }

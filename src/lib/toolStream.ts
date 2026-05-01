@@ -36,12 +36,19 @@ export const mergeSnapshotMessagesPreservingCurrentOrder = (currentMessages: Pre
   if (snapshotMessages.length === 0) return currentMessages;
 
   const seen = new Set(currentMessages.map(messageOrderKey));
-  const next = [...currentMessages];
+  const next = currentMessages.map((message, index) => ({ message, index }));
   for (const message of snapshotMessages) {
     const key = messageOrderKey(message);
     if (seen.has(key)) continue;
     seen.add(key);
-    next.push(message);
+    next.push({ message, index: next.length });
   }
-  return next;
+  return next
+    .sort((left, right) => {
+      const leftTime = left.message.timestamp ?? Number.MAX_SAFE_INTEGER;
+      const rightTime = right.message.timestamp ?? Number.MAX_SAFE_INTEGER;
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return left.index - right.index;
+    })
+    .map((item) => item.message);
 };

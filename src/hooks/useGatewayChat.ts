@@ -3,6 +3,7 @@ import type { Agent } from "../types/app";
 import type { MessagePart } from "../types/conversation";
 import type { GatewayChatEvent } from "../types/gateway";
 import { patchConversation } from "../lib/agentsSnapshot";
+import { formatTokenCount } from "../lib/appFormatters";
 import { mapGatewayToolStreamToPart } from "../lib/toolStream";
 import { extractTextFromGatewayMessage, extractUsageFromGatewayMessage, mapGatewayContentToParts, mergeStreamingParts } from "../lib/gatewayMessages";
 
@@ -10,7 +11,6 @@ interface UseGatewayChatProps {
   enabled: boolean;
   activeConversationId: string | null;
   activeRunId: string | null;
-  agents: Agent[];
   onAgentsChange: (updater: (current: Agent[]) => Agent[]) => void;
   onActiveRunIdChange: (runId: string | null) => void;
   onSendingChange: (sending: boolean) => void;
@@ -24,7 +24,6 @@ export function useGatewayChat({
   enabled,
   activeConversationId,
   activeRunId,
-  agents,
   onAgentsChange,
   onActiveRunIdChange,
   onSendingChange,
@@ -46,6 +45,33 @@ export function useGatewayChat({
   }, [activeRunId]);
 
   const hasToolParts = (parts: MessagePart[]) => parts.some((part) => part.kind === "tool_call" || part.kind === "tool_result");
+  const textFromParts = (parts: MessagePart[]) => parts.flatMap((part) => part.kind === "text" ? [part.text] : []).join("");
+  const mergeStreamingText = (previousText: string, incomingText: string) => {
+    if (!incomingText) return previousText;
+    if (!previousText) return incomingText;
+    if (incomingText.startsWith(previousText)) return incomingText;
+    if (previousText.endsWith(incomingText)) return previousText;
+    return `${previousText}${incomingText}`;
+  };
+  const summarizePreviewUsage = (messages: Array<{ input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number }>) => {
+    const inputTokens = messages.reduce((sum, message) => sum + (message.input_tokens || 0), 0);
+    const outputTokens = messages.reduce((sum, message) => sum + (message.output_tokens || 0), 0);
+    const cacheReadTokens = messages.reduce((sum, message) => sum + (message.cache_read_tokens || 0), 0);
+    const cacheWriteTokens = messages.reduce((sum, message) => sum + (message.cache_write_tokens || 0), 0);
+    return {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
+    };
+  };
+  const findLastMessageIndex = <T,>(items: T[], predicate: (item: T, index: number) => boolean) => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      if (predicate(items[index], index)) return index;
+    }
+    return -1;
+  };
 
   useEffect(() => {
     if (!enabled) return;
@@ -139,17 +165,23 @@ export function useGatewayChat({
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
                   const streamingMarker = `__streaming__${effectiveRunId}__`;
-                  const lastIndex = nextMessages.length - 1;
+                  const existingStreamingIndex = nextMessages.findIndex((message) =>
+                    message.role?.toLowerCase() === "assistant" && message.text.startsWith(streamingMarker),
+                  );
+                  const lastIndex = existingStreamingIndex >= 0 ? existingStreamingIndex : nextMessages.length - 1;
                   const last = nextMessages[lastIndex];
                   
                   if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
                     const previousText = last.text.replace(streamingMarker, "");
-                    const mergedParts = mergeStreamingParts(last.parts ?? [], deltaParts, deltaText);
-                    const mergedTextPart = mergedParts
-                      .flatMap((part) => part.kind === "text" ? [part.text] : [])
-                      .join("");
-                    const nextText = mergedTextPart || `${previousText}${deltaText}`;
+                    const incomingText = textFromParts(deltaParts) || deltaText;
+                    const nextText = mergeStreamingText(previousText, incomingText);
+                    const nonTextParts = mergeStreamingParts(
+                      (last.parts ?? []).filter((part) => part.kind !== "text"),
+                      deltaParts.filter((part) => part.kind !== "text"),
+                      "",
+                    );
+                    const mergedParts = nextText ? [{ kind: "text" as const, text: nextText }, ...nonTextParts] : nonTextParts;
                     nextMessages[lastIndex] = {
                       ...last,
                       text: `${streamingMarker}${nextText}`,
@@ -164,9 +196,9 @@ export function useGatewayChat({
                       cache_write_tokens: usage.cache_write_tokens ?? last.cache_write_tokens,
                     };
                   } else if (deltaParts.length > 0 || deltaText) {
-                    const initialParts: MessagePart[] = deltaParts.length > 0 
-                      ? mergeStreamingParts([], deltaParts, deltaText) 
-                      : [{ kind: "text", text: deltaText }];
+                    const incomingText = textFromParts(deltaParts) || deltaText;
+                    const nonTextParts = deltaParts.filter((part) => part.kind !== "text");
+                    const initialParts: MessagePart[] = incomingText ? [{ kind: "text", text: incomingText }, ...nonTextParts] : nonTextParts;
                     const initialText = initialParts
                       .filter((part) => part.kind === "text")
                       .map((part) => part.text)
@@ -229,17 +261,34 @@ export function useGatewayChat({
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
                   const streamingMarker = `__streaming__${effectiveRunId}__`;
-                  const lastIndex = nextMessages.length - 1;
+                  const existingStreamingIndex = nextMessages.findIndex((message) =>
+                    message.role?.toLowerCase() === "assistant" && message.text.startsWith(streamingMarker),
+                  );
+                  const fallbackStreamingIndex = existingStreamingIndex >= 0
+                    ? existingStreamingIndex
+                    : findLastMessageIndex(nextMessages, (message) =>
+                        message.role?.toLowerCase() === "assistant" && /^__streaming__(?:[^_]+__)?/.test(message.text),
+                      );
+                  const duplicateAssistantIndex = fallbackStreamingIndex >= 0
+                    ? -1
+                    : findLastMessageIndex(nextMessages, (message) => {
+                        if (message.role?.toLowerCase() !== "assistant") return false;
+                        const text = message.text.replace(/^__streaming__(?:[^_]+__)?/, "");
+                        return Boolean(finalText) && (text === finalText || text.includes(finalText) || finalText.includes(text));
+                      });
+                  const lastIndex = fallbackStreamingIndex >= 0 ? fallbackStreamingIndex : duplicateAssistantIndex >= 0 ? duplicateAssistantIndex : nextMessages.length - 1;
                   const last = nextMessages[lastIndex];
                   
-                  if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
+                  if (last?.role === "assistant" && (last.text.startsWith(streamingMarker) || /^__streaming__(?:[^_]+__)?/.test(last.text) || duplicateAssistantIndex >= 0)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
-                    const fallbackText = last.text.replace(streamingMarker, "");
+                    const fallbackText = last.text.replace(/^__streaming__(?:[^_]+__)?/, "");
                     const hasExistingToolMessages = nextMessages.some((message, index) => index !== lastIndex && hasToolParts(message.parts ?? []));
                     const finalTextOnlyParts = finalParts.filter((part) => part.kind === "text" || part.kind === "image");
                     const mergedFinalParts = finalParts.length > 0 && !hasExistingToolMessages
-                      ? mergeStreamingParts([], finalParts, finalText)
-                      : mergeStreamingParts(last.parts ?? [], finalTextOnlyParts, finalText || fallbackText);
+                      ? mergeStreamingParts([], finalParts, "")
+                      : finalTextOnlyParts.length > 0
+                        ? mergeStreamingParts([], finalTextOnlyParts, "")
+                        : [{ kind: "text" as const, text: finalText || fallbackText }];
                     const renderedFinalText = mergedFinalParts
                       .flatMap((part) => part.kind === "text" ? [part.text] : [])
                       .join("") || finalText || fallbackText;
@@ -247,7 +296,7 @@ export function useGatewayChat({
                       ...last,
                       text: renderedFinalText,
                       parts: mergedFinalParts.length > 0 ? mergedFinalParts : [{ kind: "text", text: renderedFinalText }],
-                      model: chat.message?.model ?? last.model,
+                      model: chat.message?.model ?? last.model ?? currentConversation.model,
                       provider: chat.message?.provider ?? last.provider,
                       api: chat.message?.api ?? last.api,
                       timestamp: eventTimestamp,
@@ -260,15 +309,15 @@ export function useGatewayChat({
                     const hasExistingToolMessages = nextMessages.some((message) => hasToolParts(message.parts ?? []));
                     const finalTextOnlyParts = finalParts.filter((part) => part.kind === "text" || part.kind === "image");
                     const appendedParts: MessagePart[] = finalParts.length > 0 && !hasExistingToolMessages
-                      ? mergeStreamingParts([], finalParts, finalText)
+                      ? mergeStreamingParts([], finalParts, "")
                       : finalTextOnlyParts.length > 0
-                        ? mergeStreamingParts([], finalTextOnlyParts, finalText)
+                        ? mergeStreamingParts([], finalTextOnlyParts, "")
                         : [{ kind: "text", text: finalText }];
                     nextMessages.push({ 
                       role: "assistant", 
                       text: finalText, 
                       parts: appendedParts, 
-                      model: chat.message?.model, 
+                      model: chat.message?.model ?? currentConversation.model, 
                       provider: chat.message?.provider, 
                       api: chat.message?.api, 
                       timestamp: eventTimestamp, 
@@ -278,12 +327,19 @@ export function useGatewayChat({
                   
                   const latestPreview = nextMessages[nextMessages.length - 1];
                   const latestRenderedText = latestPreview?.text || finalText;
+                  const usageTotals = summarizePreviewUsage(nextMessages);
                   return {
                     ...currentConversation,
                     lastRole: "assistant",
                     latestEventType: terminalEventType,
                     lastMessage: latestRenderedText || currentConversation.lastMessage,
                     previewMessages: nextMessages,
+                    inputTokens: usageTotals.inputTokens,
+                    outputTokens: usageTotals.outputTokens,
+                    cacheReadTokens: usageTotals.cacheReadTokens,
+                    cacheWriteTokens: usageTotals.cacheWriteTokens,
+                    totalTokens: usageTotals.totalTokens,
+                    tokens: formatTokenCount(usageTotals.totalTokens),
                     updatedAt: eventTimestamp,
                     lastTime: eventLastTime,
                     runtime: {
@@ -350,7 +406,7 @@ export function useGatewayChat({
       mounted = false;
       dispose?.();
     };
-  }, [enabled, agents, onAgentsChange, onActiveRunIdChange, onSendingChange, onGatewayError, onGatewayStatusTextChange, onGatewayConnectedChange, refreshGatewayStatus]);
+  }, [enabled, onAgentsChange, onActiveRunIdChange, onSendingChange, onGatewayError, onGatewayStatusTextChange, onGatewayConnectedChange, refreshGatewayStatus]);
 
   return {
     gatewayEventUnlistenRef,

@@ -921,6 +921,28 @@ p {
   padding-bottom: 8px;
 }
 
+.conversation-bottom-error {
+  align-self: stretch;
+  margin-top: 4px;
+  padding: 9px 11px;
+  border: 1px solid rgba(240, 139, 125, 0.22);
+  border-radius: 10px;
+  background: rgba(240, 139, 125, 0.075);
+  color: rgba(246, 215, 210, 0.92);
+  display: grid;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.conversation-bottom-error strong {
+  color: #f0a39a;
+  font-size: 0.76rem;
+}
+
+.conversation-bottom-error span {
+  word-break: break-word;
+}
+
 .conversation-window-page.in-app {
   min-height: 0;
   flex: 1;
@@ -2051,6 +2073,17 @@ p {
   max-width: min(64%, 620px);
 }
 
+.conversation-message-list.conversation-mode .tool-call-box {
+  width: auto;
+  max-width: min(72%, 760px);
+  align-self: flex-start;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(122, 162, 255, 0.09);
+  border: 1px solid rgba(122, 162, 255, 0.2);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+}
+
 .conversation-message-list.conversation-mode .message-image-card {
   width: auto;
   max-width: min(64%, 520px);
@@ -2147,6 +2180,17 @@ p {
   color: rgba(255, 255, 255, 0.58);
   cursor: pointer;
   text-align: left;
+}
+
+.conversation-message-list.conversation-mode .tool-call-summary {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.conversation-message-list.conversation-mode .tool-call-summary:hover {
+  background: transparent;
 }
 
 .tool-call-summary:hover {
@@ -2297,6 +2341,47 @@ p {
 }
 
 .conversation-model-tokens .token-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: min(72%, 760px);
+  padding: 0 4px;
+  color: rgba(255, 255, 255, 0.46);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.message-stack.assistant .message-meta {
+  align-self: flex-start;
+  margin-left: 4px;
+}
+
+.message-meta-model {
+  color: rgba(122, 162, 255, 0.78);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-meta-divider {
+  color: rgba(255, 255, 255, 0.16);
+}
+
+.message-meta-tokens {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.message-meta-tokens .token-item {
   display: inline-flex;
   align-items: center;
 }

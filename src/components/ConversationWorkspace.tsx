@@ -32,6 +32,7 @@ type ConversationWorkspaceProps = {
   sending: boolean;
   composerAttachments: ComposerAttachment[];
   activeQueuedMessages: QueuedComposerMessage[];
+  gatewayError: string | null;
   modelOptions: ModelOption[];
   modelsLoading: boolean;
   onBack: () => void;
@@ -74,6 +75,7 @@ export function ConversationWorkspace({
   sending,
   composerAttachments,
   activeQueuedMessages,
+  gatewayError,
   modelOptions,
   modelsLoading,
   onBack,
@@ -110,7 +112,7 @@ export function ConversationWorkspace({
       activeConversation.lastRole,
       false,
     );
-    const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isWaitingReply || detailState.isStillStreaming;
+    const shouldShowInProgress = activeConversation.runtime?.activeRunId || (!gatewayError && detailState.isWaitingReply) || detailState.isStillStreaming;
     if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
 
     return (
@@ -149,7 +151,7 @@ export function ConversationWorkspace({
       activeConversation.lastRole,
       true,
     );
-    const shouldShowInProgress = activeConversation.runtime?.activeRunId || detailState.isStillStreaming;
+    const shouldShowInProgress = activeConversation.runtime?.activeRunId || (!gatewayError && detailState.isStillStreaming);
     if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无对话内容</p>;
 
     return (
@@ -183,6 +185,7 @@ export function ConversationWorkspace({
             activeConversation={activeConversation}
             agentName={visibleConversations.find((conversation) => conversation.id === activeConversation.id)?.agentName ?? "未知 Agent"}
             statusLabel={statusLabel}
+            gatewayError={gatewayError}
             onBack={(resetUserExpanded) => { onBack(); resetUserExpanded(); }}
             resetUserExpanded={() => onUserExpandedChange(false)}
             parseSenderMeta={parseSenderMeta}
