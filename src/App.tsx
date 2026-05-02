@@ -132,6 +132,8 @@ function App() {
   const [openClawCliStatus, setOpenClawCliStatus] = useState<OpenClawCliStatus | null>(null);
   const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
   const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
+  const [openClawGatewayBusy, setOpenClawGatewayBusy] = useState(false);
+  const [openClawGatewayMessage, setOpenClawGatewayMessage] = useState<string | null>(null);
   const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -713,6 +715,29 @@ function App() {
       setOpenClawUpdateBusy(false);
     }
   }, [refreshOpenClawCliStatus, refreshOpenClawStatus]);
+
+  const toggleOpenClawGateway = useCallback(async () => {
+    if (openClawGatewayBusy) return;
+    const shouldStop = gatewayConnected;
+    setOpenClawGatewayBusy(true);
+    setOpenClawGatewayMessage(null);
+    try {
+      const message = await invoke<string>(shouldStop ? "openclaw_gateway_stop" : "openclaw_gateway_start");
+      setOpenClawGatewayMessage(message || (shouldStop ? "OpenClaw Gateway 已停止。" : "OpenClaw Gateway 已启动。"));
+      if (shouldStop) {
+        setGatewayConnected(false);
+        setGatewayStatusText("OpenClaw Gateway 已停止");
+        setOpenClawStatus(null);
+      }
+      window.setTimeout(() => void refreshOpenClawStatus(), shouldStop ? 900 : 1200);
+    } catch (error) {
+      console.error(`Failed to ${shouldStop ? "stop" : "start"} OpenClaw Gateway`, error);
+      setOpenClawGatewayMessage(error instanceof Error ? error.message : (shouldStop ? "停止 OpenClaw 失败" : "启动 OpenClaw 失败"));
+      void refreshOpenClawStatus();
+    } finally {
+      setOpenClawGatewayBusy(false);
+    }
+  }, [gatewayConnected, openClawGatewayBusy, refreshOpenClawStatus]);
 
   const openLocalOpenClaw = async () => {
     try {
@@ -1551,14 +1576,23 @@ function App() {
                 <span>{gatewayStatusText}</span>
               </div>
             </div>
-            <label className="openclaw-connect-switch" title="刷新 Gateway 连接状态">
+            <button
+              className={`openclaw-connect-switch ${openClawGatewayBusy ? "busy" : ""}`}
+              type="button"
+              title={gatewayConnected ? "停止 OpenClaw Gateway" : "启动 OpenClaw Gateway"}
+              aria-label={gatewayConnected ? "停止 OpenClaw Gateway" : "启动 OpenClaw Gateway"}
+              aria-pressed={gatewayConnected}
+              disabled={openClawGatewayBusy}
+              onClick={() => void toggleOpenClawGateway()}
+            >
               <input
                 type="checkbox"
                 checked={gatewayConnected}
-                onChange={() => void refreshOpenClawStatus()}
+                readOnly
+                tabIndex={-1}
               />
               <span />
-            </label>
+            </button>
           </div>
           <div className="openclaw-info-metrics">
             <div><span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
@@ -1578,6 +1612,7 @@ function App() {
               <p className="openclaw-update-note">{openClawCliStatus.latestCheckError}</p>
             ) : null}
             {openClawUpdateMessage ? <p className="openclaw-update-note">{openClawUpdateMessage}</p> : null}
+            {openClawGatewayMessage ? <p className="openclaw-update-note">{openClawGatewayMessage}</p> : null}
             {openClawCliStatus?.updateAvailable ? (
               <button className="openclaw-update-button" type="button" onClick={() => void runOpenClawUpdate()} disabled={openClawUpdateBusy}>
                 {openClawUpdateBusy ? "正在打开终端..." : "更新 OpenClaw"}

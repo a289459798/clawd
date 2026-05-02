@@ -178,7 +178,7 @@ struct RealtimeState {
 }
 
 fn openclaw_config_path() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".openclaw/openclaw.json"))
+    Ok(home_dir()?.join(".openclaw").join("openclaw.json"))
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -193,13 +193,17 @@ fn clawx_recommended_origin() -> String {
 }
 
 fn sessions_store_path(agent_id: &str) -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    Ok(PathBuf::from(home).join(format!(".openclaw/agents/{agent_id}/sessions/sessions.json")))
+    Ok(home_dir()?
+        .join(".openclaw")
+        .join("agents")
+        .join(agent_id)
+        .join("sessions")
+        .join("sessions.json"))
 }
 
 fn local_prefix_openclaw_path() -> Option<PathBuf> {
     let home = home_dir().ok()?;
-    let bin_dir = home.join(".openclaw/bin");
+    let bin_dir = home.join(".openclaw").join("bin");
     let candidates = if cfg!(windows) {
         vec![bin_dir.join("openclaw.cmd"), bin_dir.join("openclaw.exe"), bin_dir.join("openclaw")]
     } else {
@@ -246,7 +250,7 @@ fn resolve_openclaw_command() -> Option<PathBuf> {
 
 fn run_openclaw_command(args: &[&str]) -> Result<Output, String> {
     let command_path = resolve_openclaw_command().ok_or_else(|| {
-        "OpenClaw command not found. Expected openclaw in PATH or ~/.openclaw/bin/openclaw".to_string()
+        "OpenClaw command not found. Expected openclaw in PATH, ~/.openclaw/bin/openclaw, or %USERPROFILE%\\.openclaw\\bin\\openclaw.cmd".to_string()
     })?;
     Command::new(&command_path)
         .args(args)
@@ -953,8 +957,7 @@ fn load_openclaw_snapshot() -> Result<OpenClawSnapshot, String> {
         })
         .unwrap_or_default();
 
-    let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    let user_root = PathBuf::from(&home).join(".agents/skills");
+    let user_root = home_dir()?.join(".agents").join("skills");
 
     let mut skills = read_skills_from_dir(&user_root);
     skills.sort_by(|left, right| left.name.cmp(&right.name));
@@ -1149,6 +1152,17 @@ fn pick_workspace_directory() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn default_agent_workspace(agent_id: String) -> Result<String, String> {
+    let agent_id = agent_id.trim();
+    let safe_id = if agent_id.is_empty() { "agent" } else { agent_id };
+    Ok(home_dir()?
+        .join(".openclaw")
+        .join(format!("workspace-{safe_id}"))
+        .to_string_lossy()
+        .to_string())
+}
+
+#[tauri::command]
 fn open_weixin_login_terminal() -> Result<String, String> {
     let login_command = openclaw_terminal_command(&["channels", "login", "--channel", "openclaw-weixin"])?;
     open_terminal_command(&login_command, "openclaw-weixin login")?;
@@ -1184,10 +1198,14 @@ fn powershell_quote(value: &str) -> String {
 
 fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
     let command_path = resolve_openclaw_command().ok_or_else(|| {
-        "OpenClaw command not found. Expected openclaw in PATH or ~/.openclaw/bin/openclaw".to_string()
+        "OpenClaw command not found. Expected openclaw in PATH, ~/.openclaw/bin/openclaw, or %USERPROFILE%\\.openclaw\\bin\\openclaw.cmd".to_string()
     })?;
     let quote = if cfg!(windows) { powershell_quote } else { shell_quote };
-    let mut parts = vec![quote(&command_path.to_string_lossy())];
+    let mut parts = if cfg!(windows) {
+        vec![format!("& {}", quote(&command_path.to_string_lossy()))]
+    } else {
+        vec![quote(&command_path.to_string_lossy())]
+    };
     parts.extend(args.iter().map(|arg| quote(arg)));
     Ok(parts.join(" "))
 }
@@ -1208,15 +1226,12 @@ fn open_terminal_command_macos(command_line: &str, label: &str) -> Result<(), St
 }
 
 fn open_terminal_command_windows(command_line: &str, label: &str) -> Result<(), String> {
-    let status = Command::new("powershell")
+    Command::new("powershell")
         .args(["-NoExit", "-ExecutionPolicy", "Bypass", "-Command", command_line])
-        .status()
+        .spawn()
         .map_err(|error| format!("failed to open PowerShell: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{label} PowerShell exited with status {status}"))
-    }
+    let _ = label;
+    Ok(())
 }
 
 fn open_terminal_command_linux(command_line: &str, label: &str) -> Result<(), String> {
@@ -1255,7 +1270,7 @@ fn npm_command_candidates() -> Vec<PathBuf> {
     candidates.push(PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" }));
 
     if let Ok(home) = home_dir() {
-        if let Ok(entries) = fs::read_dir(home.join(".openclaw/tools")) {
+        if let Ok(entries) = fs::read_dir(home.join(".openclaw").join("tools")) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
@@ -1525,6 +1540,52 @@ fn open_openclaw_update_terminal() -> Result<String, String> {
     Ok("已打开终端更新 OpenClaw。更新完成后，请回到 clawx 刷新状态。".to_string())
 }
 
+fn openclaw_gateway_service_command(action: &'static str) -> Result<String, String> {
+    let output = run_openclaw_command(&["gateway", action])?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("openclaw gateway {action} exited with {}", output.status)
+        };
+        Err(detail)
+    }
+}
+
+#[tauri::command]
+async fn openclaw_gateway_start() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| openclaw_gateway_service_command("start"))
+        .await
+        .map_err(|error| format!("failed to start OpenClaw Gateway: {error}"))?
+        .map(|message| {
+            if message.is_empty() {
+                "OpenClaw Gateway 启动命令已执行。".to_string()
+            } else {
+                message
+            }
+        })
+}
+
+#[tauri::command]
+async fn openclaw_gateway_stop() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| openclaw_gateway_service_command("stop"))
+        .await
+        .map_err(|error| format!("failed to stop OpenClaw Gateway: {error}"))?
+        .map(|message| {
+            if message.is_empty() {
+                "OpenClaw Gateway 停止命令已执行。".to_string()
+            } else {
+                message
+            }
+        })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1570,6 +1631,7 @@ pub fn run() {
             gateway_proxy::gateway_sessions_create,
             gateway_proxy::gateway_sessions_patch,
             pick_workspace_directory,
+            default_agent_workspace,
             openclaw_cli_status,
             open_model_auth_terminal,
             weixin_plugin_status,
@@ -1579,6 +1641,8 @@ pub fn run() {
             open_weixin_plugin_update_terminal,
             open_openclaw_install_terminal,
             open_openclaw_update_terminal,
+            openclaw_gateway_start,
+            openclaw_gateway_stop,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])

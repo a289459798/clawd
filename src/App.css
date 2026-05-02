@@ -1167,6 +1167,10 @@ p {
   gap: 10px;
 }
 
+.sidebar-bottom-actions {
+  align-items: center;
+}
+
 .openclaw-logo-button {
   position: relative;
   width: 34px;
@@ -3951,7 +3955,11 @@ p {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   cursor: pointer;
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .openclaw-connect-switch input {
@@ -3988,6 +3996,15 @@ p {
 .openclaw-connect-switch input:checked + span::after {
   transform: translateX(16px);
   background: #52f2c5;
+}
+
+.openclaw-connect-switch.busy {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.openclaw-connect-switch:disabled {
+  cursor: wait;
 }
 
 .openclaw-info-metrics {

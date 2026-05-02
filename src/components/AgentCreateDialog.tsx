@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { buildDefaultAgentWorkspace, normalizeAgentId, validateAgentCreateInput } from "../lib/agentCreate";
+import { normalizeAgentId, validateAgentCreateInput } from "../lib/agentCreate";
 
 type AgentCreateDialogProps = {
   open: boolean;
@@ -40,8 +40,24 @@ export function AgentCreateDialog({
 
   useEffect(() => {
     if (!open || workspaceTouched) return;
-    setWorkspace(buildDefaultAgentWorkspace(agentIdInput));
-  }, [agentIdInput, open, workspaceTouched]);
+    let cancelled = false;
+    setWorkspace("");
+    void (async () => {
+      try {
+        const defaultWorkspace = await invoke<string>("default_agent_workspace", { agentId });
+        if (!cancelled) {
+          setWorkspace(defaultWorkspace);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPickError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, open, workspaceTouched]);
 
   if (!open) {
     return null;
@@ -87,7 +103,7 @@ export function AgentCreateDialog({
           <label>
             <span>工作区</span>
             <div className="workspace-picker-row">
-              <input value={workspace} readOnly placeholder="~/.openclaw/workspace-coding" />
+              <input value={workspace} readOnly placeholder="选择工作区" />
               <button className="ghost-button" type="button" onClick={() => void chooseWorkspace()} disabled={pickingWorkspace}>
                 {pickingWorkspace ? "选择中" : "选择"}
               </button>

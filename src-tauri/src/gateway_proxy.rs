@@ -276,9 +276,15 @@ pub struct GatewayProxyState {
     connect_waiter: Mutex<Option<Arc<PendingRpc>>>,
 }
 
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .map_err(|error| format!("home directory not found: {error}"))
+}
+
 fn openclaw_config_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    Ok(PathBuf::from(home).join(".openclaw/openclaw.json"))
+    Ok(home_dir()?.join(".openclaw").join("openclaw.json"))
 }
 
 pub fn read_gateway_client_config() -> Result<GatewayClientConfig, String> {
@@ -343,8 +349,7 @@ fn signing_key_from_pem(pem: &str) -> Result<SigningKey, String> {
 }
 
 fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
-    let home = std::env::var("HOME").map_err(|error| format!("HOME not set: {error}"))?;
-    let dir = PathBuf::from(&home).join(".openclaw/clawx");
+    let dir = home_dir()?.join(".openclaw").join("clawx");
     fs::create_dir_all(&dir).map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
     let identity_path = dir.join("device_identity.json");
 
