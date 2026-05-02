@@ -29,7 +29,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
         <main className="bootstrap-screen">
           <div className="bootstrap-card danger">
             <strong>界面渲染失败</strong>
-            <p>clawx 遇到了一个前端运行时错误，已经阻止继续黑屏。</p>
+            <p>Clawx 遇到了一个前端运行时错误，已经阻止继续黑屏。</p>
             <div className="bootstrap-meta">
               <span>{this.state.error ?? "未知错误"}</span>
               <span>请把控制台错误发出来，我会继续修。</span>

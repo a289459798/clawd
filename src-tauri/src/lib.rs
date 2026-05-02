@@ -1525,7 +1525,7 @@ fn open_openclaw_install_terminal() -> Result<String, String> {
         "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw install finished. Return to clawx and click re-detect.'; else echo 'Standard installer failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
     };
     open_terminal_command(install_command, "OpenClaw install")?;
-    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 clawx 重新检测。".to_string())
+    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 Clawx 重新检测。".to_string())
 }
 
 #[tauri::command]
@@ -1537,7 +1537,7 @@ fn open_openclaw_update_terminal() -> Result<String, String> {
         format!("{update}; echo 'OpenClaw update flow finished. Return to clawx and refresh status.'")
     };
     open_terminal_command(&command_line, "OpenClaw update")?;
-    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 clawx 刷新状态。".to_string())
+    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 Clawx 刷新状态。".to_string())
 }
 
 fn openclaw_gateway_service_command(action: &'static str) -> Result<String, String> {

@@ -1,6 +1,14 @@
 import type { NavKey } from "../types/app";
 
-export function GatewayBanner({ connected, statusText, error }: { connected: boolean; statusText: string; error: string | null }) {
+export function GatewayBanner({
+  connected,
+  statusText,
+  error,
+}: {
+  connected: boolean;
+  statusText: string;
+  error: string | null;
+}) {
   if (connected) return null;
   return (
     <div className="global-gateway-banner" role="alert">
@@ -8,17 +16,37 @@ export function GatewayBanner({ connected, statusText, error }: { connected: boo
         <strong>Gateway 不可用</strong>
         <span>{statusText}</span>
       </div>
-      {error ? <code className="global-gateway-banner-error">{error}</code> : null}
+      {error ? (
+        <code className="global-gateway-banner-error">{error}</code>
+      ) : null}
     </div>
   );
 }
 
-export function ImageLightbox({ src, onClose }: { src: string | null; onClose: () => void }) {
+export function ImageLightbox({
+  src,
+  onClose,
+}: {
+  src: string | null;
+  onClose: () => void;
+}) {
   if (!src) return null;
   return (
-    <div className="image-lightbox" role="dialog" aria-modal="true" onClick={onClose}>
-      <button className="image-lightbox-close" type="button" onClick={onClose}>×</button>
-      <img className="image-lightbox-content" src={src} alt="预览大图" onClick={(event) => event.stopPropagation()} />
+    <div
+      className="image-lightbox"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <button className="image-lightbox-close" type="button" onClick={onClose}>
+        ×
+      </button>
+      <img
+        className="image-lightbox-content"
+        src={src}
+        alt="预览大图"
+        onClick={(event) => event.stopPropagation()}
+      />
     </div>
   );
 }
@@ -52,12 +80,19 @@ export function NavSidebar({
     gatewayVersion ? `版本 ${gatewayVersion}` : "",
     updateAvailable ? "有可用更新" : "",
     typeof sessionCount === "number" ? `${sessionCount} 个会话` : "",
-  ].filter(Boolean).join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <aside className="nav-sidebar">
       <div className="nav-group">
         {navItems.map((item) => (
-          <button className={`nav-item ${activeNav === item.key ? "active" : ""}`} onClick={() => onNavChange(item.key)} type="button" key={item.key}>
+          <button
+            className={`nav-item ${activeNav === item.key ? "active" : ""}`}
+            onClick={() => onNavChange(item.key)}
+            type="button"
+            key={item.key}
+          >
             <span className={`nav-symbol ${item.icon}`} />
             <span>{item.label}</span>
           </button>
@@ -72,7 +107,9 @@ export function NavSidebar({
           onClick={onOpenStatus}
         >
           <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
-          {updateAvailable ? <span className="openclaw-update-badge">有更新</span> : null}
+          {updateAvailable ? (
+            <span className="openclaw-update-badge">有更新</span>
+          ) : null}
         </button>
       </div>
     </aside>

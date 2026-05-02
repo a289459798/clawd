@@ -1,5 +1,7 @@
 import { startTransition, useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { defaultWindowIcon } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
 import { AgentCreateDialog } from "./components/AgentCreateDialog";
@@ -155,6 +157,27 @@ function App() {
   const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [userExpanded, setUserExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function applyWindowIcon() {
+      try {
+        const icon = await defaultWindowIcon();
+        if (!cancelled && icon) {
+          await getCurrentWindow().setIcon(icon);
+        }
+      } catch (error) {
+        console.warn("Failed to apply Clawx window icon", error);
+      }
+    }
+
+    void applyWindowIcon();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     queuedMessagesByConversationRef.current = queuedMessagesByConversation;
