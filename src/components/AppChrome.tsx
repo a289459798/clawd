@@ -42,6 +42,7 @@ export function NavSidebar({
 }) {
   const navItems: Array<{ key: NavKey; label: string; icon: string }> = [
     { key: "conversations", label: "对话", icon: "chat" },
+    { key: "models", label: "模型", icon: "model" },
     { key: "skills", label: "技能", icon: "skill" },
     { key: "connections", label: "连接", icon: "plug" },
     { key: "usage", label: "用量", icon: "usage" },

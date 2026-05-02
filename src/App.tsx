@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { startTransition, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
@@ -7,6 +7,7 @@ import { AgentFilesDialog } from "./components/AgentFilesDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
+import { ModelsPage } from "./components/ModelsPage";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
@@ -23,7 +24,7 @@ import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import type { Conversation, PreviewMessage } from "./types/conversation";
 import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
-import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsStatusResult, GatewayHistoryResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
+import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
 
@@ -113,11 +114,20 @@ function App() {
   const [skills, setSkills] = useState<Skill[]>(fallbackSkills);
   const [connections, setConnections] = useState<ChannelConnection[]>(fallbackConnections);
   const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataPageReady, setMetadataPageReady] = useState(true);
   const [weixinStatus, setWeixinStatus] = useState<WeixinPluginStatus | null>(null);
   const [weixinBusy, setWeixinBusy] = useState(false);
   const [weixinMessage, setWeixinMessage] = useState<string | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
+  const [usagePageReady, setUsagePageReady] = useState(true);
+  const [modelsPageLoading, setModelsPageLoading] = useState(false);
+  const [modelActionBusy, setModelActionBusy] = useState(false);
+  const [modelsActionMessage, setModelsActionMessage] = useState<string | null>(null);
+  const [configuredModels, setConfiguredModels] = useState<GatewayModelSummary[]>([]);
+  const [allModels, setAllModels] = useState<GatewayModelSummary[]>([]);
+  const [modelAuthStatus, setModelAuthStatus] = useState<GatewayModelAuthStatusResult | null>(null);
+  const [modelsPageReady, setModelsPageReady] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
   const [openClawCliStatus, setOpenClawCliStatus] = useState<OpenClawCliStatus | null>(null);
   const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
@@ -126,7 +136,7 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  const { modelOptions, modelsLoading } = useModels({ enabled: bootstrapStep === "ready" });
+  const { modelOptions, modelsLoading, reloadModels } = useModels({ enabled: bootstrapStep === "ready" });
   const { loadGatewaySnapshot } = useGatewaySnapshot();
   const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
@@ -519,6 +529,164 @@ function App() {
     }
   }, [refreshGatewayStatus]);
 
+  const refreshModelsPage = useCallback(async (options?: { refreshAuth?: boolean }) => {
+    setModelsPageLoading(true);
+    try {
+      await invoke("gateway_connect");
+      const [configuredResult, authResult] = await Promise.all([
+        invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } }),
+        invoke<GatewayModelAuthStatusResult>("gateway_models_auth_status", { params: { refresh: Boolean(options?.refreshAuth) } }),
+      ]);
+      startTransition(() => {
+        setConfiguredModels(configuredResult.models ?? []);
+        setModelAuthStatus(authResult);
+      });
+      setModelsPageLoading(false);
+      void reloadModels();
+      void (async () => {
+        try {
+          const allResult = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "all" } });
+          startTransition(() => setAllModels(allResult.models ?? []));
+        } catch (error) {
+          console.warn("Failed to refresh full model catalog", error);
+        }
+      })();
+    } catch (error) {
+      console.warn("Failed to refresh models page", error);
+      setModelsActionMessage(error instanceof Error ? error.message : "模型状态刷新失败");
+      setModelsPageLoading(false);
+    }
+  }, [reloadModels]);
+
+  const patchOpenClawConfig = useCallback(async (patch: unknown) => {
+    const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
+    if (!current.hash) {
+      throw new Error("OpenClaw 配置 hash 不可用，请刷新后重试");
+    }
+    await invoke<GatewayConfigPatchResult>("gateway_config_patch", {
+      params: {
+        raw: JSON.stringify(patch),
+        baseHash: current.hash,
+        restartDelayMs: 300,
+      },
+    });
+  }, []);
+
+  const handleSetDefaultModel = useCallback(async (modelRef: string) => {
+    setModelActionBusy(true);
+    setModelsActionMessage(null);
+    try {
+      await patchOpenClawConfig({ agents: { defaults: { model: { primary: modelRef }, models: { [modelRef]: {} } } } });
+      setModelsActionMessage(`已设为默认模型：${modelRef}`);
+      setComposerModel(modelRef);
+      setOpenClawStatus((current) => current ? {
+        ...current,
+        sessions: {
+          ...current.sessions,
+          defaults: {
+            ...current.sessions?.defaults,
+            model: modelRef,
+          },
+        },
+      } : current);
+      void refreshOpenClawStatus();
+      void refreshModelsPage({ refreshAuth: true });
+    } catch (error) {
+      console.error("Failed to set default model", error);
+      setModelsActionMessage(error instanceof Error ? error.message : "设置默认模型失败");
+    } finally {
+      setModelActionBusy(false);
+    }
+  }, [patchOpenClawConfig, refreshModelsPage, refreshOpenClawStatus]);
+
+  const handleModelAuthProvider = useCallback(async (provider: string, setDefault: boolean) => {
+    setModelActionBusy(true);
+    setModelsActionMessage(null);
+    try {
+      const message = await invoke<string>("open_model_auth_terminal", { provider, setDefault });
+      setModelsActionMessage(message);
+      window.setTimeout(() => void refreshModelsPage({ refreshAuth: true }), 1500);
+    } catch (error) {
+      console.error("Failed to open model auth terminal", error);
+      setModelsActionMessage(error instanceof Error ? error.message : "打开模型授权失败");
+    } finally {
+      setModelActionBusy(false);
+    }
+  }, [refreshModelsPage]);
+
+  const handleSaveProviderConfig = useCallback(async (draft: { provider: string; apiKey: string; baseUrl: string }) => {
+    const provider = draft.provider.trim();
+    if (!provider) {
+      setModelsActionMessage("Provider 不能为空");
+      return;
+    }
+    const providerConfig: Record<string, unknown> = {};
+    if (draft.apiKey.trim()) providerConfig.apiKey = draft.apiKey.trim();
+    if (draft.baseUrl.trim()) providerConfig.baseUrl = draft.baseUrl.trim();
+    if (Object.keys(providerConfig).length === 0) {
+      setModelsActionMessage("请填写 API Key 或 Base URL");
+      return;
+    }
+    setModelActionBusy(true);
+    setModelsActionMessage(null);
+    try {
+      await patchOpenClawConfig({ models: { providers: { [provider]: providerConfig } } });
+      setModelsActionMessage(`已保存 Provider：${provider}`);
+      void refreshModelsPage({ refreshAuth: true });
+    } catch (error) {
+      console.error("Failed to save provider config", error);
+      setModelsActionMessage(error instanceof Error ? error.message : "保存 Provider 配置失败");
+    } finally {
+      setModelActionBusy(false);
+    }
+  }, [patchOpenClawConfig, refreshModelsPage]);
+
+  const handleSaveModelConfig = useCallback(async (draft: { provider: string; modelId: string; alias: string; setDefault: boolean }) => {
+    const provider = draft.provider.trim();
+    const modelId = draft.modelId.trim();
+    if (!provider || !modelId) {
+      setModelsActionMessage("Provider 和模型名称不能为空");
+      return;
+    }
+    const modelRef = `${provider}/${modelId}`;
+    const patch: Record<string, unknown> = {
+      models: { providers: { [provider]: { models: [{ id: modelId, ...(draft.alias.trim() ? { name: draft.alias.trim() } : {}) }] } } },
+      agents: {
+        defaults: {
+          models: { [modelRef]: draft.alias.trim() ? { alias: draft.alias.trim() } : {} },
+          ...(draft.setDefault ? { model: { primary: modelRef } } : {}),
+        },
+      },
+    };
+
+    setModelActionBusy(true);
+    setModelsActionMessage(null);
+    try {
+      await patchOpenClawConfig(patch);
+      if (draft.setDefault) {
+        setComposerModel(modelRef);
+        setOpenClawStatus((current) => current ? {
+          ...current,
+          sessions: {
+            ...current.sessions,
+            defaults: {
+              ...current.sessions?.defaults,
+              model: modelRef,
+            },
+          },
+        } : current);
+      }
+      setModelsActionMessage(draft.setDefault ? `已保存并设为默认：${modelRef}` : `已保存模型：${modelRef}`);
+      void refreshOpenClawStatus();
+      void refreshModelsPage({ refreshAuth: true });
+    } catch (error) {
+      console.error("Failed to save provider model config", error);
+      setModelsActionMessage(error instanceof Error ? error.message : "保存模型配置失败");
+    } finally {
+      setModelActionBusy(false);
+    }
+  }, [patchOpenClawConfig, refreshModelsPage, refreshOpenClawStatus]);
+
   const refreshOpenClawCliStatus = useCallback(async () => {
     try {
       const status = await invoke<OpenClawCliStatus>("openclaw_cli_status");
@@ -583,6 +751,24 @@ function App() {
     if (nav === activeNav) return;
     if (nav === "usage") {
       setUsageLoading(true);
+      setUsagePageReady(false);
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => setUsagePageReady(true), 0);
+      });
+    }
+    if (nav === "skills" || nav === "connections") {
+      setMetadataLoading(true);
+      setMetadataPageReady(false);
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => setMetadataPageReady(true), 0);
+      });
+    }
+    if (nav === "models") {
+      setModelsPageLoading(true);
+      setModelsPageReady(false);
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => setModelsPageReady(true), 0);
+      });
     }
     setActiveNav(nav);
   }, [activeNav]);
@@ -632,21 +818,36 @@ function App() {
     };
 
     if (activeNav === "skills") {
-      scheduleAfterPaint(() => void refreshGatewayMetadata());
+      scheduleAfterPaint(() => {
+        setMetadataPageReady(true);
+        void refreshGatewayMetadata();
+      }, 80);
     }
     if (activeNav === "connections") {
-      scheduleAfterPaint(() => void refreshGatewayConnections());
-      scheduleAfterPaint(() => void refreshWeixinPluginStatus(), 350);
+      scheduleAfterPaint(() => {
+        setMetadataPageReady(true);
+        void refreshGatewayConnections();
+      }, 80);
+      scheduleAfterPaint(() => void refreshWeixinPluginStatus(), 430);
+    }
+    if (activeNav === "models") {
+      scheduleAfterPaint(() => {
+        setModelsPageReady(true);
+        void refreshModelsPage({ refreshAuth: true });
+      }, 80);
     }
     if (activeNav === "usage") {
-      scheduleAfterPaint(() => void refreshUsage());
+      scheduleAfterPaint(() => {
+        setUsagePageReady(true);
+        void refreshUsage();
+      }, 80);
     }
     return () => {
       cancelled = true;
       frames.forEach((frame) => window.cancelAnimationFrame(frame));
       timeouts.forEach((timeout) => clearTimeout(timeout));
     };
-  }, [activeNav, bootstrapStep, refreshGatewayConnections, refreshGatewayMetadata, refreshUsage, refreshWeixinPluginStatus]);
+  }, [activeNav, bootstrapStep, refreshGatewayConnections, refreshGatewayMetadata, refreshModelsPage, refreshUsage, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     if (bootstrapStep !== "ready") {
@@ -1294,19 +1495,36 @@ function App() {
           </>
         ) : null}
 
+        {activeNav === "models" ? (
+          <ModelsPage
+            configuredModels={modelsPageReady ? configuredModels : []}
+            allModels={modelsPageReady ? allModels : []}
+            authStatus={modelsPageReady ? modelAuthStatus : null}
+            loading={modelsPageLoading || !modelsPageReady}
+            currentDefaultModel={openClawStatus?.sessions?.defaults?.model}
+            actionBusy={modelActionBusy}
+            message={modelsActionMessage}
+            onRefresh={() => void refreshModelsPage({ refreshAuth: true })}
+            onSetDefault={(modelRef) => void handleSetDefaultModel(modelRef)}
+            onAuthProvider={(provider, setDefault) => void handleModelAuthProvider(provider, setDefault)}
+            onSaveProviderConfig={(draft) => void handleSaveProviderConfig(draft)}
+            onSaveModelConfig={(draft) => void handleSaveModelConfig(draft)}
+          />
+        ) : null}
+
         {activeNav === "skills" ? (
           <SkillsPage
-            skills={skills}
-            loading={metadataLoading}
+            skills={metadataPageReady ? skills : []}
+            loading={metadataLoading || !metadataPageReady}
             onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
           />
         ) : null}
 
         {activeNav === "connections" ? (
           <ConnectionsPage
-            connections={connections}
+            connections={metadataPageReady ? connections : []}
             connectionLabel={connectionLabel}
-            loading={metadataLoading}
+            loading={metadataLoading || !metadataPageReady}
             weixinStatus={weixinStatus}
             weixinBusy={weixinBusy}
             weixinMessage={weixinMessage}
@@ -1319,7 +1537,7 @@ function App() {
         ) : null}
 
         {activeNav === "usage" ? (
-          <UsagePage usage={usage} loading={usageLoading} />
+          <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} />
         ) : null}
       </div>
 

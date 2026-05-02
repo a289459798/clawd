@@ -57,14 +57,71 @@ export type GatewayOpenClawStatusResult = {
 
 export type GatewayModelSummary = {
   id: string;
+  ref?: string;
   provider?: string;
   name?: string;
   alias?: string;
   label?: string;
+  source?: string;
+  input?: string[];
+  reasoning?: boolean;
+  status?: string;
+  api?: string;
+  baseUrl?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+  maxTokens?: number;
+  tags?: string[];
 };
 
 export type GatewayModelsResult = {
   models?: GatewayModelSummary[];
+};
+
+export type GatewayModelAuthStatusProfile = {
+  profileId: string;
+  type: "oauth" | "token" | "api_key";
+  status: string;
+  expiry?: {
+    at: number;
+    remainingMs: number;
+    label: string;
+  };
+};
+
+export type GatewayModelAuthStatusProvider = {
+  provider: string;
+  displayName: string;
+  status: string;
+  profiles: GatewayModelAuthStatusProfile[];
+  expiry?: {
+    at: number;
+    remainingMs: number;
+    label: string;
+  };
+  usage?: {
+    plan?: string;
+    windows?: unknown[];
+  };
+};
+
+export type GatewayModelAuthStatusResult = {
+  ts: number;
+  providers: GatewayModelAuthStatusProvider[];
+};
+
+export type GatewayConfigPatchResult = {
+  ok?: boolean;
+  noop?: boolean;
+  path?: string;
+  config?: unknown;
+};
+
+export type GatewayConfigGetResult = {
+  hash?: string;
+  config?: unknown;
+  path?: string;
+  exists?: boolean;
 };
 
 export type GatewayAgentsListResult = {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelOption } from "../types/app";
 import type { GatewayModelsResult } from "../types/gateway";
@@ -12,11 +12,26 @@ interface UseModelsReturn {
   modelOptions: ModelOption[];
   modelsLoading: boolean;
   setModelOptions: (options: ModelOption[]) => void;
+  reloadModels: () => Promise<void>;
 }
 
 export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+
+  const reloadModels = useCallback(async () => {
+    setModelsLoading(true);
+    try {
+      await invoke("gateway_connect");
+      const result = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } });
+      setModelOptions(buildModelOptions(result));
+    } catch (error) {
+      console.error("Failed to load OpenClaw models", error);
+      setModelOptions([]);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -27,7 +42,7 @@ export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
       setModelsLoading(true);
       try {
         await invoke("gateway_connect");
-        const result = await invoke<GatewayModelsResult>("gateway_models_list");
+        const result = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } });
         if (!cancelled) {
           setModelOptions(buildModelOptions(result));
         }
@@ -54,5 +69,6 @@ export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
     modelOptions,
     modelsLoading,
     setModelOptions,
+    reloadModels,
   };
 }

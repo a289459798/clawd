@@ -1155,6 +1155,21 @@ fn open_weixin_login_terminal() -> Result<String, String> {
     Ok("已打开终端，请在终端中扫描 openclaw-weixin 登录二维码。".to_string())
 }
 
+#[tauri::command]
+fn open_model_auth_terminal(provider: String, set_default: Option<bool>) -> Result<String, String> {
+    let provider = provider.trim().to_string();
+    if provider.is_empty() {
+        return Err("provider is required".to_string());
+    }
+    let mut args = vec!["models", "auth", "login", "--provider", provider.as_str()];
+    if set_default.unwrap_or(false) {
+        args.push("--set-default");
+    }
+    let auth_command = openclaw_terminal_command(&args)?;
+    open_terminal_command(&auth_command, &format!("openclaw model auth {provider}"))?;
+    Ok(format!("已打开终端授权 {provider}。授权完成后请回到模型页刷新状态。"))
+}
+
 fn applescript_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -1500,12 +1515,13 @@ fn open_openclaw_install_terminal() -> Result<String, String> {
 
 #[tauri::command]
 fn open_openclaw_update_terminal() -> Result<String, String> {
-    let update_command = if cfg!(windows) {
-        "iwr -useb https://openclaw.ai/install.ps1 | iex"
+    let update = openclaw_terminal_command(&["update"])?;
+    let command_line = if cfg!(windows) {
+        format!("{update}; Write-Host 'OpenClaw update flow finished. Return to clawx and refresh status.'")
     } else {
-        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw update finished. Return to clawx and refresh status.'; else echo 'Standard updater failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
+        format!("{update}; echo 'OpenClaw update flow finished. Return to clawx and refresh status.'")
     };
-    open_terminal_command(update_command, "OpenClaw update")?;
+    open_terminal_command(&command_line, "OpenClaw update")?;
     Ok("已打开终端更新 OpenClaw。更新完成后，请回到 clawx 刷新状态。".to_string())
 }
 
@@ -1532,6 +1548,7 @@ pub fn run() {
             gateway_proxy::gateway_agents_files_set,
             gateway_proxy::gateway_openclaw_status,
             gateway_proxy::gateway_health,
+            gateway_proxy::gateway_models_auth_status,
             gateway_proxy::gateway_skills_status,
             gateway_proxy::gateway_skills_update,
             gateway_proxy::gateway_channels_status,
@@ -1546,12 +1563,15 @@ pub fn run() {
             gateway_proxy::gateway_session_messages_unsubscribe,
             gateway_proxy::gateway_chat_history,
             gateway_proxy::gateway_models_list,
+            gateway_proxy::gateway_config_patch,
+            gateway_proxy::gateway_config_get,
             gateway_proxy::gateway_chat_send,
             gateway_proxy::gateway_chat_abort,
             gateway_proxy::gateway_sessions_create,
             gateway_proxy::gateway_sessions_patch,
             pick_workspace_directory,
             openclaw_cli_status,
+            open_model_auth_terminal,
             weixin_plugin_status,
             ensure_weixin_plugin_enabled,
             open_weixin_login_terminal,

@@ -16,7 +16,7 @@ export const buildModelOptions = (result?: GatewayModelsResult | null): ModelOpt
   const seen = new Set<string>();
   return models
     .map((model) => {
-      const value = qualifyModelId(model.id, model.provider);
+      const value = model.ref?.trim() || qualifyModelId(model.id, model.provider);
       if (!value) return null;
       const displayName = model.alias?.trim() || model.label?.trim() || model.name?.trim() || model.id.trim();
       const provider = model.provider?.trim();
