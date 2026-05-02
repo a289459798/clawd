@@ -8,7 +8,7 @@ clawx 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，�
 
 开发时保持这个方向：
 
-- 以桌面软件的工作流组织 agent / session / skill / channel。
+- 以桌面软件的工作流组织 agent / session / model / skill / channel / usage。
 - 对话页是核心页面，左侧资源树和主工作区关系不能随意打散。
 - 隐藏对话只是从主工作区隐藏，不是删除，也不能让会话从可检索数据源消失。
 - 设计应克制、耐用、适合长期工作，不要改回营销页、大 dashboard、超大标题或装饰性展示页。
@@ -54,12 +54,40 @@ OpenClaw Gateway RPC/events 是运行态和规范数据的第一来源。
 
 开发守则：
 
-- 优先使用 `agents.list`、`sessions.list`、`sessions.preview`、`chat.history`、`skills.status`、`channels.status` 等 Gateway 方法。
+- 优先使用 `agents.list`、`sessions.list`、`sessions.preview`、`chat.history`、`models.list`、`models.authStatus`、`skills.status`、`channels.status`、`sessions.usage` 等 Gateway 方法。
 - 不要复制 OpenClaw 的 session key 规范化、session store 解析、transcript 路径发现逻辑；这些应由 Gateway 负责。
 - 不要依赖固定配置路径作为唯一来源。OpenClaw 支持 `OPENCLAW_CONFIG_PATH`、`OPENCLAW_STATE_DIR` 和 session store override。
 - 不要在 `chat.send` payload 里新增 OpenClaw schema 不接受的字段。模型变更应先通过 `sessions.patch` 保存到 session，再发送消息。
 - Gateway 事件不是完整历史回放；UI 遇到断线、切换会话、final/error/abort 后，应通过 `chat.history` 或对应列表 RPC 做 reconciliation。
 - 本地 optimistic UI 状态要和 Gateway canonical rows 分开，刷新时不能擦掉正在发送或流式生成中的本地消息。
+
+## 模型管理原则
+
+模型页是 OpenClaw provider / model 配置的友好入口，不是独立模型注册中心。
+
+开发守则：
+
+- 模型列表优先来自 Gateway：已配置模型用 `models.list`，完整 provider/model catalog 用 `models.list` 的 all/catalog 视图，OAuth 状态用 `models.authStatus`。
+- Provider 配置和 Model 配置必须分开：
+  - Provider 配置承载 `baseUrl`、`apiKey`、OAuth 状态等连接信息。
+  - Model 配置只承载模型名称、别名、是否默认等使用层信息。
+- 未配置 provider 时，右侧模型列表应禁用并提示“请先配置 Provider”，不要让用户误以为模型可直接使用。
+- 默认模型通过配置 patch 保存到 OpenClaw 配置，例如 `agents.defaults.model.primary`，并维护对应 allowlist；不要把默认模型只存在 clawx 前端状态里。
+- 写 OpenClaw 配置时必须走 `config.get` + `baseHash` + `config.patch`，避免覆盖用户或 Gateway 同时写入的配置。
+- 支持 OAuth 的 provider 应打开外部浏览器或可见系统终端执行授权流程，例如 `openclaw models auth login --provider <providerId>`；不要在 clawx 内嵌不透明授权 WebView。
+- API Key 不要在界面里回显真实值。后续接入 SecretRef 时，应优先使用 OpenClaw 的 secret/schema 能力，而不是自建一套密钥存储。
+- 发送消息时不要往 `chat.send` 追加 OpenClaw schema 不接受的模型字段；模型切换如果需要落到会话配置，应先通过 Gateway 的 session/config 方法保存。
+
+## 异步与性能原则
+
+桌面 UI 不能因为 Gateway、npm、OpenClaw CLI 或文件扫描卡住主界面。
+
+- 页面切换必须先渲染页面 shell，再异步加载数据。模型、技能、连接、用量这类页面尤其要避免“点菜单几秒后才打开”。
+- 慢操作必须有局部 loading 状态，例如 provider 行、channel 卡片、按钮自身或页面内容区；不要只让系统鼠标变成等待状态。
+- Tauri command 中如果调用 `send_rpc(...).wait(...)`、OpenClaw CLI、npm、安装器、版本检测或大量文件读取，应优先做成 `async` command，并把阻塞逻辑放入 `tauri::async_runtime::spawn_blocking`。
+- 已知可能较慢的 Gateway 方法包括 `models.list` 全量 catalog、`models.authStatus`、`skills.status`、`channels.status`、`sessions.usage`、`config.patch`。新增调用这些方法时，默认按异步加载和局部 loading 设计。
+- 页面数据刷新不要阻塞交互。能乐观更新的状态（例如设为默认模型、启用 channel、更新 provider 配置）先更新本地 UI，再后台 reconciliation。
+- Gateway events 不是完整历史；慢加载、断线重连、final/error/abort 后仍要通过对应 RPC 拉取 canonical state。
 
 ## OpenClaw 安装引导
 
@@ -103,9 +131,11 @@ clawx 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw �
 ## UI 与交互规范
 
 - 首屏应是可用的工作台，不做 landing page。
-- 对话、技能、连接、用量等页面应保持工具型桌面软件气质，避免装饰性卡片堆叠。
+- 对话、模型、技能、连接、用量等页面应保持工具型桌面软件气质，避免装饰性卡片堆叠。
 - 资源侧栏应保留 agent + session 的结构。
 - 对话详情要支持低摩擦发送、停止生成、附件、模型/思考参数、流式状态和历史 reconciliation。
+- 对话模式下，工具调用应作为消息流的一部分展示；模型和 token 用量跟随对应 assistant 消息展示，不要固定在页面底部。
+- Composer 的思考等级默认应为 `off`，除非 OpenClaw 或当前模型能力明确要求其他默认值。
 - 长会话不要一次渲染巨大历史；优先做分段加载，再考虑虚拟列表依赖。
 - destructive actions 必须确认，例如 reset、delete、清空、覆盖配置。
 - 错误信息要能帮助用户下一步行动，尤其是 Gateway 未连接、OpenClaw 未安装、权限/终端打开失败。

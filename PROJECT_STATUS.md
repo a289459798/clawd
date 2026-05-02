@@ -1,7 +1,65 @@
 # clawx 项目状态文档
 
-> 最后更新：2026-04-28 16:31 GMT+8
+> 最后更新：2026-05-02 GMT+8
 > 本文档只记录当前真实实现状态，方便后续继续开发。
+
+---
+
+## 〇、最近进展（2026-05-02）
+
+### 模型管理页
+
+- 新增“模型”一级导航，采用左右结构：左侧 provider，右侧展示选中 provider 的模型。
+- Provider 配置和添加模型已区分：
+  - Provider 配置包含 API Key、Base URL、OAuth 等连接信息。
+  - 添加/修改模型只包含模型名称、别名、是否默认等使用信息。
+- 未配置 provider 时，模型列表显示禁用状态并提示“请先配置 Provider”。
+- 已配置 provider 的模型支持“修改”和“设为默认”。
+- 左侧支持添加自定义 provider；已配置 provider 旁支持增加 model。
+- 支持 OAuth 的 provider 提供授权入口，授权逻辑走 OpenClaw CLI 可见流程。
+- 默认模型写入 OpenClaw 配置，当前通过 `config.get` + `baseHash` + `config.patch` 更新 `agents.defaults.model.primary` 和 allowlist。
+
+### 页面性能与异步加载
+
+- 模型、技能、连接、用量页面已改为先打开页面 shell，再异步加载数据。
+- 慢 Gateway RPC 已在 Tauri 后端改为 async command + `tauri::async_runtime::spawn_blocking`，避免页面切换时出现系统等待光标。
+- 已优化模型页设为默认、保存 provider、保存 model 等操作：按钮级 loading + 乐观更新 + 后台刷新。
+- 已知慢 RPC：`models.list` 全量 catalog、`models.authStatus`、`skills.status`、`channels.status`、`sessions.usage`、`config.patch`。后续新增页面或按钮时应默认按异步交互处理。
+
+### OpenClaw 安装、更新与连接
+
+- OpenClaw CLI 检测已兼容 local-prefix 安装路径，尤其是 `~/.openclaw/bin/openclaw`。
+- OpenClaw 左下角图标支持“有更新”角标；更新弹层展示当前版本和最新版本。
+- 更新按钮使用 `openclaw update`，不是重新跑安装脚本。
+- Gateway device identity 已按 OpenClaw 要求使用 Ed25519 public key SHA-256 指纹，并兼容旧随机 device id 的迁移。
+
+### Channel 与 WeChat
+
+- 连接页展示所有 channel，但不再展示 `channels.xxx` 这类内部配置字段。
+- 每个 channel 检测/安装/启用过程有局部 loading。
+- WeChat channel 已按 `@tencent-weixin/openclaw-weixin` 接入安装、启用、版本检查、更新和登录入口。
+- 安装后会尝试启用插件并刷新状态，避免用户看到“已安装但未启用/未同步”的假状态。
+
+### 对话链路
+
+- 发送错误如果 `gateway_chat_send` 返回字符串，会在对话详情底部展示错误，并结束 loading。
+- 发送成功期望返回 `{ runId, status: "started" }`。
+- 对话模式和专注模式的发送/接收逻辑已重新梳理，避免 Sender metadata 展示、用户消息重复、AI 回复重复拼接。
+- 工具调用在对话模式中按消息样式展示。
+- 模型和 token 用量改为跟随每条 assistant 消息展示，不固定在页面底部。
+- Composer `thinklevel` 默认值为 `off`。
+
+### 验证
+
+- `pnpm build` ✅
+- `cargo check --manifest-path src-tauri/Cargo.toml` ✅
+
+### 后续建议
+
+- 给模型 provider/model 配置补测试，尤其是 `config.patch` payload 和默认模型选择。
+- 继续接入 SecretRef / schema-driven config，避免 API Key 明文回显。
+- 给慢 RPC 增加前端超时与重试提示。
+- 对 Windows 终端授权、OpenClaw 更新和 OAuth 流程做实机回归。
 
 ---
 
@@ -159,13 +217,15 @@
 ### 2.2 当前界面结构
 
 #### 左侧一级导航
-当前有 3 个模块:
+当前有 5 个模块:
 
 - 对话
+- 模型
 - 技能
 - 连接
+- 用量
 
-左下角有一个入口按钮,可直接打开本地 OpenClaw 网页。
+左下角有一个入口按钮,可直接打开本地 OpenClaw 网页；检测到 OpenClaw CLI 新版本时会显示“有更新”角标。
 
 #### 对话页
 对话页由两部分组成:
@@ -229,13 +289,31 @@
 - 文件路径
 - 启用状态
 
+#### 模型页
+当前展示:
+
+- Provider 列表
+- Provider 是否已配置
+- OAuth 授权状态
+- Provider 下模型列表
+- 添加/修改模型
+- 设置默认模型
+
+Provider 配置与 Model 配置分开处理。未配置 provider 的模型列表不可用，并提示“请先配置 Provider”。
+
 #### 连接页
 当前展示:
 
 - channel / connection 名称
 - 连接状态
-- 配置项位置
 - 最近活动信息
+- 安装、启用、登录、更新等 channel 相关动作
+
+#### 用量页
+当前展示:
+
+- 输入/输出/cache/cost 汇总
+- 按 agent、model、recent session 的使用情况拆分
 
 ---
 
@@ -243,15 +321,18 @@
 
 ### 3.1 已接入的数据源
 
-| 数据源 | 路径 | 状态 |
+| 数据源 | 入口 | 状态 |
 |--------|------|------|
-| OpenClaw 主配置 | `~/.openclaw/openclaw.json` | ✅ 已接入 |
-| Agent 列表 | 从主配置解析 | ✅ 已接入 |
-| Session 元数据 | `~/.openclaw/agents/<agentId>/sessions/sessions.json` | ✅ 已接入 |
-| Session 消息预览 | `~/.openclaw/agents/<agentId>/sessions/*.jsonl` | ✅ 已接入 |
-| Session token 用量 | `*.jsonl` 中的 `usage.*` | ✅ 已接入 |
-| Skills 列表 | `~/Workspace/nodejs/clawdbot/skills` + `~/.agents/skills` | ✅ 已接入 |
-| Channels 列表 | 从主配置解析 | ✅ 已接入 |
+| Agent 列表 | Gateway `agents.list`，snapshot fallback | ✅ 已接入 |
+| Session 元数据 | Gateway `sessions.list` / `sessions.preview`，snapshot fallback | ✅ 已接入 |
+| Session 消息历史 | Gateway `chat.history`，本地 transcript fallback | ✅ 已接入 |
+| Session token 用量 | Gateway / transcript `usage.*` | ✅ 已接入 |
+| Models 列表 | Gateway `models.list` | ✅ 已接入 |
+| Models OAuth 状态 | Gateway `models.authStatus` | ✅ 已接入 |
+| OpenClaw 配置读写 | Gateway `config.get` + `config.patch` | ✅ 已接入 |
+| Skills 列表 | Gateway `skills.status` | ✅ 已接入 |
+| Channels 列表 | Gateway `channels.status` | ✅ 已接入 |
+| Usage 汇总 | Gateway `sessions.usage` | ✅ 已接入 |
 | Dashboard URL | `openclaw dashboard --no-open` | ✅ 已接入 |
 
 ### 3.2 当前 Tauri 命令
@@ -266,6 +347,13 @@
 | `gateway_chat_send` | 通过 Tauri Gateway 代理发送消息 | ✅ |
 | `gateway_chat_abort` | 通过 Tauri Gateway 代理停止生成 | ✅ |
 | `gateway_sessions_create` | 通过 Tauri Gateway 代理新建对话 | ✅ |
+| `gateway_models_list` | 读取模型 provider/model 列表 | ✅ |
+| `gateway_models_auth_status` | 读取模型 OAuth 授权状态 | ✅ |
+| `gateway_config_get` | 读取 OpenClaw 配置 | ✅ |
+| `gateway_config_patch` | 写入 OpenClaw 配置 patch | ✅ |
+| `gateway_skills_status` | 读取 skills 状态 | ✅ |
+| `gateway_channels_status` | 读取 channels 状态 | ✅ |
+| `gateway_sessions_usage` | 读取 usage 汇总 | ✅ |
 
 ### 3.3 当前快照结构
 
@@ -445,14 +533,19 @@ src/
 
 ## 七、关键文件
 
-- `/Users/zhangzy/Workspace/clawx/src/App.tsx`
-- `/Users/zhangzy/Workspace/clawx/src/App.css`
-- `/Users/zhangzy/Workspace/clawx/src/main.tsx`
-- `/Users/zhangzy/Workspace/clawx/src-tauri/src/lib.rs`
-- `/Users/zhangzy/Workspace/clawx/src-tauri/src/main.rs`
-- `/Users/zhangzy/Workspace/clawx/src-tauri/Cargo.toml`
-- `/Users/zhangzy/Workspace/clawx/src-tauri/tauri.conf.json`
-- `/Users/zhangzy/Workspace/clawx/README.md`
+- `src/App.tsx`：主界面状态编排层。
+- `src/App.css`：当前全局样式与页面布局。
+- `src/components/ConversationDetail.tsx`：对话详情、消息流、工具调用与消息 footer。
+- `src/components/ConversationComposer.tsx`：发送区、附件、思考等级、停止生成。
+- `src/components/ModelsPage.tsx`：模型 provider / model 管理页。
+- `src/components/InfoPages.tsx`：技能、连接、用量等信息页。
+- `src/hooks/useGatewayChat.ts`：Gateway chat event 处理。
+- `src/hooks/useMessageSender.ts`：发送消息、草稿会话转真实 session、错误恢复。
+- `src/hooks/useModels.ts`：模型列表加载。
+- `src-tauri/src/lib.rs`：Tauri command 注册与本机能力桥接。
+- `src-tauri/src/gateway_proxy.rs`：Gateway WebSocket 代理、RPC、事件转发与慢 RPC async command。
+- `src-tauri/Cargo.toml`：Rust 依赖。
+- `README.md`、`AGENTS.md`、`docs/plans/`：后续 AI / 开发者接手前应先读。
 
 ---
 

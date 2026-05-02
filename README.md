@@ -8,7 +8,7 @@ clawx 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，�
 
 - 降低 OpenClaw 日常使用门槛
 - 减少频繁切换对话窗口的成本
-- 让 `agent / 对话 / skill / channel` 这些 OpenClaw 核心对象可视化
+- 让 `agent / 对话 / model / skill / channel / usage` 这些 OpenClaw 核心对象可视化
 - 为后续的本地 adapter 接入预留结构
 
 ---
@@ -42,8 +42,10 @@ clawx 想解决的是以下几类需求：
 - 在一个界面里管理多个 agent 与多个对话
 - 让工作中的对话自动排到前面
 - 让已关闭的对话不占据主工作区，但仍然保留在左侧资源列表中，方便重新打开
+- 可视化管理模型 provider、模型列表和默认模型
 - 可视化查看 skills
 - 可视化查看 channel 连接状态与配置入口
+- 可视化查看 OpenClaw usage
 - 提供一键打开本地 OpenClaw 网页入口
 
 核心定位：
@@ -58,13 +60,15 @@ clawx 想解决的是以下几类需求：
 
 ### 左侧一级导航
 
-当前一级导航有 3 个模块：
+当前一级导航有 5 个模块：
 
 - **对话**
+- **模型**
 - **技能**
 - **连接**
+- **用量**
 
-左下角保留一个入口，可一键打开本地 OpenClaw 网页。
+左下角保留 OpenClaw 入口，可一键打开本地 OpenClaw 网页；当检测到 OpenClaw CLI 有新版本时，会在图标右上角显示“有更新”，弹层内展示当前版本、最新版本和更新按钮。更新动作使用 `openclaw update`。
 
 ### 对话页
 
@@ -140,7 +144,30 @@ clawx 想解决的是以下几类需求：
 - skill 文件路径
 - 是否启用
 
-后续会进一步接入真实 skill 列表和 `SKILL.md` 摘要。
+当前优先通过 Gateway `skills.status` 读取状态，并通过 `skills.update` 做启停；本地 snapshot 只作为 Gateway 不可用时的兜底。
+
+### 模型页
+
+模型页用于管理 OpenClaw 的 provider 与模型。
+
+当前交互结构：
+
+- 左侧展示 provider，可搜索、按已配置/未配置/OAuth 过滤，并支持添加自定义 provider。
+- 右侧展示选中 provider 下的模型。
+- Provider 配置和添加模型分开：
+  - Provider 配置包含 API Key、Base URL、OAuth 等连接信息。
+  - 添加/修改模型只配置模型名称、别名、是否设为默认等使用信息。
+- 未配置 provider 时，模型列表禁用并提示“请先配置 Provider”。
+- 已配置 provider 的模型可以修改或设为默认。
+- 支持 OAuth 的 provider 显示授权入口，授权流程通过 OpenClaw CLI 在外部可见环境中完成。
+
+数据来源：
+
+- `models.list`：读取已配置模型与完整模型 catalog。
+- `models.authStatus`：读取 OAuth 授权状态。
+- `config.get` + `config.patch`：保存 provider 配置、模型列表和默认模型。
+
+默认模型写入 OpenClaw 配置，不只保存在 clawx 前端状态。
 
 ### 连接页
 
@@ -154,13 +181,19 @@ clawx 想解决的是以下几类需求：
 - 最近活动
 - 打开本地 OpenClaw 页面入口
 
-后续会接入真实 channel 配置与运行状态。
+当前优先通过 Gateway `channels.status` 读取运行状态；WeChat channel 已接入安装、启用、登录和更新检查流程。后续 channel 配置应继续按 channel/schema 分流，不要恢复成统一大表单。
+
+### 用量页
+
+用量页通过 Gateway `sessions.usage` 汇总 OpenClaw 使用情况，当前用于查看输入、输出、缓存读写、成本估算、按 agent/model/session 的拆分。
+
+模型、技能、连接、用量页面都采用“先打开页面，再异步加载数据”的交互方式。耗时的 Gateway RPC、OpenClaw CLI 或 npm 操作应显示局部 loading，不应阻塞整个桌面 UI。
 
 ---
 
 ## 4. 当前代码状态
 
-当前项目是 **已接入本地 OpenClaw 真实数据与 Gateway 发送能力的桌面原型**。界面结构和核心对话链路已经打通，最近重点转向前端结构拆分与可维护性整理。
+当前项目是 **已接入本地 OpenClaw 真实数据、Gateway 发送能力、模型管理、技能/连接/用量页面的桌面原型**。界面结构和核心对话链路已经打通，最近重点转向 OpenClaw 能力对齐、跨平台兼容与可维护性整理。
 
 ### 已完成
 
@@ -168,12 +201,13 @@ clawx 想解决的是以下几类需求：
 - 左侧导航 / 资源区 / 主工作区布局
 - 对话列表与详情页的主界面内切换
 - 技能页和连接页基础展示
+- 模型页基础管理：provider 配置、OAuth 授权入口、添加/修改模型、设为默认模型
+- 用量页基础展示
 - 列表页状态、摘要、usage 的准实时增量刷新
 - 对话详情页已接入真实发送能力，可直接发消息到现有 session
 - 左侧 agent 区已接入真实 `sessions.create`，支持新建对话
 - composer 支持停止生成、图片附件、纯图片发送和图文混发
-- Gateway chat 事件、消息发送、模型列表等逻辑已从 `App.tsx` 拆入 hooks
-- `App.tsx` 已从 1234 行降到约 761 行
+- Gateway chat 事件、消息发送、模型列表等逻辑已从 `App.tsx` 拆入 hooks 和 feature 组件
 - `pnpm build` 构建通过
 
 ### 尚未完成
@@ -186,10 +220,9 @@ clawx 想解决的是以下几类需求：
 
 当前已不再是纯 mock，已接入部分本地 OpenClaw 真实数据：
 
-- 读取 `~/.openclaw/openclaw.json`
-- 读取 `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- 读取 `~/Workspace/nodejs/clawdbot/skills`
-- 读取 `~/.agents/skills`
+- 通过 Gateway 读取 `agents.list`、`sessions.list`、`sessions.preview`、`chat.history`
+- 通过 Gateway 读取 `models.list`、`models.authStatus`、`skills.status`、`channels.status`、`sessions.usage`
+- Gateway 不可用时读取本地 OpenClaw snapshot 作为 fallback
 - 通过 `openclaw dashboard --no-open` 获取真实 dashboard URL 并打开
 
 当前已实现：
@@ -239,6 +272,8 @@ clawx 想解决的是以下几类需求：
 - 发送消息、草稿会话转真实 session、错误恢复已抽到 `src/hooks/useMessageSender.ts`
 - 模型列表加载已抽到 `src/hooks/useModels.ts`
 - 自动滚动已抽到 `src/hooks/useConversationAutoScroll.ts`
+- 技能、连接、模型、用量等慢页面已按异步加载优化，页面先打开，数据再加载
+- Tauri Gateway 代理中的慢 RPC 已改为 async command + `spawn_blocking`，避免系统级等待光标卡住界面
 
 也就是说，当前更准确的描述是：
 
@@ -248,7 +283,7 @@ clawx 想解决的是以下几类需求：
 
 ## 5. 核心数据模型设计思路
 
-虽然当前还是 mock 数据，但界面结构已经在按未来的数据模型组织。
+当前界面已尽量使用 OpenClaw Gateway / 本地 snapshot 的真实数据，以下是前端组织数据时应保持的对象边界。
 
 ### Agent
 表示一个 OpenClaw agent，未来会和真实配置关联。
@@ -304,6 +339,30 @@ clawx 想解决的是以下几类需求：
 - `config`
 - `activity`
 
+### ModelProvider
+表示一个模型提供商或 OpenClaw provider。
+
+建议包含：
+
+- `id`
+- `name`
+- `configured`
+- `auth`
+- `baseUrl`
+- `models`
+
+### Model
+表示 provider 下可用或可添加的模型。
+
+建议包含：
+
+- `id`
+- `name`
+- `alias`
+- `providerId`
+- `enabled`
+- `isDefault`
+
 ---
 
 ## 6. 为什么当前不直接做“炫酷 dashboard”
@@ -353,7 +412,12 @@ clawx 的长期目标是做 OpenClaw 的本地桌面前端，而不是重新发�
    - 展示所有 channel 配置
    - 展示启用状态、连接状态和错误信息
 
-6. **打开本地 Web UI**
+6. **管理 models / providers**
+   - 展示 OpenClaw 支持的 provider 与模型
+   - 支持 provider 配置、OAuth 授权、添加自定义模型、设置默认模型
+   - 后续可继续接入 schema-driven config、SecretRef、per-agent 默认模型与 fallback chain
+
+7. **打开本地 Web UI**
    - clawx 提供桌面端工作流
    - 本地 OpenClaw 网页保留为辅助入口
 
@@ -409,11 +473,21 @@ Linux 当前保留基础兜底能力，但不是当前主要交付平台，也�
 ### 当前重点文件
 
 - `src/App.tsx`
-  - 当前主界面原型
+  - 当前主界面状态编排层
 - `src/App.css`
   - 当前整体样式
+- `src/components/ModelsPage.tsx`
+  - 模型 provider / model 管理页面
+- `src/components/ConversationDetail.tsx`
+  - 对话详情与消息流展示
+- `src/hooks/useGatewayChat.ts`
+  - Gateway chat 事件处理
+- `src/hooks/useMessageSender.ts`
+  - 发送消息、停止生成、错误恢复
 - `src-tauri/src/lib.rs`
-  - Tauri 命令桥接入口，后续需要扩展
+- Tauri 命令桥接入口
+- `src-tauri/src/gateway_proxy.rs`
+  - Gateway WebSocket 代理、RPC、事件转发与慢 RPC async command
 - `src-tauri/tauri.conf.json`
   - Tauri 应用配置
 
@@ -496,15 +570,15 @@ cargo check --manifest-path src-tauri/Cargo.toml
 ## 11. 当前阶段最重要的下一步
 
 ### 第一优先级
-1. **footer 对齐 webchat 用法条** — 确认 `↑/↓/R/0%/ctx` 与 usage 字段的精确对应关系
+1. **模型管理继续补齐** — SecretRef、provider schema、per-agent 默认模型、fallback chain
 2. **把上传从“图片可用”继续补到“文件能力完整”**
 3. **进一步压缩 App.tsx** — 把剩余消息状态/列表编排继续外移
 
 ### 第二优先级
 4. 接入音频发送
-5. 在 OpenClaw CLI 配置恢复后，进一步直接消费更完整的 Gateway RPC / 标准事件流
+5. 进一步直接消费更完整的 Gateway RPC / 标准事件流
 6. 做详情页和列表页的进一步视觉收敛
-7. 拆分 `App.tsx` — 拆为组件 / feature 模块
+7. 给模型、连接、消息合并、usage selector 补更多测试
 
 ### 第三优先级
 8. 新建 Agent / Agent 配置编辑
@@ -535,15 +609,20 @@ cargo check --manifest-path src-tauri/Cargo.toml
    - UI 设计应围绕 OpenClaw 的真实对象和配置组织
    - 不要把它做成单纯的大模型聊天壳
 
-5. **当前很多数据仍是 mock**
+5. **Gateway 是第一来源，snapshot 是 fallback**
    - 改造时请优先把数据层和视图层分开
-   - 后续应尽快替换为真实 adapter
+   - 不要把 OpenClaw 配置、session、skill、channel、model 解析逻辑复制成 clawx 的第二套实现
+
+6. **慢操作必须异步**
+   - 页面先打开，再加载数据
+   - 按钮、卡片、行级别显示 loading
+   - Rust/Tauri 阻塞调用用 async command + `spawn_blocking`
 
 ---
 
 ## 13. 当前一句话总结
 
-> clawx 是一个面向 OpenClaw 的本地桌面工作台原型，重点解决多 agent / 多对话切换麻烦的问题，并逐步把 agent、skill、channel 等核心对象组织成一个更顺手的桌面软件界面。
+> clawx 是一个面向 OpenClaw 的本地桌面工作台原型，重点解决多 agent / 多对话切换、模型配置、skill/channel 管理和 usage 查看等日常工作流问题。
 
 ## 14. 最近开发日志（2026-04-21）
 
