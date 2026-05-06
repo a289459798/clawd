@@ -16,6 +16,9 @@ type VisibleConversation = Conversation & {
 
 type ConversationWorkspaceProps = {
   activeConversation: Conversation | null;
+  visibleConversationCount: number;
+  conversationFiltersActive: boolean;
+  onClearConversationFilters: () => void;
   visibleConversations: VisibleConversation[];
   filteredVisibleConversations: VisibleConversation[];
   conversationSearch: string;
@@ -31,6 +34,7 @@ type ConversationWorkspaceProps = {
   composerValue: string;
   composerModel: string;
   composerThinking: string;
+  composerThinkingOptions?: Array<{ value: string; label: string }>;
   sending: boolean;
   composerAttachments: ComposerAttachment[];
   activeQueuedMessages: QueuedComposerMessage[];
@@ -58,10 +62,21 @@ type ConversationWorkspaceProps = {
   onRemoveQueuedMessage: (messageId: string) => void;
   onSend: () => void;
   onAbort: () => void;
+  sessionActionBusy: string | null;
+  sessionActionError: string | null;
+  onCopySessionKey: (conversationId: string) => Promise<void> | void;
+  onCompactSession: (conversationId: string) => Promise<void> | void;
+  onResetSession: (conversationId: string) => Promise<void> | void;
+  onDeleteSession: (conversationId: string) => Promise<void> | void;
+  /** Short polite announcements for session switch / visibility (aria-live). */
+  workspaceAnnouncement: string | null;
 };
 
 export function ConversationWorkspace({
   activeConversation,
+  visibleConversationCount,
+  conversationFiltersActive,
+  onClearConversationFilters,
   visibleConversations,
   filteredVisibleConversations,
   conversationSearch,
@@ -77,6 +92,7 @@ export function ConversationWorkspace({
   composerValue,
   composerModel,
   composerThinking,
+  composerThinkingOptions,
   sending,
   composerAttachments,
   activeQueuedMessages,
@@ -104,8 +120,20 @@ export function ConversationWorkspace({
   onRemoveQueuedMessage,
   onSend,
   onAbort,
+  sessionActionBusy,
+  sessionActionError,
+  onCopySessionKey,
+  onCompactSession,
+  onResetSession,
+  onDeleteSession,
+  workspaceAnnouncement,
 }: ConversationWorkspaceProps) {
   const [detailDisplayMode, setDetailDisplayMode] = useState<"focus" | "conversation">("focus");
+  const [transcriptScrollCompact, setTranscriptScrollCompact] = useState(false);
+
+  useEffect(() => {
+    setTranscriptScrollCompact(false);
+  }, [activeConversation?.id]);
 
   useEffect(() => {
     setDetailDisplayMode("focus");
@@ -185,6 +213,11 @@ export function ConversationWorkspace({
 
   return (
     <section className="workspace-area chat-workspace-area">
+      {workspaceAnnouncement ? (
+        <div className="workspace-action-announcement" role="status" aria-live="polite">
+          {workspaceAnnouncement}
+        </div>
+      ) : null}
       {activeConversation ? (
         <>
           <ConversationDetail
@@ -198,6 +231,7 @@ export function ConversationWorkspace({
             userExpanded={userExpanded}
             onUserExpandedChange={onUserExpandedChange}
             aiResponseScrollRef={aiResponseScrollRef}
+            onTranscriptScrollAwayFromBottom={(away) => setTranscriptScrollCompact(away)}
             showJumpToBottom={showJumpToBottom}
             displayMode={detailDisplayMode}
             onDisplayModeChange={handleDisplayModeChange}
@@ -209,10 +243,18 @@ export function ConversationWorkspace({
               onJumpToBottomHidden();
             }}
             onUpdateTitle={onUpdateTitle}
+            sessionActionBusy={sessionActionBusy}
+            sessionActionError={sessionActionError}
+            onCopySessionKey={onCopySessionKey}
+            onCompactSession={onCompactSession}
+            onResetSession={onResetSession}
+            onDeleteSession={onDeleteSession}
+            onAbortSession={onAbort}
             conversationMessageList={detailDisplayMode === "focus" ? renderFocusModeContent() : renderConversationModeContent()}
           />
 
           <ConversationComposer
+            transcriptScrollCompact={transcriptScrollCompact}
             focused={composerFocused}
             value={composerValue}
             model={composerModel}
@@ -221,7 +263,7 @@ export function ConversationWorkspace({
             attachments={composerAttachments}
             queuedMessages={activeQueuedMessages}
             modelOptions={ensureSelectedModelOption(modelOptions, composerModel)}
-            thinkingOptions={activeConversation.thinkingOptions}
+            thinkingOptions={composerThinkingOptions ?? activeConversation.thinkingOptions}
             modelsLoading={modelsLoading}
             onFocusChange={onFocusChange}
             onValueChange={onValueChange}
@@ -280,8 +322,20 @@ export function ConversationWorkspace({
       )}
       {!activeConversation && filteredVisibleConversations.length === 0 ? (
         <div className="empty-chat-state">
-          <strong>还没有可显示的对话</strong>
-          <p>先从左侧 Agent 树里展开一个会话，后续这里会支持直接新建对话。</p>
+          {visibleConversationCount > 0 && conversationFiltersActive ? (
+            <>
+              <strong>没有符合筛选条件的对话</strong>
+              <p>试着调整搜索关键词或 Runtime 筛选；也可一键清空筛选。</p>
+              <button type="button" className="ghost-button" onClick={onClearConversationFilters}>
+                清空筛选
+              </button>
+            </>
+          ) : (
+            <>
+              <strong>还没有可显示的对话</strong>
+              <p>先从左侧 Agent 树里展开一个会话，后续这里会支持直接新建对话。</p>
+            </>
+          )}
         </div>
       ) : null}
     </section>

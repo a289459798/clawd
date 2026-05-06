@@ -65,10 +65,22 @@ struct SessionMessage {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SessionMessagePart {
-    Text { text: String },
-    ToolCall { tool: String, args: Option<String> },
-    ToolResult { tool: Option<String>, text: Option<String> },
-    Image { mime_type: Option<String>, data: String, alt: Option<String> },
+    Text {
+        text: String,
+    },
+    ToolCall {
+        tool: String,
+        args: Option<String>,
+    },
+    ToolResult {
+        tool: Option<String>,
+        text: Option<String>,
+    },
+    Image {
+        mime_type: Option<String>,
+        data: String,
+        alt: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -205,7 +217,11 @@ fn local_prefix_openclaw_path() -> Option<PathBuf> {
     let home = home_dir().ok()?;
     let bin_dir = home.join(".openclaw").join("bin");
     let candidates = if cfg!(windows) {
-        vec![bin_dir.join("openclaw.cmd"), bin_dir.join("openclaw.exe"), bin_dir.join("openclaw")]
+        vec![
+            bin_dir.join("openclaw.cmd"),
+            bin_dir.join("openclaw.exe"),
+            bin_dir.join("openclaw"),
+        ]
     } else {
         vec![bin_dir.join("openclaw")]
     };
@@ -242,7 +258,11 @@ fn resolve_openclaw_command() -> Option<PathBuf> {
         .filter(|output| output.status.success())
         .and_then(|output| {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() { None } else { Some(PathBuf::from(path)) }
+            if path.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path))
+            }
         });
 
     path_output.or_else(local_prefix_openclaw_path)
@@ -255,7 +275,13 @@ fn run_openclaw_command(args: &[&str]) -> Result<Output, String> {
     Command::new(&command_path)
         .args(args)
         .output()
-        .map_err(|error| format!("failed to run {} {}: {error}", command_path.display(), args.join(" ")))
+        .map_err(|error| {
+            format!(
+                "failed to run {} {}: {error}",
+                command_path.display(),
+                args.join(" ")
+            )
+        })
 }
 
 fn session_title_from_key(key: &str) -> String {
@@ -298,7 +324,12 @@ fn summarize_for_list(text: &str) -> String {
     let mut lines = cleaned
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("```") && !line.starts_with('{') && !line.starts_with('['))
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("```")
+                && !line.starts_with('{')
+                && !line.starts_with('[')
+        })
         .collect::<Vec<_>>();
 
     if lines.is_empty() {
@@ -314,10 +345,16 @@ fn summarize_for_list(text: &str) -> String {
 }
 
 fn extract_message_parts(value: &Value) -> Vec<SessionMessagePart> {
-    let message = value.get("message").or_else(|| {
-        value.get("type").and_then(Value::as_str).filter(|t| t == &"message")
-            .map(|_| value)
-    }).unwrap_or(value);
+    let message = value
+        .get("message")
+        .or_else(|| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|t| t == &"message")
+                .map(|_| value)
+        })
+        .unwrap_or(value);
     let Some(content) = message.get("content").or_else(|| value.get("content")) else {
         return Vec::new();
     };
@@ -327,7 +364,10 @@ fn extract_message_parts(value: &Value) -> Vec<SessionMessagePart> {
         .and_then(Value::as_str)
         .map(|r| r == "toolResult")
         .unwrap_or(false);
-    let tool_name = message.get("toolName").and_then(Value::as_str).map(str::to_string);
+    let tool_name = message
+        .get("toolName")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     let mut parts = Vec::new();
 
@@ -340,7 +380,9 @@ fn extract_message_parts(value: &Value) -> Vec<SessionMessagePart> {
                     text: Some(trimmed.to_string()),
                 });
             } else {
-                parts.push(SessionMessagePart::Text { text: trimmed.to_string() });
+                parts.push(SessionMessagePart::Text {
+                    text: trimmed.to_string(),
+                });
             }
         }
         return parts;
@@ -353,14 +395,21 @@ fn extract_message_parts(value: &Value) -> Vec<SessionMessagePart> {
             };
             match kind {
                 "text" => {
-                    if let Some(text) = item.get("text").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()) {
+                    if let Some(text) = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                    {
                         if is_tool_result {
                             parts.push(SessionMessagePart::ToolResult {
                                 tool: tool_name.clone(),
                                 text: Some(text.to_string()),
                             });
                         } else {
-                            parts.push(SessionMessagePart::Text { text: text.to_string() });
+                            parts.push(SessionMessagePart::Text {
+                                text: text.to_string(),
+                            });
                         }
                     }
                 }
@@ -385,9 +434,17 @@ fn extract_message_parts(value: &Value) -> Vec<SessionMessagePart> {
                         .map(str::to_string);
                     if let Some(data) = data {
                         parts.push(SessionMessagePart::Image {
-                            mime_type: item.get("mimeType").or_else(|| item.get("mime_type")).and_then(Value::as_str).map(str::to_string),
+                            mime_type: item
+                                .get("mimeType")
+                                .or_else(|| item.get("mime_type"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
                             data,
-                            alt: item.get("text").or_else(|| item.get("alt")).and_then(Value::as_str).map(str::to_string),
+                            alt: item
+                                .get("text")
+                                .or_else(|| item.get("alt"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
                         });
                     }
                 }
@@ -421,10 +478,22 @@ fn extract_message_text(value: &Value) -> Option<String> {
         }
     }
 
-    if lines.is_empty() { None } else { Some(lines.join("\n")) }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
-fn read_usage_fields(value: &Value) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
+fn read_usage_fields(
+    value: &Value,
+) -> (
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+) {
     let usage = value
         .get("message")
         .and_then(|message| message.get("usage"))
@@ -448,7 +517,15 @@ fn read_usage_fields(value: &Value) -> (Option<u64>, Option<u64>, Option<u64>, O
 /// Output tokens are already per-message, so we use raw values.
 /// Cache tokens may be cumulative, so we compute deltas for them too.
 fn compute_per_message_usage(
-    messages: &[(Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Vec<SessionMessagePart>, String)],
+    messages: &[(
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Vec<SessionMessagePart>,
+        String,
+    )],
     cumulative_inputs: &[Option<u64>],
     cumulative_outputs: &[Option<u64>],
     cumulative_cache_read: &[Option<u64>],
@@ -459,7 +536,10 @@ fn compute_per_message_usage(
 
     for i in 0..n {
         let role = &messages[i].0;
-        let is_assistant = role.as_deref().map(|r| r.to_lowercase() == "assistant").unwrap_or(false);
+        let is_assistant = role
+            .as_deref()
+            .map(|r| r.to_lowercase() == "assistant")
+            .unwrap_or(false);
 
         if !is_assistant {
             // Non-assistant messages have no usage
@@ -474,7 +554,11 @@ fn compute_per_message_usage(
 
         for j in (0..i).rev() {
             let j_role = &messages[j].0;
-            if j_role.as_deref().map(|r| r.to_lowercase() == "assistant").unwrap_or(false) {
+            if j_role
+                .as_deref()
+                .map(|r| r.to_lowercase() == "assistant")
+                .unwrap_or(false)
+            {
                 prev_input = cumulative_inputs[j];
                 prev_cache_read = cumulative_cache_read[j];
                 prev_cache_write = cumulative_cache_write[j];
@@ -529,11 +613,30 @@ fn read_session_preview(
     Vec<SessionMessage>,
 ) {
     let Ok(content) = fs::read_to_string(session_file) else {
-        return (None, None, None, None, None, None, None, None, None, Vec::new());
+        return (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
     };
 
     // First pass: collect all messages with their cumulative usage
-    type RawMessage = (Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, Vec<SessionMessagePart>, String);
+    type RawMessage = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Vec<SessionMessagePart>,
+        String,
+    );
     let mut raw_messages: Vec<RawMessage> = Vec::new();
     let mut cumulative_inputs: Vec<Option<u64>> = Vec::new();
     let mut cumulative_outputs: Vec<Option<u64>> = Vec::new();
@@ -560,7 +663,10 @@ fn read_session_preview(
             continue;
         };
 
-        latest_event_type = value.get("type").and_then(Value::as_str).map(str::to_string);
+        latest_event_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         latest_event_role = value
             .get("message")
             .and_then(|message| message.get("role"))
@@ -601,9 +707,18 @@ fn read_session_preview(
             continue;
         };
         let normalized = truncate_text(&text, 280);
-        let model = message_obj.get("model").and_then(Value::as_str).map(str::to_string);
-        let provider = message_obj.get("provider").and_then(Value::as_str).map(str::to_string);
-        let api = message_obj.get("api").and_then(Value::as_str).map(str::to_string);
+        let model = message_obj
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let provider = message_obj
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let api = message_obj
+            .get("api")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let message_timestamp = message_obj
             .get("timestamp")
             .and_then(Value::as_i64)
@@ -617,7 +732,15 @@ fn read_session_preview(
 
         last_message = Some(summarize_for_list(&text));
         last_role = role.clone();
-        raw_messages.push((role, model, provider, api, message_timestamp, parts, normalized));
+        raw_messages.push((
+            role,
+            model,
+            provider,
+            api,
+            message_timestamp,
+            parts,
+            normalized,
+        ));
     }
 
     // Second pass: compute per-message deltas from cumulative values
@@ -631,7 +754,9 @@ fn read_session_preview(
 
     // Build final messages with delta usage
     let mut preview_messages: Vec<SessionMessage> = Vec::with_capacity(raw_messages.len());
-    for (i, (role, model, provider, api, timestamp, parts, text)) in raw_messages.into_iter().enumerate() {
+    for (i, (role, model, provider, api, timestamp, parts, text)) in
+        raw_messages.into_iter().enumerate()
+    {
         let (input_delta, output_delta, cache_read_delta, cache_write_delta) = deltas[i];
         preview_messages.push(SessionMessage {
             role,
@@ -652,7 +777,11 @@ fn read_session_preview(
         .iter()
         .rposition(|message| message.role.as_deref() == Some("user"));
     let preview_messages = if let Some(index) = last_user_index {
-        preview_messages.into_iter().skip(index).take(24).collect::<Vec<_>>()
+        preview_messages
+            .into_iter()
+            .skip(index)
+            .take(24)
+            .collect::<Vec<_>>()
     } else {
         let start = preview_messages.len().saturating_sub(24);
         preview_messages.into_iter().skip(start).collect::<Vec<_>>()
@@ -662,11 +791,31 @@ fn read_session_preview(
         last_role,
         latest_event_role,
         latest_event_type,
-        if has_token_usage { Some(session_input) } else { None },
-        if has_token_usage { Some(session_output) } else { None },
-        if has_token_usage { Some(session_cache_read) } else { None },
-        if has_token_usage { Some(session_cache_write) } else { None },
-        if has_token_usage { Some(session_total) } else { None },
+        if has_token_usage {
+            Some(session_input)
+        } else {
+            None
+        },
+        if has_token_usage {
+            Some(session_output)
+        } else {
+            None
+        },
+        if has_token_usage {
+            Some(session_cache_read)
+        } else {
+            None
+        },
+        if has_token_usage {
+            Some(session_cache_write)
+        } else {
+            None
+        },
+        if has_token_usage {
+            Some(session_total)
+        } else {
+            None
+        },
         preview_messages,
     )
 }
@@ -706,7 +855,18 @@ fn read_sessions_for_agent(agent_id: &str) -> Vec<SessionSummary> {
             ) = session_file
                 .as_deref()
                 .map(read_session_preview)
-                .unwrap_or((None, None, None, None, None, None, None, None, None, Vec::new()));
+                .unwrap_or((
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Vec::new(),
+                ));
 
             SessionSummary {
                 id: entry
@@ -721,19 +881,34 @@ fn read_sessions_for_agent(agent_id: &str) -> Vec<SessionSummary> {
                     .and_then(Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(|| session_title_from_key(key)),
-                label: entry.get("label").and_then(Value::as_str).map(str::to_string),
+                label: entry
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 updated_at: entry.get("updatedAt").and_then(Value::as_i64),
-                channel: entry.get("lastChannel").and_then(Value::as_str).map(str::to_string),
+                channel: entry
+                    .get("lastChannel")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 session_file,
                 last_message,
                 last_role,
                 latest_event_role,
                 latest_event_type,
-                input_tokens: entry.get("inputTokens").and_then(Value::as_u64).or(input_tokens),
-                output_tokens: entry.get("outputTokens").and_then(Value::as_u64).or(output_tokens),
+                input_tokens: entry
+                    .get("inputTokens")
+                    .and_then(Value::as_u64)
+                    .or(input_tokens),
+                output_tokens: entry
+                    .get("outputTokens")
+                    .and_then(Value::as_u64)
+                    .or(output_tokens),
                 cache_read_tokens,
                 cache_write_tokens,
-                total_tokens: entry.get("totalTokens").and_then(Value::as_u64).or(total_tokens),
+                total_tokens: entry
+                    .get("totalTokens")
+                    .and_then(Value::as_u64)
+                    .or(total_tokens),
                 total_tokens_fresh: entry.get("totalTokensFresh").and_then(Value::as_bool),
                 estimated_cost_usd: entry.get("estimatedCostUsd").and_then(Value::as_f64),
                 preview_messages,
@@ -850,7 +1025,10 @@ fn stream_latest_snapshot(app: &AppHandle, state: &RealtimeState) {
 }
 
 #[tauri::command]
-fn subscribe_gateway_realtime(app: AppHandle, state: State<Arc<RealtimeState>>) -> Result<u64, String> {
+fn subscribe_gateway_realtime(
+    app: AppHandle,
+    state: State<Arc<RealtimeState>>,
+) -> Result<u64, String> {
     let subscription_id = state.next_subscription_id.fetch_add(1, Ordering::SeqCst) + 1;
     let event_name = format!("gateway-realtime://{subscription_id}");
     state
@@ -864,7 +1042,10 @@ fn subscribe_gateway_realtime(app: AppHandle, state: State<Arc<RealtimeState>>) 
 }
 
 #[tauri::command]
-fn unsubscribe_gateway_realtime(subscription_id: u64, state: State<Arc<RealtimeState>>) -> Result<(), String> {
+fn unsubscribe_gateway_realtime(
+    subscription_id: u64,
+    state: State<Arc<RealtimeState>>,
+) -> Result<(), String> {
     state
         .subscribers
         .lock()
@@ -924,13 +1105,19 @@ fn load_openclaw_snapshot() -> Result<OpenClawSnapshot, String> {
                     Some(AgentSummary {
                         id,
                         name,
-                        workspace: entry.get("workspace").and_then(Value::as_str).map(str::to_string),
+                        workspace: entry
+                            .get("workspace")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         model: entry
                             .get("model")
                             .and_then(|model| model.get("primary"))
                             .and_then(Value::as_str)
                             .map(str::to_string),
-                        agent_dir: entry.get("agentDir").and_then(Value::as_str).map(str::to_string),
+                        agent_dir: entry
+                            .get("agentDir")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -951,7 +1138,10 @@ fn load_openclaw_snapshot() -> Result<OpenClawSnapshot, String> {
                 .map(|(id, entry)| ConnectionSummary {
                     id: id.clone(),
                     name: id.clone(),
-                    enabled: entry.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                    enabled: entry
+                        .get("enabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 })
                 .collect::<Vec<_>>()
         })
@@ -995,19 +1185,11 @@ fn load_session_record(session_key: String) -> Result<SessionRecordResult, Strin
                 let session_file = session
                     .session_file
                     .ok_or_else(|| format!("session_file missing for {session_key}"))?;
-                let (
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
+                let (_, _, _, _, _, _, _, _, _, messages) = read_session_preview(&session_file);
+                return Ok(SessionRecordResult {
+                    session_file,
                     messages,
-                ) = read_session_preview(&session_file);
-                return Ok(SessionRecordResult { session_file, messages });
+                });
             }
         }
     }
@@ -1045,11 +1227,22 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
             .and_then(|gateway| gateway.get("controlUi"))
             .and_then(|control_ui| control_ui.get("allowedOrigins"))
             .and_then(Value::as_array)
-            .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
         let recommended_origin = clawx_recommended_origin();
-        binding_configured = allowed_origins.iter().any(|item| item == &recommended_origin);
-        gateway_port = json.get("gateway").and_then(|gateway| gateway.get("port")).and_then(Value::as_u64);
+        binding_configured = allowed_origins
+            .iter()
+            .any(|item| item == &recommended_origin);
+        gateway_port = json
+            .get("gateway")
+            .and_then(|gateway| gateway.get("port"))
+            .and_then(Value::as_u64);
     }
 
     let recommended_origin = clawx_recommended_origin();
@@ -1062,7 +1255,9 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
         allowed_origins,
         recommended_origin: recommended_origin.clone(),
         gateway_port,
-        binding_writes: vec![format!("gateway.controlUi.allowedOrigins += {recommended_origin}")],
+        binding_writes: vec![format!(
+            "gateway.controlUi.allowedOrigins += {recommended_origin}"
+        )],
     })
 }
 
@@ -1089,28 +1284,45 @@ fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
     }
 
     let recommended_origin = clawx_recommended_origin();
-    let root = json.as_object_mut().ok_or_else(|| "invalid config root".to_string())?;
-    let gateway = root.entry("gateway".to_string()).or_insert_with(|| serde_json::json!({}));
+    let root = json
+        .as_object_mut()
+        .ok_or_else(|| "invalid config root".to_string())?;
+    let gateway = root
+        .entry("gateway".to_string())
+        .or_insert_with(|| serde_json::json!({}));
     if !gateway.is_object() {
         *gateway = serde_json::json!({});
     }
-    let gateway_obj = gateway.as_object_mut().ok_or_else(|| "invalid gateway config".to_string())?;
-    let control_ui = gateway_obj.entry("controlUi".to_string()).or_insert_with(|| serde_json::json!({}));
+    let gateway_obj = gateway
+        .as_object_mut()
+        .ok_or_else(|| "invalid gateway config".to_string())?;
+    let control_ui = gateway_obj
+        .entry("controlUi".to_string())
+        .or_insert_with(|| serde_json::json!({}));
     if !control_ui.is_object() {
         *control_ui = serde_json::json!({});
     }
-    let control_ui_obj = control_ui.as_object_mut().ok_or_else(|| "invalid controlUi config".to_string())?;
-    let allowed = control_ui_obj.entry("allowedOrigins".to_string()).or_insert_with(|| serde_json::json!([]));
+    let control_ui_obj = control_ui
+        .as_object_mut()
+        .ok_or_else(|| "invalid controlUi config".to_string())?;
+    let allowed = control_ui_obj
+        .entry("allowedOrigins".to_string())
+        .or_insert_with(|| serde_json::json!([]));
     if !allowed.is_array() {
         *allowed = serde_json::json!([]);
     }
-    let allowed_arr = allowed.as_array_mut().ok_or_else(|| "invalid allowedOrigins".to_string())?;
-    let already = allowed_arr.iter().any(|item| item.as_str() == Some(recommended_origin.as_str()));
+    let allowed_arr = allowed
+        .as_array_mut()
+        .ok_or_else(|| "invalid allowedOrigins".to_string())?;
+    let already = allowed_arr
+        .iter()
+        .any(|item| item.as_str() == Some(recommended_origin.as_str()));
     if !already {
         allowed_arr.push(Value::String(recommended_origin));
     }
 
-    let pretty = serde_json::to_string_pretty(&json).map_err(|error| format!("failed to serialize config: {error}"))?;
+    let pretty = serde_json::to_string_pretty(&json)
+        .map_err(|error| format!("failed to serialize config: {error}"))?;
     fs::write(&config_path, format!("{pretty}\n"))
         .map_err(|error| format!("failed to write {}: {error}", config_path.display()))?;
 
@@ -1125,11 +1337,10 @@ fn resolve_gateway_auth() -> Result<GatewayAuthInfo, String> {
     let json: Value = serde_json::from_str(&content)
         .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?;
 
-    let gateway = json.get("gateway").ok_or_else(|| "gateway config missing".to_string())?;
-    let port = gateway
-        .get("port")
-        .and_then(Value::as_u64)
-        .unwrap_or(18789);
+    let gateway = json
+        .get("gateway")
+        .ok_or_else(|| "gateway config missing".to_string())?;
+    let port = gateway.get("port").and_then(Value::as_u64).unwrap_or(18789);
     let token = gateway
         .get("auth")
         .and_then(|auth| auth.get("token"))
@@ -1154,7 +1365,11 @@ fn pick_workspace_directory() -> Result<Option<String>, String> {
 #[tauri::command]
 fn default_agent_workspace(agent_id: String) -> Result<String, String> {
     let agent_id = agent_id.trim();
-    let safe_id = if agent_id.is_empty() { "agent" } else { agent_id };
+    let safe_id = if agent_id.is_empty() {
+        "agent"
+    } else {
+        agent_id
+    };
     Ok(home_dir()?
         .join(".openclaw")
         .join(format!("workspace-{safe_id}"))
@@ -1164,7 +1379,8 @@ fn default_agent_workspace(agent_id: String) -> Result<String, String> {
 
 #[tauri::command]
 fn open_weixin_login_terminal() -> Result<String, String> {
-    let login_command = openclaw_terminal_command(&["channels", "login", "--channel", "openclaw-weixin"])?;
+    let login_command =
+        openclaw_terminal_command(&["channels", "login", "--channel", "openclaw-weixin"])?;
     open_terminal_command(&login_command, "openclaw-weixin login")?;
     Ok("已打开终端，请在终端中扫描 openclaw-weixin 登录二维码。".to_string())
 }
@@ -1181,7 +1397,9 @@ fn open_model_auth_terminal(provider: String, set_default: Option<bool>) -> Resu
     }
     let auth_command = openclaw_terminal_command(&args)?;
     open_terminal_command(&auth_command, &format!("openclaw model auth {provider}"))?;
-    Ok(format!("已打开终端授权 {provider}。授权完成后请回到模型页刷新状态。"))
+    Ok(format!(
+        "已打开终端授权 {provider}。授权完成后请回到模型页刷新状态。"
+    ))
 }
 
 fn applescript_quote(value: &str) -> String {
@@ -1200,7 +1418,11 @@ fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
     let command_path = resolve_openclaw_command().ok_or_else(|| {
         "OpenClaw command not found. Expected openclaw in PATH, ~/.openclaw/bin/openclaw, or %USERPROFILE%\\.openclaw\\bin\\openclaw.cmd".to_string()
     })?;
-    let quote = if cfg!(windows) { powershell_quote } else { shell_quote };
+    let quote = if cfg!(windows) {
+        powershell_quote
+    } else {
+        shell_quote
+    };
     let mut parts = if cfg!(windows) {
         vec![format!("& {}", quote(&command_path.to_string_lossy()))]
     } else {
@@ -1213,7 +1435,10 @@ fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
 fn open_terminal_command_macos(command_line: &str, label: &str) -> Result<(), String> {
     let status = Command::new("osascript")
         .arg("-e")
-        .arg(format!("tell application \"Terminal\" to do script {}", applescript_quote(command_line)))
+        .arg(format!(
+            "tell application \"Terminal\" to do script {}",
+            applescript_quote(command_line)
+        ))
         .arg("-e")
         .arg("tell application \"Terminal\" to activate")
         .status()
@@ -1227,7 +1452,13 @@ fn open_terminal_command_macos(command_line: &str, label: &str) -> Result<(), St
 
 fn open_terminal_command_windows(command_line: &str, label: &str) -> Result<(), String> {
     Command::new("powershell")
-        .args(["-NoExit", "-ExecutionPolicy", "Bypass", "-Command", command_line])
+        .args([
+            "-NoExit",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command_line,
+        ])
         .spawn()
         .map_err(|error| format!("failed to open PowerShell: {error}"))?;
     let _ = label;
@@ -1261,7 +1492,9 @@ fn open_terminal_command(command_line: &str, label: &str) -> Result<(), String> 
         "macos" => open_terminal_command_macos(command_line, label),
         "windows" => open_terminal_command_windows(command_line, label),
         "linux" => open_terminal_command_linux(command_line, label),
-        other => Err(format!("unsupported platform for terminal command: {other}")),
+        other => Err(format!(
+            "unsupported platform for terminal command: {other}"
+        )),
     }
 }
 
@@ -1308,36 +1541,47 @@ fn latest_npm_package_version(package_name: &str) -> Result<String, String> {
         };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            errors.push(if stderr.is_empty() { format!("{} exited with {}", npm.display(), output.status) } else { stderr });
+            errors.push(if stderr.is_empty() {
+                format!("{} exited with {}", npm.display(), output.status)
+            } else {
+                stderr
+            });
             continue;
         }
-        let raw = String::from_utf8_lossy(&output.stdout).trim().trim_matches('"').to_string();
+        let raw = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .trim_matches('"')
+            .to_string();
         if !raw.is_empty() {
             return Ok(raw);
         }
     }
-    Err(if errors.is_empty() { "npm command not found".to_string() } else { errors.join("; ") })
+    Err(if errors.is_empty() {
+        "npm command not found".to_string()
+    } else {
+        errors.join("; ")
+    })
 }
 
 fn extract_semver(value: &str) -> Option<String> {
-    value
-        .split_whitespace()
-        .find_map(|part| {
-            let candidate = part
-                .trim_matches(|character: char| {
-                    !character.is_ascii_alphanumeric() && character != '.' && character != '-' && character != '+'
-                });
-            let mut pieces = candidate.split('.');
-            let major = pieces.next()?;
-            let minor = pieces.next()?;
-            if major.chars().all(|character| character.is_ascii_digit())
-                && minor.chars().all(|character| character.is_ascii_digit())
-            {
-                Some(candidate.to_string())
-            } else {
-                None
-            }
-        })
+    value.split_whitespace().find_map(|part| {
+        let candidate = part.trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric()
+                && character != '.'
+                && character != '-'
+                && character != '+'
+        });
+        let mut pieces = candidate.split('.');
+        let major = pieces.next()?;
+        let minor = pieces.next()?;
+        if major.chars().all(|character| character.is_ascii_digit())
+            && minor.chars().all(|character| character.is_ascii_digit())
+        {
+            Some(candidate.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
@@ -1416,8 +1660,15 @@ fn installed_plugin_from_registry(plugin_id: &str, package_name: &str) -> Option
         if !id_matches && !name_matches {
             return None;
         }
-        let version = plugin.get("version").and_then(Value::as_str).unwrap_or("").to_string();
-        let enabled = plugin.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        let version = plugin
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let enabled = plugin
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         Some((version, enabled))
     })
 }
@@ -1436,7 +1687,10 @@ fn weixin_plugin_status_blocking() -> WeixinPluginStatus {
         (None, None)
     };
 
-    let installed_version = installed.as_ref().map(|(version, _)| version.clone()).filter(|version| !version.is_empty());
+    let installed_version = installed
+        .as_ref()
+        .map(|(version, _)| version.clone())
+        .filter(|version| !version.is_empty());
     let update_available = installed_version
         .as_deref()
         .zip(latest_version.as_deref())
@@ -1445,7 +1699,10 @@ fn weixin_plugin_status_blocking() -> WeixinPluginStatus {
 
     WeixinPluginStatus {
         installed: installed.is_some(),
-        enabled: installed.as_ref().map(|(_, enabled)| *enabled).unwrap_or(false),
+        enabled: installed
+            .as_ref()
+            .map(|(_, enabled)| *enabled)
+            .unwrap_or(false),
         installed_version,
         latest_version,
         update_available,
@@ -1461,14 +1718,23 @@ async fn weixin_plugin_status() -> Result<WeixinPluginStatus, String> {
 }
 
 fn ensure_weixin_plugin_enabled_blocking() -> Result<String, String> {
-    let enable_output = run_openclaw_command(&["config", "set", "plugins.entries.openclaw-weixin.enabled", "true"])?;
+    let enable_output = run_openclaw_command(&[
+        "config",
+        "set",
+        "plugins.entries.openclaw-weixin.enabled",
+        "true",
+    ])?;
     if !enable_output.status.success() {
-        return Err(String::from_utf8_lossy(&enable_output.stderr).trim().to_string());
+        return Err(String::from_utf8_lossy(&enable_output.stderr)
+            .trim()
+            .to_string());
     }
 
     let restart_output = run_openclaw_command(&["gateway", "restart"])?;
     if !restart_output.status.success() {
-        let stderr = String::from_utf8_lossy(&restart_output.stderr).trim().to_string();
+        let stderr = String::from_utf8_lossy(&restart_output.stderr)
+            .trim()
+            .to_string();
         return Ok(if stderr.is_empty() {
             "WeChat 插件已启用，但 Gateway 重启状态未知。".to_string()
         } else {
@@ -1488,12 +1754,20 @@ async fn ensure_weixin_plugin_enabled() -> Result<String, String> {
 
 #[tauri::command]
 fn open_weixin_plugin_install_terminal() -> Result<String, String> {
-    if installed_plugin_from_registry("openclaw-weixin", "@tencent-weixin/openclaw-weixin").is_some() {
+    if installed_plugin_from_registry("openclaw-weixin", "@tencent-weixin/openclaw-weixin")
+        .is_some()
+    {
         return ensure_weixin_plugin_enabled_blocking();
     }
 
-    let install = openclaw_terminal_command(&["plugins", "install", "npm:@tencent-weixin/openclaw-weixin"])?;
-    let enable = openclaw_terminal_command(&["config", "set", "plugins.entries.openclaw-weixin.enabled", "true"])?;
+    let install =
+        openclaw_terminal_command(&["plugins", "install", "npm:@tencent-weixin/openclaw-weixin"])?;
+    let enable = openclaw_terminal_command(&[
+        "config",
+        "set",
+        "plugins.entries.openclaw-weixin.enabled",
+        "true",
+    ])?;
     let restart = openclaw_terminal_command(&["gateway", "restart"])?;
     let command_line = if cfg!(windows) {
         format!("{install}; if ($LASTEXITCODE -eq 0) {{ {enable}; {restart}; Write-Host 'WeChat plugin installed. Return to clawx and refresh connections.' }}")
@@ -1506,7 +1780,8 @@ fn open_weixin_plugin_install_terminal() -> Result<String, String> {
 
 #[tauri::command]
 fn open_weixin_plugin_update_terminal() -> Result<String, String> {
-    let update = openclaw_terminal_command(&["plugins", "update", "@tencent-weixin/openclaw-weixin"])?;
+    let update =
+        openclaw_terminal_command(&["plugins", "update", "@tencent-weixin/openclaw-weixin"])?;
     let restart = openclaw_terminal_command(&["gateway", "restart"])?;
     let command_line = if cfg!(windows) {
         format!("{update}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'WeChat plugin updated. Return to clawx and refresh connections.' }}")
@@ -1534,7 +1809,9 @@ fn open_openclaw_update_terminal() -> Result<String, String> {
     let command_line = if cfg!(windows) {
         format!("{update}; Write-Host 'OpenClaw update flow finished. Return to clawx and refresh status.'")
     } else {
-        format!("{update}; echo 'OpenClaw update flow finished. Return to clawx and refresh status.'")
+        format!(
+            "{update}; echo 'OpenClaw update flow finished. Return to clawx and refresh status.'"
+        )
     };
     open_terminal_command(&command_line, "OpenClaw update")?;
     Ok("已打开终端更新 OpenClaw。更新完成后，请回到 Clawx 刷新状态。".to_string())
@@ -1608,6 +1885,13 @@ pub fn run() {
             gateway_proxy::gateway_agents_files_get,
             gateway_proxy::gateway_agents_files_set,
             gateway_proxy::gateway_openclaw_status,
+            gateway_proxy::gateway_update_status,
+            gateway_proxy::gateway_cron_list,
+            gateway_proxy::gateway_cron_runs,
+            gateway_proxy::gateway_cron_add,
+            gateway_proxy::gateway_cron_run,
+            gateway_proxy::gateway_cron_update,
+            gateway_proxy::gateway_cron_remove,
             gateway_proxy::gateway_health,
             gateway_proxy::gateway_models_auth_status,
             gateway_proxy::gateway_skills_status,
@@ -1630,6 +1914,9 @@ pub fn run() {
             gateway_proxy::gateway_chat_abort,
             gateway_proxy::gateway_sessions_create,
             gateway_proxy::gateway_sessions_patch,
+            gateway_proxy::gateway_sessions_compact,
+            gateway_proxy::gateway_sessions_reset,
+            gateway_proxy::gateway_sessions_delete,
             pick_workspace_directory,
             default_agent_workspace,
             openclaw_cli_status,

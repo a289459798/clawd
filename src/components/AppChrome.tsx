@@ -73,6 +73,7 @@ export function NavSidebar({
     { key: "models", label: "模型", icon: "model" },
     { key: "skills", label: "技能", icon: "skill" },
     { key: "connections", label: "连接", icon: "plug" },
+    { key: "cron", label: "定时", icon: "cron" },
     { key: "usage", label: "用量", icon: "usage" },
   ];
   const openClawTitle = [

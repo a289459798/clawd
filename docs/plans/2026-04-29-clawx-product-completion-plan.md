@@ -28,9 +28,9 @@
 - [x] Task 2: Session list no longer truncates to 8 per agent or first 3 visible; search/sort added.
 - [x] Task 3: Minimal Gateway-backed `agents.create` flow added.
 - [x] Task 4: Detail live message subscription.
-- [ ] Task 5: Session operations.
-- [ ] Task 6: Tool timeline improvements.
-- [ ] Task 7: Long conversation performance.
+- [x] Task 5: Session operations.
+- [x] Task 6: Tool timeline improvements.
+- [x] Task 7: Long conversation performance.
 - [x] Task 8: Skills and connections Gateway migration.
 - [x] Task 9: Usage dashboard.
 - [ ] Task 10: Channel settings write-back forms.
@@ -247,6 +247,12 @@ Manual checks:
 
 ## Task 5: Session Operations
 
+Status: Done in clawx. The detail header now has a beginner-friendly
+`操作` menu for copying the session ID, stopping the current run, organizing
+long-conversation context, restarting a session, and deleting a session.
+`整理上下文` maps to `sessions.compact`; `重新开始` maps to
+`sessions.reset`; `删除会话` maps to `sessions.delete`.
+
 **Files:**
 
 - Modify: `src-tauri/src/gateway_proxy.rs`
@@ -282,6 +288,10 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## Task 6: Tool Timeline Improvements
 
+Status: Done in clawx. Tool calls and results now render as a collapsible
+timeline with a plain-language status, tool name, input summary, output
+summary, and raw details hidden behind `原始详情`.
+
 **Files:**
 
 - Modify: `src/components/ConversationMessageList.tsx`
@@ -302,6 +312,10 @@ pnpm build
 ```
 
 ## Task 7: Long Conversation Performance
+
+Status: Done in clawx. Conversation mode now renders a recent-message window
+for long sessions and shows a simple `加载更早消息` control at the top when
+older rows are hidden. Focus mode remains unchanged.
 
 **Files:**
 

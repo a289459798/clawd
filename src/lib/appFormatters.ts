@@ -8,6 +8,7 @@ export const statusLabel = {
 
 export const connectionLabel = {
   connected: "已连接",
+  degraded: "运行中（降级）",
   warning: "需检查",
   disabled: "未启用",
 } as const;

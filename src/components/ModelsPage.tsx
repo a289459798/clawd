@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { GatewayModelAuthStatusResult, GatewayModelSummary } from "../types/gateway";
+import type { GatewayModelAuthStatusProfile, GatewayModelAuthStatusResult, GatewayModelSummary } from "../types/gateway";
 
 type ModelConfigDraft = {
   provider: string;
@@ -64,6 +64,24 @@ function normalize(value?: string | null) {
   return (value ?? "").trim().toLowerCase();
 }
 
+function profileCredentialLabel(type: GatewayModelAuthStatusProfile["type"]) {
+  if (type === "oauth") return "OAuth";
+  if (type === "token") return "Token";
+  if (type === "api_key") return "API Key";
+  return type;
+}
+
+function profileHealthLabel(status: string) {
+  const map: Record<string, string> = {
+    ok: "正常",
+    expiring: "即将过期",
+    expired: "已过期",
+    missing: "缺失",
+    static: "静态",
+  };
+  return map[status] ?? status;
+}
+
 function providerDisplayName(provider: string, authStatus: GatewayModelAuthStatusResult | null) {
   const auth = authStatus?.providers.find((item) => normalize(item.provider) === normalize(provider));
   return auth?.displayName || provider;
@@ -90,17 +108,35 @@ function isProviderConfigured(provider: string, authStatus: GatewayModelAuthStat
   return Boolean(auth && (auth.status === "ok" || auth.status === "static"));
 }
 
-function modelTags(model: ModelRow) {
-  const tags = new Set<string>();
-  if (model.input?.includes("text") || !model.input?.length) tags.add("文本");
-  if (model.input?.includes("image")) tags.add("图片");
-  if (model.input?.includes("document")) tags.add("文档");
-  if (model.reasoning) tags.add("推理");
+function modelTags(model: ModelRow): string[] {
+  const tags: string[] = [];
+  const inputs = model.input ?? [];
+  if (inputs.includes("text") || inputs.length === 0) tags.push("文本");
+  if (inputs.includes("image")) tags.push("图片");
+  if (inputs.includes("document")) tags.push("文档");
+  if (inputs.includes("audio")) tags.push("音频转写");
+  if (inputs.includes("video")) tags.push("视频");
+  if (model.reasoning) tags.push("推理");
   if (model.contextTokens || model.contextWindow) {
     const context = model.contextTokens ?? model.contextWindow ?? 0;
-    if (context >= 100_000) tags.add("长上下文");
+    if (context >= 100_000) tags.push("长上下文");
   }
-  return Array.from(tags).slice(0, 4);
+  const catalogTags = model.tags?.filter((tag) => typeof tag === "string" && tag.trim()) ?? [];
+  for (const tag of catalogTags) {
+    const lower = tag.toLowerCase();
+    if (
+      lower.includes("transcription")
+      || lower.includes("speech-to-text")
+      || lower === "audio-transcription"
+      || lower === "audio"
+      || lower === "audio-input"
+    ) {
+      if (!tags.includes("音频转写")) tags.push("音频转写");
+      continue;
+    }
+    if (!tags.includes(tag)) tags.push(tag);
+  }
+  return tags.slice(0, 6);
 }
 
 export function ModelsPage({
@@ -197,6 +233,11 @@ export function ModelsPage({
 
   const activeProviderGroup = providerGroups.find((group) => group.provider === selectedProvider) ?? providerGroups[0];
 
+  const activeAuthProvider =
+    activeProviderGroup && authStatus
+      ? authStatus.providers.find((item) => normalize(item.provider) === normalize(activeProviderGroup.provider))
+      : undefined;
+
   const configuredCount = configuredModels.length;
   const allCount = allModels.length;
   const authIssueCount = authStatus?.providers.filter((provider) => provider.status === "missing" || provider.status === "expired" || provider.status === "expiring").length ?? 0;
@@ -286,6 +327,36 @@ export function ModelsPage({
                 </div>
               </div>
 
+              {authStatus && activeAuthProvider ? (
+                <div className="model-auth-profiles" aria-label="Gateway 授权档案">
+                  <div className="model-auth-profiles-caption">
+                    <span className="model-auth-profiles-title">授权档案</span>
+                    <span className="model-auth-profiles-source">来自 Gateway · models.authStatus（对齐 CLI models auth list）</span>
+                  </div>
+                  {activeAuthProvider.profiles.length > 0 ? (
+                    <ul className="model-auth-profile-list">
+                      {activeAuthProvider.profiles.map((profile, index) => (
+                        <li key={`${profile.profileId}-${profile.type}-${index}`}>
+                          <code className="auth-profile-id" title={profile.profileId}>
+                            {profile.profileId}
+                          </code>
+                          <span className="auth-profile-type">{profileCredentialLabel(profile.type)}</span>
+                          <span className={`auth-profile-status auth-status-${profile.status}`}>{profileHealthLabel(profile.status)}</span>
+                          {profile.expiry?.label ? <span className="auth-profile-expiry">{profile.expiry.label}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="model-auth-profiles-empty">
+                      Gateway 未返回独立档案行。若仅使用 API Key 或环境变量绑定，可能不在档案列表中。
+                    </p>
+                  )}
+                  {activeAuthProvider.usage?.plan ? (
+                    <p className="model-auth-usage-hint">用量计划：{String(activeAuthProvider.usage.plan)}</p>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className="model-row-list">
                 {activeProviderGroup.models.map((model) => {
                   const isDefault = normalize(model.ref) === normalize(currentDefaultModel);
@@ -296,7 +367,14 @@ export function ModelsPage({
                         <strong>{model.displayName}</strong>
                         <code>{model.ref}</code>
                         <div className="model-row-tags">
-                          {modelTags(model).map((tag) => <span key={tag}>{tag}</span>)}
+                          {modelTags(model).map((tag) => (
+                            <span
+                              key={tag}
+                              title={tag === "音频转写" ? "Gateway 模型元数据：支持音频输入（含 OpenAI Codex 等场景的语音转写能力）" : undefined}
+                            >
+                              {tag}
+                            </span>
+                          ))}
                           {providerConfigured ? (model.configured ? <span>已添加</span> : <span>可添加</span>) : <span>Provider 未配置</span>}
                         </div>
                       </div>

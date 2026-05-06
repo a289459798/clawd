@@ -43,6 +43,11 @@ function assertGatewayChatSendStarted(value: unknown): GatewayChatSendResult {
   return result;
 }
 
+function isReplyRunConflictError(message: string) {
+  const lower = message.toLowerCase();
+  return lower.includes("replyrunalreadyactive") || /\breply\b.*\balready\b.*\bactive\b/.test(lower) || /\balready\b.*\bactive\b.*\breply\b/.test(lower);
+}
+
 export function useMessageSender({
   agents,
   composerModel,
@@ -120,6 +125,7 @@ export function useMessageSender({
     const isDraft = targetConversation?.isDraft;
     const draftAgentId = targetConversation?.draftAgentId;
     let optimisticStarted = false;
+    let optimisticUserTimestamp: number | undefined;
 
     // If draft, create real session first
     let realSessionKey = conversationId;
@@ -202,7 +208,7 @@ export function useMessageSender({
       onActiveRunIdChange(runId);
       optimisticStarted = true;
 
-      const optimisticTimestamp = Date.now();
+      optimisticUserTimestamp = Date.now();
       onAgentsChange((current) => current.map((agent) => ({
         ...agent,
         conversations: agent.conversations.map((conversation) => {
@@ -212,17 +218,17 @@ export function useMessageSender({
             status: "working",
             lastRole: "user",
             lastMessage: message || (attachments.length > 0 ? `[附件] ${attachments.map((item) => item.name).join(", ")}` : currentConversation.lastMessage),
-            updatedAt: optimisticTimestamp,
+            updatedAt: optimisticUserTimestamp,
             lastTime: new Date().toLocaleString("zh-CN"),
             previewMessages: [
               ...(currentConversation.previewMessages ?? []),
-              { role: "user", text: message || attachments.map((item) => `[附件] ${item.name}`).join("\n"), parts: optimisticUserParts, timestamp: optimisticTimestamp },
+              { role: "user", text: message || attachments.map((item) => `[附件] ${item.name}`).join("\n"), parts: optimisticUserParts, timestamp: optimisticUserTimestamp },
             ],
             runtime: {
               ...currentConversation.runtime,
               activeRunId: runId,
-              activeStartedAt: optimisticTimestamp,
-              lastEventAt: optimisticTimestamp,
+              activeStartedAt: optimisticUserTimestamp,
+              lastEventAt: optimisticUserTimestamp,
             },
           }));
         }),
@@ -261,9 +267,67 @@ export function useMessageSender({
       await refreshGatewayStatus();
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
+
+      if (optimisticStarted && isReplyRunConflictError(messageText)) {
+        onSendingChange(false);
+        onActiveRunIdChange(null);
+        onGatewayError(null);
+        onConversationSendError(realSessionKey, null);
+        onGatewayStatusTextChange("当前仍在生成回复，这条消息已排队，将在结束后自动发送");
+        onQueuedMessagesChange((current) => ({
+          ...current,
+          [realSessionKey]: [
+            {
+              id: `queued-${Date.now()}-retry`,
+              text: message,
+              attachments,
+              createdAt: Date.now(),
+            },
+            ...(current[realSessionKey] ?? []),
+          ],
+        }));
+        if (optimisticUserTimestamp != null) {
+          onAgentsChange((current) => current.map((agent) => ({
+            ...agent,
+            conversations: agent.conversations.map((conversation) => {
+              if (conversation.id !== realSessionKey) return conversation;
+              const msgs = [...(conversation.previewMessages ?? [])];
+              const last = msgs[msgs.length - 1];
+              if (last?.role?.toLowerCase() !== "user" || last.timestamp !== optimisticUserTimestamp) {
+                return patchConversation(conversation, (currentConversation) => ({
+                  ...currentConversation,
+                  runtime: {
+                    ...currentConversation.runtime,
+                    activeRunId: undefined,
+                    activeStartedAt: undefined,
+                  },
+                }));
+              }
+              msgs.pop();
+              return patchConversation(conversation, (currentConversation) => ({
+                ...currentConversation,
+                previewMessages: msgs,
+                runtime: {
+                  ...currentConversation.runtime,
+                  activeRunId: undefined,
+                  activeStartedAt: undefined,
+                  lastEventAt: Date.now(),
+                },
+              }));
+            }),
+          })));
+        }
+        await refreshGatewayStatus();
+        return;
+      }
+
       onGatewayError(messageText);
       onConversationSendError(realSessionKey, messageText);
-      onGatewayStatusTextChange(`Gateway 请求失败: ${messageText}`);
+      let statusLine = `Gateway 请求失败: ${messageText}`;
+      if (/allowlist|allow-list|model.*not permitted|not permitted.*model|blocked.*model/i.test(messageText)) {
+        statusLine += " · 可将模型加入允许列表：在项目终端执行 `openclaw models allow add <provider>/<modelId>`（以 `openclaw models allow --help` 为准）";
+      }
+      onGatewayStatusTextChange(statusLine);
       onSendingChange(false);
       onActiveRunIdChange(null);
       if (optimisticStarted) {

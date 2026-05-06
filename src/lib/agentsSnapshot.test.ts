@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentsFromSnapshot, hasActiveAgentRun } from "./agentsSnapshot";
+import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents } from "./agentsSnapshot";
 import type { OpenClawSnapshot } from "../types/gateway";
 
 describe("buildAgentsFromSnapshot", () => {
@@ -245,5 +245,142 @@ describe("buildAgentsFromSnapshot", () => {
 
     expect(agents[0]?.conversations[0]?.runtime?.activeRunId).toBeUndefined();
     expect(agents[0]?.conversations[0]?.status).toBe("idle");
+  });
+});
+
+describe("mergeGatewaySessionRowsIntoAgents", () => {
+  const sessionKey = "agent:main:direct:abc";
+
+  const baseConversation = {
+    id: sessionKey,
+    title: "Old title",
+    status: "idle" as const,
+    lastMessage: "Local last line",
+    lastTime: "—",
+    tokens: "-",
+    model: "m1",
+    workspace: "",
+    visible: true,
+  };
+
+  const wrapAgent = (conversation: typeof baseConversation & { isDraft?: boolean; runtime?: { activeRunId?: string; lastEventAt?: number }; previewMessages?: Array<{ role?: string; text: string }> }) => ({
+    id: "main",
+    name: "Main",
+    color: "#fff",
+    status: "idle" as const,
+    model: "m1",
+    mdFile: "",
+    configPath: "",
+    summary: "",
+    conversations: [conversation],
+  });
+
+  it("applies gateway last message when the session is not the transcript source of truth", () => {
+    const merged = mergeGatewaySessionRowsIntoAgents(
+      [wrapAgent(baseConversation)],
+      [
+        {
+          key: sessionKey,
+          lastMessagePreview: "Gateway preview",
+          derivedTitle: "Row title",
+          status: "done",
+          updatedAt: 1_700_000_000_000,
+          totalTokens: 100,
+        },
+      ],
+      { transcriptSourceOfTruthIds: new Set() },
+    );
+    const c = merged[0]!.conversations[0]!;
+    expect(c.lastMessage).toBe("Gateway preview");
+    expect(c.title).toBe("Row title");
+    expect(c.tokens).toBe("100");
+  });
+
+  it("keeps local transcript and active run when merge marks session as transcript source of truth", () => {
+    const merged = mergeGatewaySessionRowsIntoAgents(
+      [
+        wrapAgent({
+          ...baseConversation,
+          runtime: { activeRunId: "run-local", lastEventAt: Date.now() },
+          previewMessages: [{ role: "assistant", text: "streaming…" }],
+        }),
+      ],
+      [
+        {
+          key: sessionKey,
+          lastMessagePreview: "Stale gateway preview",
+          derivedTitle: "Fresh title from row",
+          status: "running",
+          updatedAt: Date.now(),
+          totalTokens: 42,
+        },
+      ],
+      { transcriptSourceOfTruthIds: new Set([sessionKey]) },
+    );
+    const c = merged[0]!.conversations[0]!;
+    expect(c.lastMessage).toBe("Local last line");
+    expect(c.previewMessages).toEqual([{ role: "assistant", text: "streaming…" }]);
+    expect(c.runtime?.activeRunId).toBe("run-local");
+    expect(c.title).toBe("Fresh title from row");
+    expect(c.tokens).toBe("42");
+  });
+
+  it("does not merge gateway rows into draft conversations", () => {
+    const merged = mergeGatewaySessionRowsIntoAgents(
+      [wrapAgent({ ...baseConversation, id: "draft-1", isDraft: true })],
+      [{ key: "draft-1", derivedTitle: "Should not apply", lastMessagePreview: "x" }],
+      { transcriptSourceOfTruthIds: new Set() },
+    );
+    expect(merged[0]!.conversations[0]!.title).toBe("Old title");
+    expect(merged[0]!.conversations[0]!.lastMessage).toBe("Local last line");
+  });
+
+  it("merges gateway terminal runtime when transcript is source of truth but there is no local active run", () => {
+    const merged = mergeGatewaySessionRowsIntoAgents(
+      [
+        wrapAgent({
+          ...baseConversation,
+          runtime: { lastEventAt: Date.now() - 120_000 },
+        }),
+      ],
+      [
+        {
+          key: sessionKey,
+          status: "done",
+          updatedAt: Date.now(),
+        },
+      ],
+      { transcriptSourceOfTruthIds: new Set([sessionKey]) },
+    );
+    const c = merged[0]!.conversations[0]!;
+    expect(c.runtime?.activeRunId).toBeUndefined();
+    expect(c.runtime?.lastTerminalReason).toBe("completed");
+  });
+
+  it("merges compaction metadata from gateway session rows", () => {
+    const merged = mergeGatewaySessionRowsIntoAgents(
+      [wrapAgent(baseConversation)],
+      [
+        {
+          key: sessionKey,
+          compactionCheckpointCount: 3,
+          latestCompactionCheckpoint: {
+            checkpointId: "ck",
+            createdAt: 1_711_000_000_000,
+            reason: "auto-threshold",
+          },
+          status: "done",
+          updatedAt: Date.now(),
+        },
+      ],
+      { transcriptSourceOfTruthIds: new Set() },
+    );
+    const c = merged[0]!.conversations[0]!;
+    expect(c.compactionCheckpointCount).toBe(3);
+    expect(c.latestCompactionCheckpoint).toEqual({
+      checkpointId: "ck",
+      createdAt: 1_711_000_000_000,
+      reason: "auto-threshold",
+    });
   });
 });

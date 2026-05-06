@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeSnapshotMessagesPreservingCurrentOrder } from "./toolStream";
+import { buildToolTimelineItems, mergeSnapshotMessagesPreservingCurrentOrder, summarizeToolPayload } from "./toolStream";
 import type { PreviewMessage } from "../types/conversation";
 
 describe("mergeSnapshotMessagesPreservingCurrentOrder", () => {
@@ -25,5 +25,47 @@ describe("mergeSnapshotMessagesPreservingCurrentOrder", () => {
       { role: "assistant", text: "新回复", timestamp: 4 },
     ];
     expect(mergeSnapshotMessagesPreservingCurrentOrder(full, gatewayWindow)).toEqual(full);
+  });
+});
+
+describe("buildToolTimelineItems", () => {
+  it("pairs tool calls with matching results", () => {
+    expect(buildToolTimelineItems([
+      { kind: "tool_call", tool: "read_file", args: JSON.stringify({ path: "src/App.tsx", limit: 20 }) },
+      { kind: "tool_result", tool: "read_file", text: "export function App() {}" },
+    ])).toMatchObject([
+      {
+        tool: "read_file",
+        status: "completed",
+        argSummary: "path: src/App.tsx",
+        outputSummary: "export function App() {}",
+      },
+    ]);
+  });
+
+  it("marks error-looking results as failed", () => {
+    expect(buildToolTimelineItems([
+      { kind: "tool_call", tool: "open_path", args: JSON.stringify({ path: "/tmp/a.xlsx" }) },
+      { kind: "tool_result", tool: "open_path", text: "Not allowed to open path /tmp/a.xlsx" },
+    ])[0]).toMatchObject({
+      tool: "open_path",
+      status: "failed",
+    });
+  });
+
+  it("keeps unpaired calls visible as running", () => {
+    expect(buildToolTimelineItems([
+      { kind: "tool_call", tool: "search", args: JSON.stringify({ query: "cron" }) },
+    ])[0]).toMatchObject({
+      tool: "search",
+      status: "running",
+      argSummary: "query: cron",
+    });
+  });
+});
+
+describe("summarizeToolPayload", () => {
+  it("prefers beginner-useful fields from JSON payloads", () => {
+    expect(summarizeToolPayload(JSON.stringify({ ignored: true, cmd: "pnpm build", path: "package.json" }))).toBe("path: package.json · cmd: pnpm build");
   });
 });

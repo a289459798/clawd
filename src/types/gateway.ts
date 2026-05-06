@@ -1,4 +1,4 @@
-import type { MessagePart } from "./conversation";
+import type { MessagePart, TranscriptPreviewStatus } from "./conversation";
 
 export type SnapshotSession = {
   id: string;
@@ -26,6 +26,13 @@ export type SnapshotSession = {
   session_status?: GatewaySessionRow["status"];
   agent_runtime?: GatewayAgentRuntime;
   preview_messages: Array<{ role?: string; text: string; parts?: MessagePart[]; model?: string; provider?: string; api?: string; timestamp?: number; input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number }>;
+  transcript_preview_status?: TranscriptPreviewStatus;
+  compaction_checkpoint_count?: number;
+  latest_compaction_checkpoint?: {
+    checkpoint_id: string;
+    created_at: number;
+    reason: string;
+  };
 };
 
 export type GatewayAgentRuntime = {
@@ -47,6 +54,10 @@ export type GatewayStatus = {
   connected: boolean;
   statusText: string;
   error?: string | null;
+  /** From hello-ok `snapshot.uptimeMs` at last successful WS handshake. */
+  gatewayUptimeBasisMs?: number | null;
+  /** Unix epoch ms (local) when basis was recorded; used to extrapolate live uptime. */
+  gatewayUptimeRecordedAtMs?: number | null;
 };
 
 export type GatewayOpenClawStatusResult = {
@@ -63,6 +74,17 @@ export type GatewayOpenClawStatusResult = {
     defaultAgentId?: string;
     agents?: Array<{ agentId: string; enabled: boolean; every?: string }>;
   };
+};
+
+/** Payload shape from Gateway RPC `update.status` (see clawdbot `RestartSentinelPayload`). */
+export type GatewayUpdateStatusResult = {
+  sentinel?: {
+    kind?: string;
+    status?: string;
+    ts?: number;
+    stats?: { after?: { version?: string } | null } | null;
+    message?: string | null;
+  } | null;
 };
 
 export type GatewayModelSummary = {
@@ -196,6 +218,16 @@ export type GatewayAgentsFilesSetResult = {
   file: GatewayAgentFileEntry;
 };
 
+export type GatewayHealthPluginError = {
+  id: string;
+  origin: string;
+  activated: boolean;
+  activationSource?: string;
+  activationReason?: string;
+  failurePhase?: string;
+  error: string;
+};
+
 export type GatewaySkillsStatusResult = {
   workspaceDir?: string;
   managedSkillsDir?: string;
@@ -207,7 +239,10 @@ export type GatewaySkillsStatusResult = {
     homepage?: string;
     disabled?: boolean;
     eligible?: boolean;
+    blockedByAllowlist?: boolean;
+    blockedByAgentFilter?: boolean;
     missing?: Record<string, unknown> | string[] | null;
+    install?: Array<{ id: string; kind: string; label: string; bins?: string[] }>;
   }>;
 };
 
@@ -215,8 +250,18 @@ export type GatewaySkillsUpdateResult = {
   ok?: boolean;
 };
 
+export type GatewayChannelsEventLoopHealth = {
+  degraded?: boolean;
+  reasons?: string[];
+  delayMs?: number;
+  utilization?: number;
+  utilizationEwma?: number;
+  lastTickDelayMs?: number;
+};
+
 export type GatewayChannelsStatusResult = {
   ts?: number;
+  eventLoop?: GatewayChannelsEventLoopHealth;
   channelOrder?: string[];
   channelLabels?: Record<string, string>;
   channelDetailLabels?: Record<string, string>;
@@ -233,6 +278,16 @@ export type GatewayChannelsStatusResult = {
     connected?: boolean;
     lastError?: string;
     healthState?: string;
+    tokenSource?: string;
+    botTokenSource?: string;
+    appTokenSource?: string;
+    signingSecretSource?: string;
+    tokenStatus?: "available" | "configured_unavailable" | "missing";
+    botTokenStatus?: "available" | "configured_unavailable" | "missing";
+    appTokenStatus?: "available" | "configured_unavailable" | "missing";
+    signingSecretStatus?: "available" | "configured_unavailable" | "missing";
+    userTokenStatus?: "available" | "configured_unavailable" | "missing";
+    statusState?: string;
   }>>;
   channelDefaultAccountId?: Record<string, string>;
 };
@@ -334,6 +389,12 @@ export type GatewaySessionRow = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: {
+    checkpointId: string;
+    createdAt: number;
+    reason: string;
+  };
 };
 
 export type GatewaySessionsListResult = {
@@ -347,6 +408,7 @@ export type GatewaySessionsListResult = {
     modelProvider?: string | null;
     model?: string | null;
     contextTokens?: number | null;
+    thinkingLevels?: Array<{ id: string; label?: string }>;
     thinkingOptions?: string[];
     thinkingDefault?: string;
   };

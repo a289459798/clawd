@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -18,7 +18,11 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
 import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage, stripInboundWrapperText } from "../lib/gatewayMessages";
+import { buildToolTimelineItems } from "../lib/toolStream";
 import type { MessagePart, PreviewMessage } from "../types/conversation";
+
+const INITIAL_CONVERSATION_ROW_COUNT = 120;
+const CONVERSATION_ROW_BATCH_SIZE = 80;
 
 SyntaxHighlighter.registerLanguage("bash", bash);
 SyntaxHighlighter.registerLanguage("sh", bash);
@@ -173,44 +177,74 @@ function StructuredMessageContent({
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [openFileError, setOpenFileError] = useState<string | null>(null);
   const elements: React.ReactNode[] = [];
-  let pendingToolCalls: Array<{ tool: string; args?: string }> = [];
+  let pendingToolParts: MessagePart[] = [];
 
-  const flushToolCalls = () => {
-    if (pendingToolCalls.length === 0) return;
-    const toolList = [...pendingToolCalls];
+  const flushToolTimeline = () => {
+    if (pendingToolParts.length === 0) return;
+    const toolList = buildToolTimelineItems(pendingToolParts);
+    if (toolList.length === 0) {
+      pendingToolParts = [];
+      return;
+    }
     const key = `${conversationId}-tools-${elements.length}`;
+    const failedCount = toolList.filter((item) => item.status === "failed").length;
+    const runningCount = toolList.filter((item) => item.status === "running").length;
+    const statusLabel = failedCount > 0 ? `${failedCount} 项失败` : runningCount > 0 ? `${runningCount} 项进行中` : "已完成";
     elements.push(
       <div className="tool-call-box" key={key}>
         <button className="tool-call-summary" type="button" onClick={() => setToolsExpanded((v) => !v)}>
-          <span className="tool-call-summary-label">已执行 {toolList.length} 项操作</span>
+          <span className={`tool-call-status-dot ${failedCount > 0 ? "failed" : runningCount > 0 ? "running" : "completed"}`} aria-hidden="true" />
+          <span className="tool-call-summary-label">{toolList.length} 项工具操作</span>
           <span className="tool-call-summary-items">{Array.from(new Set(toolList.map((item) => item.tool))).slice(0, 3).join(" · ")}</span>
+          <span className={`tool-call-summary-status ${failedCount > 0 ? "failed" : runningCount > 0 ? "running" : "completed"}`}>{statusLabel}</span>
           <span className="tool-call-summary-toggle">{toolsExpanded ? "收起" : "展开"}</span>
         </button>
         {toolsExpanded ? (
-          <div className="tool-call-detail-list">
+          <ol className="tool-call-detail-list">
             {toolList.map((item, index) => (
-              <div className="tool-call-detail" key={`${key}-detail-${index}`}>
-                <div className="tool-call-detail-name">{item.tool}</div>
-                {item.args ? <pre className="tool-call-detail-args">{item.args}</pre> : null}
-              </div>
+              <li className={`tool-call-detail ${item.status}`} key={`${key}-detail-${index}`}>
+                <div className="tool-call-detail-head">
+                  <span className="tool-call-step-index">{index + 1}</span>
+                  <span className="tool-call-detail-name">{item.tool}</span>
+                  <span className={`tool-call-detail-status ${item.status}`}>
+                    {item.status === "running" ? "进行中" : item.status === "failed" ? "失败" : "完成"}
+                  </span>
+                </div>
+                {item.argSummary ? <div className="tool-call-plain-summary">输入：{item.argSummary}</div> : null}
+                {item.outputSummary ? <div className="tool-call-plain-summary">结果：{item.outputSummary}</div> : null}
+                {item.args || item.result ? (
+                  <details className="tool-call-raw-details">
+                    <summary>原始详情</summary>
+                    {item.args ? (
+                      <>
+                        <div className="tool-call-detail-caption">输入参数</div>
+                        <pre className="tool-call-detail-args">{item.args}</pre>
+                      </>
+                    ) : null}
+                    {item.result ? (
+                      <>
+                        <div className="tool-call-detail-caption">返回内容</div>
+                        <pre className="tool-call-detail-args">{item.result}</pre>
+                      </>
+                    ) : null}
+                  </details>
+                ) : null}
+              </li>
             ))}
-          </div>
+          </ol>
         ) : null}
       </div>,
     );
-    pendingToolCalls = [];
+    pendingToolParts = [];
   };
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
-    if (part.kind === "tool_call") {
-      pendingToolCalls.push({ tool: part.tool, args: part.args });
+    if (part.kind === "tool_call" || part.kind === "tool_result") {
+      pendingToolParts.push(part);
       continue;
     }
-    if (part.kind === "tool_result") {
-      continue;
-    }
-    flushToolCalls();
+    flushToolTimeline();
     if (part.kind === "text") {
       if (!part.text?.trim()) continue;
       elements.push(<MessageBubbleWithCopy key={`${conversationId}-text-${i}`} text={part.text} imageVariant={imageVariant} />);
@@ -247,7 +281,7 @@ function StructuredMessageContent({
       );
     }
   }
-  flushToolCalls();
+  flushToolTimeline();
 
   return (
     <>
@@ -311,23 +345,18 @@ function ConversationMessageListInternal({
   mode,
 }: ConversationMessageListInternalProps) {
   const showUserMessages = mode === "conversation";
+  const [visibleRowCount, setVisibleRowCount] = useState(INITIAL_CONVERSATION_ROW_COUNT);
+
+  useEffect(() => {
+    setVisibleRowCount(INITIAL_CONVERSATION_ROW_COUNT);
+  }, [conversationId, mode]);
+
   const rows = useMemo(() => {
     const cleanText = (value?: string) => stripInboundWrapperText((value ?? "").replace(/^__streaming__(?:[^_]+__)?/, "")).trim();
-    const collapseRepeatedText = (value: string) => {
-      const text = value.trim();
-      if (!text) return "";
-      for (let size = 1; size <= Math.floor(text.length / 2); size += 1) {
-        if (text.length % size !== 0) continue;
-        const unit = text.slice(0, size);
-        if (unit.repeat(text.length / size) === text) return unit.trim();
-      }
-      return text;
-    };
     const cleanParts = (parts: MessagePart[] = []) => parts
-      .filter((part) => part.kind !== "tool_result")
       .flatMap<MessagePart>((part) => {
         if (part.kind !== "text") return [part];
-        const text = collapseRepeatedText(cleanText(part.text));
+        const text = cleanText(part.text);
         return text ? [{ ...part, text }] : [];
       });
     const normalizedMessages = messages
@@ -336,25 +365,37 @@ function ConversationMessageListInternal({
         const role = message.role?.toLowerCase();
         if (role === "user" && !showUserMessages) return false;
         const parts = cleanParts(message.parts ?? []);
-        const hasVisiblePart = parts.some((part) => part.kind !== "tool_result" && (part.kind !== "text" || part.text?.trim()));
+        const hasVisiblePart = parts.some((part) => part.kind !== "text" || part.text?.trim());
         const text = cleanText(message.text).toLowerCase();
-        if (role === "toolresult" || role === "tool_result") return false;
-        if (text.startsWith("tool_result:") || text.startsWith("toolresult:")) return false;
+        if ((text.startsWith("tool_result:") || text.startsWith("toolresult:")) && !hasVisiblePart) return false;
         return hasVisiblePart || Boolean(text.trim());
       })
       .map((message) => ({
         ...message,
-        text: collapseRepeatedText(cleanText(message.text)),
+        displayRepeatCount: undefined,
+        text: cleanText(message.text),
         parts: cleanParts(message.parts ?? []),
       }));
+    const isTextOnlyBubble = (msg: PreviewMessage) => {
+      const parts = msg.parts ?? [];
+      if (parts.length === 0) return true;
+      return parts.every((part) => part.kind === "text");
+    };
     const collapsedMessages = normalizedMessages.reduce<PreviewMessage[]>((acc, message) => {
       const previous = acc[acc.length - 1];
       const role = message.role?.toLowerCase();
       if (previous?.role?.toLowerCase() === "user" && role === "user") {
         const previousText = cleanText(previous.text);
         const nextText = cleanText(message.text);
-        if (previousText && nextText && previousText === nextText) {
-          acc[acc.length - 1] = message.timestamp && (!previous.timestamp || message.timestamp >= previous.timestamp) ? message : previous;
+        if (
+          previousText && nextText && previousText === nextText
+          && isTextOnlyBubble(previous) && isTextOnlyBubble(message)
+        ) {
+          const pick = message.timestamp && (!previous.timestamp || message.timestamp >= previous.timestamp) ? message : previous;
+          acc[acc.length - 1] = {
+            ...pick,
+            displayRepeatCount: (previous.displayRepeatCount ?? 1) + 1,
+          };
           return acc;
         }
       }
@@ -364,7 +405,14 @@ function ConversationMessageListInternal({
         const previousHasTools = (previous.parts ?? []).some((part) => part.kind === "tool_call");
         const nextHasTools = (message.parts ?? []).some((part) => part.kind === "tool_call");
         if (!previousHasTools && !nextHasTools && previousText && nextText) {
-          if (nextText === previousText || nextText.includes(previousText)) {
+          if (previousText === nextText) {
+            acc[acc.length - 1] = {
+              ...message,
+              displayRepeatCount: (previous.displayRepeatCount ?? 1) + 1,
+            };
+            return acc;
+          }
+          if (nextText.includes(previousText)) {
             acc[acc.length - 1] = message;
             return acc;
           }
@@ -385,9 +433,9 @@ function ConversationMessageListInternal({
     let pendingToolMessages: Array<{ message: PreviewMessage; index: number }> = [];
     const isToolOnlyMessage = (message: PreviewMessage) => {
       const parts = message.parts ?? [];
-      const hasToolCalls = parts.some((part) => part.kind === "tool_call");
-      const hasTextContent = parts.some((part) => part.kind === "text" && part.text?.trim());
-      return hasToolCalls && !hasTextContent;
+      const hasToolParts = parts.some((part) => part.kind === "tool_call" || part.kind === "tool_result");
+      const hasNonToolContent = parts.some((part) => part.kind !== "tool_call" && part.kind !== "tool_result" && (part.kind !== "text" || part.text?.trim()));
+      return hasToolParts && !hasNonToolContent;
     };
     const flushToolMessages = () => {
       if (pendingToolMessages.length > 0) {
@@ -409,16 +457,31 @@ function ConversationMessageListInternal({
     return rows;
   }, [messages, showUserMessages]);
 
+  const shouldWindowRows = mode === "conversation" && rows.length > INITIAL_CONVERSATION_ROW_COUNT;
+  const hiddenEarlierRowCount = shouldWindowRows ? Math.max(0, rows.length - visibleRowCount) : 0;
+  const displayedRows = shouldWindowRows ? rows.slice(Math.max(0, rows.length - visibleRowCount)) : rows;
+
   return (
     <div className={`conversation-message-list ${mode}-mode`}>
-      {rows.map((row, index) => {
+      {hiddenEarlierRowCount > 0 ? (
+        <button
+          className="conversation-load-earlier"
+          type="button"
+          onClick={() => setVisibleRowCount((current) => current + CONVERSATION_ROW_BATCH_SIZE)}
+        >
+          加载更早消息
+          <span>还有 {hiddenEarlierRowCount} 条未显示</span>
+        </button>
+      ) : null}
+      {displayedRows.map((row) => {
         if (row.kind === "tool_group") {
           const mergedParts = row.items.flatMap((item) => item.message.parts ?? []);
+          const groupKey = row.items.map((item) => item.index).join("-");
           return (
-            <div className="message-stack assistant tool-stack" key={`${conversationId}-tool-group-${index}`}>
+            <div className="message-stack assistant tool-stack" key={`${conversationId}-tool-group-${groupKey}`}>
               <StructuredMessageContent
                 parts={mergedParts}
-                conversationId={`${conversationId}-tool-group-${index}`}
+                conversationId={`${conversationId}-tool-group-${groupKey}`}
                 onOpenImage={onOpenImage}
                 imageVariant="tool"
               />
@@ -430,10 +493,15 @@ function ConversationMessageListInternal({
         const messageRole = message.role?.toLowerCase() === "user" ? "user" : "assistant";
         const parts = message.parts?.length ? message.parts : [{ kind: "text", text: message.text } as MessagePart];
         return (
-          <div className={`message-stack ${messageRole}`} key={`${conversationId}-message-${index}`}>
+          <div className={`message-stack ${messageRole}`} key={`${conversationId}-message-${row.index}`}>
+            {message.displayRepeatCount && message.displayRepeatCount > 1 ? (
+              <div className="message-repeat-badge" title={`连续重复相同文本 ${message.displayRepeatCount} 条，已合并展示`}>
+                ×{message.displayRepeatCount}
+              </div>
+            ) : null}
             <StructuredMessageContent
               parts={parts}
-              conversationId={`${conversationId}-${index}`}
+              conversationId={`${conversationId}-${row.index}`}
               onOpenImage={onOpenImage}
               imageVariant={messageRole}
             />

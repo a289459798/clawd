@@ -10,6 +10,8 @@ export type MessagePart =
 export type PreviewMessage = {
   role?: string;
   text: string;
+  /** UI-only: merged consecutive duplicate text bubbles count */
+  displayRepeatCount?: number;
   parts?: MessagePart[];
   model?: string;
   provider?: string;
@@ -36,8 +38,19 @@ export type ConversationAgentRuntime = {
   source?: string;
 };
 
+/** From Gateway `sessions.preview` — surfaces orphaned/missing transcript paths without scanning disk locally. */
+export type TranscriptPreviewStatus = "ok" | "empty" | "missing" | "error";
+
+export type SessionCompactionCheckpointSummary = {
+  checkpointId: string;
+  createdAt: number;
+  reason: string;
+};
+
 export type Conversation = {
   id: string;
+  /** Alias keys emitted by Gateway events distinct from canonical `id` (snapshot `key`). */
+  alternateSessionKeys?: string[];
   title: string;
   channel?: string;
   status: ConversationStatus;
@@ -64,4 +77,7 @@ export type Conversation = {
   agentRuntime?: ConversationAgentRuntime;
   isDraft?: boolean;  // 本地草稿状态，未创建真实 session
   draftAgentId?: string;  // 草稿对应的 agentId
+  transcriptPreviewStatus?: TranscriptPreviewStatus;
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: SessionCompactionCheckpointSummary;
 };

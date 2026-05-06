@@ -1,7 +1,7 @@
 import { formatTokenCount } from "./appFormatters";
 import { isInternalOpenClawMessage } from "./gatewayMessages";
-import type { Conversation, ConversationRuntime, PreviewMessage } from "../types/conversation";
-import type { OpenClawSnapshot } from "../types/gateway";
+import type { Conversation, ConversationAgentRuntime, ConversationRuntime, PreviewMessage } from "../types/conversation";
+import type { GatewaySessionRow, OpenClawSnapshot } from "../types/gateway";
 import type { Agent, BuildAgentsOptions, ModelOption } from "../types/app";
 
 const COMPLETED_RECENT_WINDOW_MS = 10 * 60 * 1000;
@@ -162,6 +162,7 @@ export function buildAgentsFromSnapshot(
         const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message));
         const mergedPreviewMessages = sessionMessages as PreviewMessage[];
         const displayTitle = session.label || session.title;
+        const alternateSessionKeys = session.id !== session.key ? [session.id] : undefined;
         const thinkingOptions = session.thinking_levels?.map((level) => ({
           value: level.id,
           label: level.label ?? level.id,
@@ -169,6 +170,7 @@ export function buildAgentsFromSnapshot(
 
         return {
           id: session.key,
+          alternateSessionKeys,
           title: displayTitle,
           channel: session.channel,
           status: deriveConversationStatus(runtime),
@@ -203,6 +205,15 @@ export function buildAgentsFromSnapshot(
           visible: existingConversation?.visible ?? true,
           pinned: sessionIndex === 0,
           runtime,
+          transcriptPreviewStatus: session.transcript_preview_status,
+          compactionCheckpointCount: session.compaction_checkpoint_count,
+          latestCompactionCheckpoint: session.latest_compaction_checkpoint
+            ? {
+                checkpointId: session.latest_compaction_checkpoint.checkpoint_id,
+                createdAt: session.latest_compaction_checkpoint.created_at,
+                reason: session.latest_compaction_checkpoint.reason,
+              }
+            : undefined,
         } satisfies Conversation;
       });
 
@@ -235,6 +246,168 @@ export function buildAgentsFromSnapshot(
       })(),
     } satisfies Agent;
   });
+}
+
+function cleanDerivedTitleFromRow(value?: string) {
+  return value
+    ?.replace(/\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+GMT[+-]\d+\]\s*/g, "")
+    .trim();
+}
+
+function normalizeAgentRuntimeFromGatewayRow(session: GatewaySessionRow): ConversationAgentRuntime | undefined {
+  const rawRuntime = session.agentRuntime;
+  if (typeof rawRuntime === "string") {
+    const id = rawRuntime.trim();
+    return id ? { id } : undefined;
+  }
+  if (rawRuntime && typeof rawRuntime === "object") {
+    const id = (rawRuntime.id ?? rawRuntime.runtime ?? rawRuntime.harness ?? "").trim();
+    return id
+      ? {
+          id,
+          label: rawRuntime.label,
+          source: rawRuntime.source,
+        }
+      : undefined;
+  }
+  const id = (session.runtime ?? session.harness ?? "").trim();
+  return id
+    ? {
+        id,
+        label: session.runtimeLabel,
+      }
+    : undefined;
+}
+
+function gatewayRowToRuntimeStub(row: GatewaySessionRow): OpenClawSnapshot["sessions"][number] {
+  return {
+    key: row.key,
+    updated_at: row.updatedAt ?? undefined,
+    session_status: row.status,
+  } as OpenClawSnapshot["sessions"][number];
+}
+
+function compactionSummaryFromGatewayRow(row: GatewaySessionRow): Conversation["latestCompactionCheckpoint"] | undefined {
+  const checkpoint = row.latestCompactionCheckpoint;
+  if (!checkpoint || typeof checkpoint.checkpointId !== "string" || typeof checkpoint.createdAt !== "number") {
+    return undefined;
+  }
+  return {
+    checkpointId: checkpoint.checkpointId,
+    createdAt: checkpoint.createdAt,
+    reason: String(checkpoint.reason ?? ""),
+  };
+}
+
+function sessionCompactionFieldsFromRow(row: GatewaySessionRow): Pick<Conversation, "compactionCheckpointCount" | "latestCompactionCheckpoint"> {
+  return {
+    compactionCheckpointCount: row.compactionCheckpointCount,
+    latestCompactionCheckpoint: compactionSummaryFromGatewayRow(row),
+  };
+}
+
+/**
+ * Merge `sessions.list` rows into existing agents without rebuilding the full Gateway snapshot.
+ * Rows marked as transcript source of truth keep `previewMessages` / `lastMessage` / local streaming runtime intact.
+ */
+export function mergeGatewaySessionRowsIntoAgents(
+  agents: Agent[],
+  rows: GatewaySessionRow[],
+  options: { transcriptSourceOfTruthIds: Set<string> },
+): Agent[] {
+  const rowByKey = new Map(rows.map((row) => [row.key, row]));
+
+  return agents.map((agent) => ({
+    ...agent,
+    conversations: agent.conversations.map((conversation) => {
+      const row = rowByKey.get(conversation.id);
+      if (!row || conversation.isDraft) {
+        return conversation;
+      }
+
+      const truth = options.transcriptSourceOfTruthIds.has(conversation.id);
+      const hasLocalActiveRun = Boolean(conversation.runtime?.activeRunId);
+      const derivedTitle = cleanDerivedTitleFromRow(row.derivedTitle);
+      const mergedTitle = row.label ?? derivedTitle ?? row.displayName ?? row.lastMessagePreview ?? conversation.title;
+
+      if (truth && hasLocalActiveRun) {
+        return patchConversation(conversation, () => ({
+          ...conversation,
+          title: mergedTitle,
+          channel: row.channel ?? row.lastChannel ?? conversation.channel,
+          model: row.model ?? conversation.model,
+          thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
+          thinkingOptions: row.thinkingLevels?.map((level) => ({
+            value: level.id,
+            label: level.label ?? level.id,
+          })) ?? conversation.thinkingOptions,
+          agentRuntime: normalizeAgentRuntimeFromGatewayRow(row) ?? conversation.agentRuntime,
+          inputTokens: row.inputTokens ?? conversation.inputTokens,
+          outputTokens: row.outputTokens ?? conversation.outputTokens,
+          cacheReadTokens: conversation.cacheReadTokens,
+          cacheWriteTokens: conversation.cacheWriteTokens,
+          totalTokens: row.totalTokens ?? conversation.totalTokens,
+          tokens: formatTokenCount(row.totalTokens ?? conversation.totalTokens ?? 0),
+          updatedAt: row.updatedAt ?? conversation.updatedAt,
+          lastTime: row.updatedAt ? new Date(row.updatedAt).toLocaleString("zh-CN") : conversation.lastTime,
+          latestEventType: row.status ?? conversation.latestEventType,
+          latestEventRole: conversation.latestEventRole,
+          ...sessionCompactionFieldsFromRow(row),
+        }));
+      }
+
+      const stub = gatewayRowToRuntimeStub(row);
+      const runtime = runtimeFromGatewaySession(stub, conversation.runtime, conversation.lastRole);
+
+      if (truth && !hasLocalActiveRun) {
+        return patchConversation(conversation, () => ({
+          ...conversation,
+          title: mergedTitle,
+          channel: row.channel ?? row.lastChannel ?? conversation.channel,
+          model: row.model ?? conversation.model,
+          thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
+          thinkingOptions: row.thinkingLevels?.map((level) => ({
+            value: level.id,
+            label: level.label ?? level.id,
+          })) ?? conversation.thinkingOptions,
+          agentRuntime: normalizeAgentRuntimeFromGatewayRow(row) ?? conversation.agentRuntime,
+          inputTokens: row.inputTokens ?? conversation.inputTokens,
+          outputTokens: row.outputTokens ?? conversation.outputTokens,
+          totalTokens: row.totalTokens ?? conversation.totalTokens,
+          tokens: formatTokenCount(row.totalTokens ?? conversation.totalTokens ?? 0),
+          updatedAt: row.updatedAt ?? conversation.updatedAt,
+          lastTime: row.updatedAt ? new Date(row.updatedAt).toLocaleString("zh-CN") : conversation.lastTime,
+          latestEventType: row.status ?? conversation.latestEventType,
+          runtime,
+          ...sessionCompactionFieldsFromRow(row),
+        }));
+      }
+
+      return patchConversation(conversation, () => ({
+        ...conversation,
+        title: mergedTitle,
+        channel: row.channel ?? row.lastChannel ?? conversation.channel,
+        model: row.model ?? conversation.model,
+        thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
+        thinkingOptions: row.thinkingLevels?.map((level) => ({
+          value: level.id,
+          label: level.label ?? level.id,
+        })) ?? conversation.thinkingOptions,
+        agentRuntime: normalizeAgentRuntimeFromGatewayRow(row) ?? conversation.agentRuntime,
+        inputTokens: row.inputTokens ?? conversation.inputTokens,
+        outputTokens: row.outputTokens ?? conversation.outputTokens,
+        totalTokens: row.totalTokens ?? conversation.totalTokens,
+        tokens: formatTokenCount(row.totalTokens ?? conversation.totalTokens ?? 0),
+        updatedAt: row.updatedAt ?? conversation.updatedAt,
+        lastTime: row.updatedAt ? new Date(row.updatedAt).toLocaleString("zh-CN") : conversation.lastTime,
+        latestEventType: row.status ?? conversation.latestEventType,
+        lastRole: conversation.lastRole,
+        lastMessage: row.lastMessagePreview ?? conversation.lastMessage,
+        runtime,
+        ...sessionCompactionFieldsFromRow(row),
+      }));
+    }),
+  }));
 }
 
 export function resolveAgentDefaultModel(agents: Agent[], agentId: string, modelOptions: ModelOption[]) {

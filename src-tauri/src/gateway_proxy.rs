@@ -1,5 +1,5 @@
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -12,11 +12,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{Message, WebSocket, connect};
+use tungstenite::{connect, Message, WebSocket};
 use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -192,6 +192,12 @@ pub struct GatewayStatus {
     pub connected: bool,
     pub status_text: String,
     pub error: Option<String>,
+    /// `snapshot.uptimeMs` from the last successful `connect` / `hello-ok` handshake.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_uptime_basis_ms: Option<u64>,
+    /// Wall-clock millis (Unix epoch) when `gateway_uptime_basis_ms` was recorded (local client).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_uptime_recorded_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -250,9 +256,11 @@ impl PendingRpc {
         let result = self.result.lock().unwrap();
         let wait_result = self
             .condvar
-            .wait_timeout_while(result, Duration::from_millis(timeout_ms), |r: &mut Option<Value>| {
-                r.is_none() && !self.done.load(Ordering::SeqCst)
-            })
+            .wait_timeout_while(
+                result,
+                Duration::from_millis(timeout_ms),
+                |r: &mut Option<Value>| r.is_none() && !self.done.load(Ordering::SeqCst),
+            )
             .map_err(|e| format!("wait error: {e}"))?;
 
         if let Some(ref value) = *wait_result.0 {
@@ -273,6 +281,8 @@ pub struct GatewayProxyState {
     pub connected: Mutex<bool>,
     pub status_text: Mutex<String>,
     pub error: Mutex<Option<String>>,
+    handshake_uptime_ms: Mutex<Option<u64>>,
+    handshake_wall_ms: Mutex<Option<u64>>,
     pub next_id: AtomicU64,
     rpc_tx: Mutex<Option<std::sync::mpsc::Sender<RpcRequest>>>,
     connect_waiter: Mutex<Option<Arc<PendingRpc>>>,
@@ -295,7 +305,9 @@ pub fn read_gateway_client_config() -> Result<GatewayClientConfig, String> {
         .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
     let json: Value = serde_json::from_str(&content)
         .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?;
-    let gateway = json.get("gateway").ok_or_else(|| "gateway config missing".to_string())?;
+    let gateway = json
+        .get("gateway")
+        .ok_or_else(|| "gateway config missing".to_string())?;
     let port = gateway.get("port").and_then(Value::as_u64).unwrap_or(18789);
     let token = gateway
         .get("auth")
@@ -338,8 +350,8 @@ fn signing_key_from_pem(pem: &str) -> Result<SigningKey, String> {
         .map_err(|error| format!("invalid PEM base64: {error}"))?;
 
     const PKCS8_PREFIX: &[u8] = &[
-        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
-        0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
     ];
     if der.len() < PKCS8_PREFIX.len() + 32 || &der[..PKCS8_PREFIX.len()] != PKCS8_PREFIX {
         return Err("unsupported private key PEM format".to_string());
@@ -352,7 +364,8 @@ fn signing_key_from_pem(pem: &str) -> Result<SigningKey, String> {
 
 fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
     let dir = home_dir()?.join(".openclaw").join("clawx");
-    fs::create_dir_all(&dir).map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
     let identity_path = dir.join("device_identity.json");
 
     #[derive(Serialize, Deserialize)]
@@ -375,20 +388,27 @@ fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
         match serde_json::from_str::<StoredDeviceIdentity>(&content) {
             Ok(current) => current,
             Err(_) => {
-                let legacy = serde_json::from_str::<LegacyStoredDeviceIdentity>(&content)
-                    .map_err(|error| format!("failed to parse {}: {error}", identity_path.display()))?;
-                let pem = legacy
-                    .private_key_pem
-                    .ok_or_else(|| format!("legacy device identity missing privateKeyPem in {}", identity_path.display()))?;
+                let legacy = serde_json::from_str::<LegacyStoredDeviceIdentity>(&content).map_err(
+                    |error| format!("failed to parse {}: {error}", identity_path.display()),
+                )?;
+                let pem = legacy.private_key_pem.ok_or_else(|| {
+                    format!(
+                        "legacy device identity missing privateKeyPem in {}",
+                        identity_path.display()
+                    )
+                })?;
                 let signing_key = signing_key_from_pem(&pem)?;
                 let migrated = StoredDeviceIdentity {
                     device_id: legacy.device_id,
                     private_key: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
                 };
-                let migrated_content = serde_json::to_string_pretty(&migrated)
-                    .map_err(|error| format!("failed to serialize migrated device identity: {error}"))?;
-                fs::write(&identity_path, migrated_content)
-                    .map_err(|error| format!("failed to write {}: {error}", identity_path.display()))?;
+                let migrated_content =
+                    serde_json::to_string_pretty(&migrated).map_err(|error| {
+                        format!("failed to serialize migrated device identity: {error}")
+                    })?;
+                fs::write(&identity_path, migrated_content).map_err(|error| {
+                    format!("failed to write {}: {error}", identity_path.display())
+                })?;
                 migrated
             }
         }
@@ -472,7 +492,8 @@ fn sign_connect_payload_v3(
 }
 
 fn connect_gateway_socket(config: &GatewayClientConfig) -> Result<WsStream, String> {
-    let url = Url::parse(&config.ws_url).map_err(|error| format!("invalid gateway url: {error}"))?;
+    let url =
+        Url::parse(&config.ws_url).map_err(|error| format!("invalid gateway url: {error}"))?;
     let request = url
         .as_str()
         .into_client_request()
@@ -484,7 +505,8 @@ fn connect_gateway_socket(config: &GatewayClientConfig) -> Result<WsStream, Stri
             .map_err(|error| format!("invalid authorization header: {error}"))?,
     );
 
-    let (socket, _response) = connect(request).map_err(|error| format!("gateway websocket connect failed: {error}"))?;
+    let (socket, _response) =
+        connect(request).map_err(|error| format!("gateway websocket connect failed: {error}"))?;
     Ok(socket)
 }
 
@@ -493,6 +515,22 @@ fn clear_connection_state(state: &GatewayProxyState, status: &str, error: Option
     *state.status_text.lock().unwrap() = status.to_string();
     *state.error.lock().unwrap() = error;
     *state.rpc_tx.lock().unwrap() = None;
+    *state.handshake_uptime_ms.lock().unwrap() = None;
+    *state.handshake_wall_ms.lock().unwrap() = None;
+}
+
+fn parse_handshake_uptime_ms(payload: &Value) -> Option<u64> {
+    payload
+        .get("snapshot")
+        .and_then(|snap| snap.get("uptimeMs"))
+        .and_then(Value::as_u64)
+}
+
+fn unix_now_ms() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
 }
 
 fn send_gateway_frame(socket: &mut WsStream, frame: Value) -> Result<(), String> {
@@ -501,7 +539,12 @@ fn send_gateway_frame(socket: &mut WsStream, frame: Value) -> Result<(), String>
         .map_err(|error| format!("gateway send failed: {error}"))
 }
 
-fn send_gateway_request(socket: &mut WsStream, id: &str, method: &str, params: Value) -> Result<(), String> {
+fn send_gateway_request(
+    socket: &mut WsStream,
+    id: &str,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
     send_gateway_frame(
         socket,
         json!({
@@ -536,7 +579,9 @@ fn gateway_event_loop(
         while let Ok(req) = rx.try_recv() {
             if connected {
                 pending.insert(req.id.clone(), req.pending.clone());
-                if let Err(error) = send_gateway_request(&mut socket, &req.id, &req.method, req.params) {
+                if let Err(error) =
+                    send_gateway_request(&mut socket, &req.id, &req.method, req.params)
+                {
                     if let Some(p) = pending.remove(&req.id) {
                         p.set_error(error.clone());
                     }
@@ -636,12 +681,23 @@ fn gateway_event_loop(
                             *_state.connected.lock().unwrap() = true;
                             *_state.status_text.lock().unwrap() = "Gateway 已连接".to_string();
                             *_state.error.lock().unwrap() = None;
+                            if let Some(payload) = value.get("payload") {
+                                let uptime = parse_handshake_uptime_ms(payload);
+                                *_state.handshake_uptime_ms.lock().unwrap() = uptime;
+                                *_state.handshake_wall_ms.lock().unwrap() =
+                                    uptime.and_then(|_| unix_now_ms());
+                            }
                             if let Some(waiter) = _state.connect_waiter.lock().unwrap().take() {
                                 waiter.set_result(json!({"ok": true}));
                             }
                             for req in queued_requests.drain(..) {
                                 pending.insert(req.id.clone(), req.pending.clone());
-                                if let Err(error) = send_gateway_request(&mut socket, &req.id, &req.method, req.params) {
+                                if let Err(error) = send_gateway_request(
+                                    &mut socket,
+                                    &req.id,
+                                    &req.method,
+                                    req.params,
+                                ) {
                                     if let Some(p) = pending.remove(&req.id) {
                                         p.set_error(error.clone());
                                     }
@@ -704,14 +760,32 @@ fn handle_message(app: &AppHandle, value: Value) {
         eprintln!("[clawx gateway] received chat event: {:?}", value);
         let payload = value.get("payload").cloned().unwrap_or(json!({}));
         let evt = GatewayChatEventPayload {
-            event_type: payload.get("type").and_then(Value::as_str).map(str::to_string),
-            state: payload.get("state").and_then(Value::as_str).map(str::to_string),
-            session_key: payload.get("sessionKey").and_then(Value::as_str).map(str::to_string),
-            run_id: payload.get("runId").and_then(Value::as_str).map(str::to_string),
+            event_type: payload
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            state: payload
+                .get("state")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            session_key: payload
+                .get("sessionKey")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            run_id: payload
+                .get("runId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             message: payload.get("message").cloned(),
-            stream: payload.get("stream").and_then(Value::as_str).map(str::to_string),
+            stream: payload
+                .get("stream")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             data: payload.get("data").cloned(),
-            error_message: payload.get("errorMessage").and_then(Value::as_str).map(str::to_string),
+            error_message: payload
+                .get("errorMessage")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         };
         let _ = app.emit("clawx://gateway-chat", evt);
     }
@@ -734,10 +808,14 @@ fn handle_message(app: &AppHandle, value: Value) {
 
 #[tauri::command]
 pub fn gateway_status(state: tauri::State<Arc<GatewayProxyState>>) -> GatewayStatus {
+    let uptime_basis = state.handshake_uptime_ms.lock().unwrap().clone();
+    let uptime_wall = state.handshake_wall_ms.lock().unwrap().clone();
     GatewayStatus {
         connected: *state.connected.lock().unwrap(),
         status_text: state.status_text.lock().unwrap().clone(),
         error: state.error.lock().unwrap().clone(),
+        gateway_uptime_basis_ms: uptime_basis,
+        gateway_uptime_recorded_at_ms: uptime_basis.and_then(|_| uptime_wall),
     }
 }
 
@@ -766,7 +844,10 @@ pub async fn gateway_connect(
         *state.connected.lock().map_err(|e| format!("lock: {e}"))? = false;
         *state.status_text.lock().map_err(|e| format!("lock: {e}"))? = "Gateway 握手中".to_string();
         *state.error.lock().map_err(|e| format!("lock: {e}"))? = None;
-        *state.connect_waiter.lock().map_err(|e| format!("lock: {e}"))? = Some(connect_waiter.clone());
+        *state
+            .connect_waiter
+            .lock()
+            .map_err(|e| format!("lock: {e}"))? = Some(connect_waiter.clone());
     }
 
     let st = state.inner().clone();
@@ -776,8 +857,12 @@ pub async fn gateway_connect(
 
         // Initial connection.
         let init_result = gateway_event_loop(
-            socket, app.clone(), st.clone(), rx,
-            token.clone(), device_identity.clone(),
+            socket,
+            app.clone(),
+            st.clone(),
+            rx,
+            token.clone(),
+            device_identity.clone(),
         );
         match init_result {
             Ok(()) => {
@@ -798,8 +883,7 @@ pub async fn gateway_connect(
         // Auto-reconnect: up to 10 attempts, 2s-30s exponential backoff.
         let mut delay = Duration::from_secs(2);
         for attempt in 1..=10 {
-            *st.status_text.lock().unwrap() =
-                format!("Gateway 正在重连... (第 {} 次)", attempt);
+            *st.status_text.lock().unwrap() = format!("Gateway 正在重连... (第 {} 次)", attempt);
             eprintln!("[clawx gateway] reconnect attempt {}", attempt);
             thread::sleep(delay);
             delay = std::cmp::min(delay * 2, Duration::from_secs(30));
@@ -825,8 +909,12 @@ pub async fn gateway_connect(
             match connect_gateway_socket(&config) {
                 Ok(new_socket) => {
                     match gateway_event_loop(
-                        new_socket, app.clone(), st.clone(), rx,
-                        config.token.clone(), identity.clone(),
+                        new_socket,
+                        app.clone(),
+                        st.clone(),
+                        rx,
+                        config.token.clone(),
+                        identity.clone(),
                     ) {
                         Ok(()) => {
                             // Reconnected and running until next drop.
@@ -882,7 +970,6 @@ fn send_rpc(state: &GatewayProxyState, method: &str, params: Value) -> Result<Va
     pending.wait(15000)
 }
 
-
 #[tauri::command]
 pub async fn gateway_models_list(
     state: tauri::State<'_, Arc<GatewayProxyState>>,
@@ -903,7 +990,11 @@ pub async fn gateway_models_auth_status(
 ) -> Result<Value, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        send_rpc(&state, "models.authStatus", params.unwrap_or_else(|| json!({})))
+        send_rpc(
+            &state,
+            "models.authStatus",
+            params.unwrap_or_else(|| json!({})),
+        )
     })
     .await
     .map_err(|error| format!("models.authStatus task failed: {error}"))?
@@ -946,9 +1037,85 @@ pub fn gateway_health(
 }
 
 #[tauri::command]
-pub fn gateway_agents_list(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_update_status(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
 ) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "update.status", json!({})))
+        .await
+        .map_err(|error| format!("update.status task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_list(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "cron.list", params.unwrap_or_else(|| json!({})))
+    })
+    .await
+    .map_err(|error| format!("cron.list task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_runs(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Value,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.runs", params))
+        .await
+        .map_err(|error| format!("cron.runs task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_add(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Value,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.add", params))
+        .await
+        .map_err(|error| format!("cron.add task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_run(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Value,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.run", params))
+        .await
+        .map_err(|error| format!("cron.run task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_update(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Value,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.update", params))
+        .await
+        .map_err(|error| format!("cron.update task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_remove(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Value,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.remove", params))
+        .await
+        .map_err(|error| format!("cron.remove task failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn gateway_agents_list(state: tauri::State<Arc<GatewayProxyState>>) -> Result<Value, String> {
     send_rpc(&state, "agents.list", json!({}))
 }
 
@@ -996,7 +1163,11 @@ pub fn gateway_agents_files_list(
     state: tauri::State<Arc<GatewayProxyState>>,
     params: GatewayAgentFilesListParams,
 ) -> Result<Value, String> {
-    send_rpc(&state, "agents.files.list", json!({ "agentId": params.agent_id }))
+    send_rpc(
+        &state,
+        "agents.files.list",
+        json!({ "agentId": params.agent_id }),
+    )
 }
 
 #[tauri::command]
@@ -1004,7 +1175,11 @@ pub fn gateway_agents_files_get(
     state: tauri::State<Arc<GatewayProxyState>>,
     params: GatewayAgentFilesGetParams,
 ) -> Result<Value, String> {
-    send_rpc(&state, "agents.files.get", json!({ "agentId": params.agent_id, "name": params.name }))
+    send_rpc(
+        &state,
+        "agents.files.get",
+        json!({ "agentId": params.agent_id, "name": params.name }),
+    )
 }
 
 #[tauri::command]
@@ -1140,7 +1315,10 @@ pub async fn gateway_sessions_usage(
             json_params.insert("limit".to_string(), json!(limit));
         }
         if let Some(include_context_weight) = params.include_context_weight {
-            json_params.insert("includeContextWeight".to_string(), json!(include_context_weight));
+            json_params.insert(
+                "includeContextWeight".to_string(),
+                json!(include_context_weight),
+            );
         }
         send_rpc(&state, "sessions.usage", Value::Object(json_params))
     })
@@ -1167,10 +1345,16 @@ pub fn gateway_sessions_list(
         json_params.insert("includeUnknown".to_string(), json!(include_unknown));
     }
     if let Some(include_derived_titles) = params.include_derived_titles {
-        json_params.insert("includeDerivedTitles".to_string(), json!(include_derived_titles));
+        json_params.insert(
+            "includeDerivedTitles".to_string(),
+            json!(include_derived_titles),
+        );
     }
     if let Some(include_last_message) = params.include_last_message {
-        json_params.insert("includeLastMessage".to_string(), json!(include_last_message));
+        json_params.insert(
+            "includeLastMessage".to_string(),
+            json!(include_last_message),
+        );
     }
     if let Some(label) = params.label {
         json_params.insert("label".to_string(), json!(label));
@@ -1222,7 +1406,11 @@ pub fn gateway_session_messages_subscribe(
     state: tauri::State<Arc<GatewayProxyState>>,
     session_key: String,
 ) -> Result<Value, String> {
-    send_rpc(&state, "sessions.messages.subscribe", json!({ "key": session_key }))
+    send_rpc(
+        &state,
+        "sessions.messages.subscribe",
+        json!({ "key": session_key }),
+    )
 }
 
 #[tauri::command]
@@ -1230,7 +1418,11 @@ pub fn gateway_session_messages_unsubscribe(
     state: tauri::State<Arc<GatewayProxyState>>,
     session_key: String,
 ) -> Result<Value, String> {
-    send_rpc(&state, "sessions.messages.unsubscribe", json!({ "key": session_key }))
+    send_rpc(
+        &state,
+        "sessions.messages.unsubscribe",
+        json!({ "key": session_key }),
+    )
 }
 
 #[tauri::command]
@@ -1283,18 +1475,17 @@ pub fn gateway_chat_send(
         })
         .collect();
 
-    eprintln!("[clawx gateway] sending chat message: session={}, message={:?}", params.session_key, params.message);
+    eprintln!(
+        "[clawx gateway] sending chat message: session={}, message={:?}",
+        params.session_key, params.message
+    );
     let mut chat_params = serde_json::Map::new();
     chat_params.insert("sessionKey".to_string(), json!(params.session_key));
     chat_params.insert("message".to_string(), json!(params.message));
     chat_params.insert("deliver".to_string(), json!(false));
     chat_params.insert("idempotencyKey".to_string(), json!(params.idempotency_key));
     chat_params.insert("attachments".to_string(), json!(attachment_payload));
-    let result = send_rpc(
-        &state,
-        "chat.send",
-        Value::Object(chat_params),
-    )?;
+    let result = send_rpc(&state, "chat.send", Value::Object(chat_params))?;
     eprintln!("[clawx gateway] chat.send result: {:?}", result);
 
     let _ = app.emit(
@@ -1331,24 +1522,20 @@ pub fn gateway_sessions_create(
 ) -> Result<Value, String> {
     let mut json_params = serde_json::Map::new();
     json_params.insert("agentId".to_string(), json!(params.agent_id));
-    
+
     if let Some(label) = params.label {
         json_params.insert("label".to_string(), json!(label));
     }
-    
+
     if let Some(model) = params.model {
         json_params.insert("model".to_string(), json!(model));
     }
-    
+
     if let Some(message) = params.message {
         json_params.insert("message".to_string(), json!(message));
     }
-    
-    send_rpc(
-        &state,
-        "sessions.create",
-        Value::Object(json_params),
-    )
+
+    send_rpc(&state, "sessions.create", Value::Object(json_params))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1363,6 +1550,12 @@ pub struct GatewaySessionsPatchParams {
     pub label: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySessionKeyParams {
+    pub session_key: String,
+}
+
 #[tauri::command]
 pub fn gateway_sessions_patch(
     state: tauri::State<Arc<GatewayProxyState>>,
@@ -1370,7 +1563,7 @@ pub fn gateway_sessions_patch(
 ) -> Result<Value, String> {
     let mut json_params = serde_json::Map::new();
     json_params.insert("key".to_string(), json!(params.session_key));
-    
+
     if let Some(model) = params.model {
         json_params.insert("model".to_string(), json!(model));
     }
@@ -1389,10 +1582,48 @@ pub fn gateway_sessions_patch(
     if let Some(label) = params.label {
         json_params.insert("label".to_string(), json!(label));
     }
-    
+
+    send_rpc(&state, "sessions.patch", Value::Object(json_params))
+}
+
+#[tauri::command]
+pub fn gateway_sessions_compact(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySessionKeyParams,
+) -> Result<Value, String> {
     send_rpc(
         &state,
-        "sessions.patch",
-        Value::Object(json_params),
+        "sessions.compact",
+        json!({
+            "key": params.session_key,
+        }),
+    )
+}
+
+#[tauri::command]
+pub fn gateway_sessions_reset(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySessionKeyParams,
+) -> Result<Value, String> {
+    send_rpc(
+        &state,
+        "sessions.reset",
+        json!({
+            "key": params.session_key,
+        }),
+    )
+}
+
+#[tauri::command]
+pub fn gateway_sessions_delete(
+    state: tauri::State<Arc<GatewayProxyState>>,
+    params: GatewaySessionKeyParams,
+) -> Result<Value, String> {
+    send_rpc(
+        &state,
+        "sessions.delete",
+        json!({
+            "key": params.session_key,
+        }),
     )
 }

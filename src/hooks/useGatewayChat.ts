@@ -1,16 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import type { Agent } from "../types/app";
 import type { MessagePart } from "../types/conversation";
 import type { GatewayChatEvent } from "../types/gateway";
 import { patchConversation } from "../lib/agentsSnapshot";
 import { formatTokenCount } from "../lib/appFormatters";
+import { conversationMatchesSessionKey, findConversationByGatewaySessionKey } from "../lib/conversationSelectors";
 import { mapGatewayToolStreamToPart } from "../lib/toolStream";
-import { extractTextFromGatewayMessage, extractUsageFromGatewayMessage, mapGatewayContentToParts, mergeStreamingParts } from "../lib/gatewayMessages";
+import { extractTextFromGatewayMessage, extractUsageFromGatewayMessage, isInternalOpenClawMessage, mapGatewayContentToParts, mergeStreamingParts } from "../lib/gatewayMessages";
 
 interface UseGatewayChatProps {
   enabled: boolean;
   activeConversationId: string | null;
   activeRunId: string | null;
+  agentsRef: MutableRefObject<Agent[]>;
   onAgentsChange: (updater: (current: Agent[]) => Agent[]) => void;
   onActiveRunIdChange: (runId: string | null) => void;
   onSendingChange: (sending: boolean) => void;
@@ -24,6 +26,7 @@ export function useGatewayChat({
   enabled,
   activeConversationId,
   activeRunId,
+  agentsRef,
   onAgentsChange,
   onActiveRunIdChange,
   onSendingChange,
@@ -87,10 +90,15 @@ export function useGatewayChat({
           const chat = event.payload;
           if (!mounted || !chat?.sessionKey) return;
 
+          const matchedConversation = findConversationByGatewaySessionKey(agentsRef.current, chat.sessionKey);
+          const isCurrentConversation = Boolean(
+            activeConversationIdRef.current
+            && matchedConversation
+            && matchedConversation.id === activeConversationIdRef.current,
+          );
+          const isCurrentRun = !chat.runId || !activeRunIdRef.current || chat.runId === activeRunIdRef.current;
           const eventTimestamp = chat.message?.timestamp ?? Date.now();
           const eventLastTime = new Date(eventTimestamp).toLocaleString("zh-CN");
-          const isCurrentConversation = activeConversationIdRef.current === chat.sessionKey;
-          const isCurrentRun = !chat.runId || !activeRunIdRef.current || chat.runId === activeRunIdRef.current;
 
           // Tool stream handling
           if (chat.stream === "tool") {
@@ -102,7 +110,7 @@ export function useGatewayChat({
             onAgentsChange((current) => current.map((agent) => ({
               ...agent,
               conversations: agent.conversations.map((conversation) => {
-                if (conversation.id !== chat.sessionKey) return conversation;
+                if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const toolKey = `${toolRunId}:${toolName}`;
@@ -153,6 +161,7 @@ export function useGatewayChat({
 
           // Delta stream handling
           if (chat.state === "delta") {
+            if (isInternalOpenClawMessage(chat.message)) return;
             const deltaText = extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
             if (!deltaText && deltaParts.length === 0) return;
@@ -160,7 +169,7 @@ export function useGatewayChat({
             onAgentsChange((current) => current.map((agent) => ({
               ...agent,
               conversations: agent.conversations.map((conversation) => {
-                if (conversation.id !== chat.sessionKey) return conversation;
+                if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
@@ -244,6 +253,9 @@ export function useGatewayChat({
 
           // Final/Aborted handling
           if (chat.state === "final" || chat.state === "aborted") {
+            if (isInternalOpenClawMessage(chat.message)) {
+              return;
+            }
             const finalText = extractTextFromGatewayMessage(chat.message);
             const finalParts = mapGatewayContentToParts(chat.message);
             const terminalEventType = chat.state === "aborted" ? "aborted" : "turn_completed";
@@ -256,7 +268,7 @@ export function useGatewayChat({
             onAgentsChange((current) => current.map((agent) => ({
               ...agent,
               conversations: agent.conversations.map((conversation) => {
-                if (conversation.id !== chat.sessionKey) return conversation;
+                if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
                   const nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
@@ -371,7 +383,7 @@ export function useGatewayChat({
             onAgentsChange((current) => current.map((agent) => ({
               ...agent,
               conversations: agent.conversations.map((conversation) => {
-                if (conversation.id !== chat.sessionKey) return conversation;
+                if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => ({
                   ...currentConversation,
                   latestEventType: "error",

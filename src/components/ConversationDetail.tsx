@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -16,6 +16,8 @@ type ConversationDetailProps = {
   conversationMessageList: React.ReactNode;
   gatewayError: string | null;
   aiResponseScrollRef: React.RefObject<HTMLDivElement | null>;
+  /** Called when user scrolls transcript substantially above bottom (away=true) or back near bottom (false). */
+  onTranscriptScrollAwayFromBottom?: (away: boolean) => void;
   parseSenderMeta: (text: string) => { label?: string; time?: string; cleanText: string };
   userExpanded: boolean;
   onUserExpandedChange: (expanded: boolean) => void;
@@ -23,7 +25,14 @@ type ConversationDetailProps = {
   displayMode: "focus" | "conversation";
   onDisplayModeChange: (mode: "focus" | "conversation") => void;
   onJumpToBottom: () => void;
-  onUpdateTitle?: (conversationId: string, newTitle: string) => void;
+  onUpdateTitle?: (conversationId: string, newTitle: string) => Promise<void>;
+  sessionActionBusy?: string | null;
+  sessionActionError?: string | null;
+  onCopySessionKey?: (conversationId: string) => Promise<void> | void;
+  onCompactSession?: (conversationId: string) => Promise<void> | void;
+  onResetSession?: (conversationId: string) => Promise<void> | void;
+  onDeleteSession?: (conversationId: string) => Promise<void> | void;
+  onAbortSession?: () => Promise<void> | void;
 };
 
 function MarkdownBlock({ content, className }: { content: string; className?: string }) {
@@ -41,6 +50,16 @@ function normalizeImageSrc(data: string, mimeType?: string) {
   return `data:${mimeType || "image/png"};base64,${data}`;
 }
 
+function compactionReasonLabel(reason: string) {
+  const map: Record<string, string> = {
+    manual: "手动",
+    "auto-threshold": "自动阈值",
+    "overflow-retry": "溢出重试",
+    "timeout-retry": "超时重试",
+  };
+  return map[reason] ?? reason;
+}
+
 export function ConversationDetail({
   activeConversation,
   agentName,
@@ -50,6 +69,7 @@ export function ConversationDetail({
   conversationMessageList,
   gatewayError,
   aiResponseScrollRef,
+  onTranscriptScrollAwayFromBottom,
   parseSenderMeta,
   userExpanded,
   onUserExpandedChange,
@@ -58,15 +78,72 @@ export function ConversationDetail({
   onDisplayModeChange,
   onJumpToBottom,
   onUpdateTitle,
+  sessionActionBusy,
+  sessionActionError,
+  onCopySessionKey,
+  onCompactSession,
+  onResetSession,
+  onDeleteSession,
+  onAbortSession,
 }: ConversationDetailProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState(activeConversation.title);
   const [openFileError, setOpenFileError] = useState<string | null>(null);
+  const [titleFeedback, setTitleFeedback] = useState<null | "saving" | "saved" | "error">(null);
+  const titleFeedbackClearRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // 同步 titleInput 当 conversation 变化时
   useEffect(() => {
     setTitleInput(activeConversation.title);
   }, [activeConversation.title]);
+
+  useEffect(() => {
+    setTitleFeedback(null);
+    if (titleFeedbackClearRef.current) {
+      clearTimeout(titleFeedbackClearRef.current);
+      titleFeedbackClearRef.current = undefined;
+    }
+  }, [activeConversation.id]);
+
+  useEffect(() => () => {
+    if (titleFeedbackClearRef.current) {
+      clearTimeout(titleFeedbackClearRef.current);
+    }
+  }, []);
+
+  const commitTitleEdit = async () => {
+    const next = titleInput.trim();
+    if (!next) {
+      setIsEditingTitle(false);
+      setTitleInput(activeConversation.title);
+      return;
+    }
+    if (next === activeConversation.title) {
+      setIsEditingTitle(false);
+      return;
+    }
+    if (!onUpdateTitle) {
+      setIsEditingTitle(false);
+      return;
+    }
+    setIsEditingTitle(false);
+    setTitleFeedback("saving");
+    try {
+      await onUpdateTitle(activeConversation.id, next);
+      setTitleFeedback("saved");
+      titleFeedbackClearRef.current = setTimeout(() => {
+        setTitleFeedback(null);
+        titleFeedbackClearRef.current = undefined;
+      }, 2200);
+    } catch {
+      setTitleFeedback("error");
+      setTitleInput(activeConversation.title);
+      titleFeedbackClearRef.current = setTimeout(() => {
+        setTitleFeedback(null);
+        titleFeedbackClearRef.current = undefined;
+      }, 4200);
+    }
+  };
 
   // Mode changes remount the content area, so wait for the new subtree before scrolling.
   useEffect(() => {
@@ -117,17 +194,12 @@ export function ConversationDetail({
             value={titleInput}
             onChange={(e) => setTitleInput(e.target.value)}
             onBlur={() => {
-              setIsEditingTitle(false);
-              if (titleInput.trim() && titleInput !== activeConversation.title) {
-                onUpdateTitle?.(activeConversation.id, titleInput.trim());
-              }
+              void commitTitleEdit();
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                setIsEditingTitle(false);
-                if (titleInput.trim() && titleInput !== activeConversation.title) {
-                  onUpdateTitle?.(activeConversation.id, titleInput.trim());
-                }
+                e.preventDefault();
+                void commitTitleEdit();
               }
               if (e.key === "Escape") {
                 setIsEditingTitle(false);
@@ -157,6 +229,17 @@ export function ConversationDetail({
             {activeConversation.title}
           </span>
         )}
+        {titleFeedback ? (
+          <span
+            className={`statusbar-title-feedback ${titleFeedback}`}
+            role="status"
+            aria-live="polite"
+          >
+            {titleFeedback === "saving" ? "保存中…" : null}
+            {titleFeedback === "saved" ? "已保存" : null}
+            {titleFeedback === "error" ? "保存失败" : null}
+          </span>
+        ) : null}
         <span className="statusbar-divider">·</span>
         <span className="statusbar-tokens">总: {activeConversation.tokens}</span>
         {activeConversation.agentRuntime ? (
@@ -187,7 +270,101 @@ export function ConversationDetail({
             对话
           </button>
         </div>
+        <details className="session-action-menu">
+          <summary aria-label="会话操作" title="会话操作">
+            <span className="session-action-menu-icon" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </summary>
+          <div className="session-action-popover">
+            <button
+              type="button"
+              onClick={() => void onCopySessionKey?.(activeConversation.id)}
+              disabled={!onCopySessionKey || Boolean(sessionActionBusy)}
+            >
+              <span>复制会话 ID</span>
+              <small>用于排查问题或在 CLI 中定位这段对话</small>
+            </button>
+            {activeConversation.status === "working" || activeConversation.runtime?.activeRunId ? (
+              <button
+                type="button"
+                onClick={() => void onAbortSession?.()}
+                disabled={!onAbortSession || Boolean(sessionActionBusy)}
+              >
+                <span>{sessionActionBusy === "abort" ? "停止中…" : "停止当前运行"}</span>
+                <small>只停止正在生成的回复，不删除对话内容</small>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void onCompactSession?.(activeConversation.id)}
+              disabled={!onCompactSession || Boolean(sessionActionBusy)}
+            >
+              <span>{sessionActionBusy === "compact" ? "整理中…" : "整理上下文"}</span>
+              <small>让长对话变轻，保留会话入口和可见历史</small>
+            </button>
+            <button
+              type="button"
+              onClick={() => void onResetSession?.(activeConversation.id)}
+              disabled={!onResetSession || Boolean(sessionActionBusy)}
+            >
+              <span>{sessionActionBusy === "reset" ? "处理中…" : "重新开始"}</span>
+              <small>清空这段会话的上下文，保留会话入口</small>
+            </button>
+            <button
+              className="danger"
+              type="button"
+              onClick={() => void onDeleteSession?.(activeConversation.id)}
+              disabled={!onDeleteSession || Boolean(sessionActionBusy)}
+            >
+              <span>{sessionActionBusy === "delete" ? "删除中…" : "删除会话"}</span>
+              <small>从 OpenClaw 会话列表移除，删除前会再次确认</small>
+            </button>
+            {sessionActionError ? (
+              <div className="session-action-error" role="alert">
+                {sessionActionError}
+              </div>
+            ) : null}
+          </div>
+        </details>
       </div>
+
+      {(() => {
+        const transcriptIssue =
+          activeConversation.transcriptPreviewStatus === "missing" || activeConversation.transcriptPreviewStatus === "error";
+        const compactionVisible =
+          (activeConversation.compactionCheckpointCount ?? 0) > 0 || Boolean(activeConversation.latestCompactionCheckpoint);
+        if (!transcriptIssue && !compactionVisible) {
+          return null;
+        }
+        const cp = activeConversation.latestCompactionCheckpoint;
+        const compactionTitle =
+          cp &&
+          `checkpoint ${cp.checkpointId} · ${new Date(cp.createdAt).toLocaleString("zh-CN")} · ${compactionReasonLabel(cp.reason)}`;
+        return (
+          <div className="conversation-detail-maintenance" role="status">
+            {transcriptIssue ? (
+              <div className="conversation-detail-maintenance-item transcript-issue">
+                {activeConversation.transcriptPreviewStatus === "missing"
+                  ? "Gateway：transcript 可能缺失（会话索引仍存在）。如需对齐会话存储与磁盘，请使用 OpenClaw CLI／文档中的会话维护命令。"
+                  : "Gateway：读取会话预览失败，请稍后重试或查看 Gateway 日志。"}
+              </div>
+            ) : null}
+            {compactionVisible ? (
+              <div className="conversation-detail-maintenance-item compaction-info" title={compactionTitle ?? undefined}>
+                上下文曾压缩
+                {typeof activeConversation.compactionCheckpointCount === "number"
+                  ? `（${activeConversation.compactionCheckpointCount} 个检查点）`
+                  : cp
+                    ? ` · ${compactionReasonLabel(cp.reason)}`
+                    : null}
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
 
       <div className="conversation-detail-scroll">
         <div className="conversation-window-page in-app">
@@ -263,7 +440,17 @@ export function ConversationDetail({
                 </div>
               ) : null;
             })() : null}
-            <div className="ai-response-scroll" ref={aiResponseScrollRef}>
+            <div
+              className="ai-response-scroll"
+              ref={aiResponseScrollRef}
+              onScroll={() => {
+                const scrollContainer = aiResponseScrollRef.current;
+                if (!scrollContainer || !onTranscriptScrollAwayFromBottom) return;
+                const thresholdPx = 120;
+                const distanceFromBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+                onTranscriptScrollAwayFromBottom(distanceFromBottom > thresholdPx);
+              }}
+            >
               {conversationMessageList}
               {gatewayError ? (
                 <div className="conversation-bottom-error" role="alert">

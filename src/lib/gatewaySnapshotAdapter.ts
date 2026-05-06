@@ -90,6 +90,18 @@ function normalizeAgentRuntime(session: GatewaySessionRow): GatewayAgentRuntime 
     : undefined;
 }
 
+function normalizeLatestCompactionCheckpoint(session: GatewaySessionRow): SnapshotSession["latest_compaction_checkpoint"] | undefined {
+  const checkpoint = session.latestCompactionCheckpoint;
+  if (!checkpoint || typeof checkpoint.checkpointId !== "string" || typeof checkpoint.createdAt !== "number") {
+    return undefined;
+  }
+  return {
+    checkpoint_id: checkpoint.checkpointId,
+    created_at: checkpoint.createdAt,
+    reason: String(checkpoint.reason ?? ""),
+  };
+}
+
 export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawSnapshot {
   const fallbackAgentId = resolveFallbackAgentId(input);
   const sessionAgents = input.sessionsResult?.agents ?? [];
@@ -158,6 +170,9 @@ export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawS
       session_status: session.status,
       agent_runtime: normalizeAgentRuntime(session),
       preview_messages: previewMessages,
+      transcript_preview_status: preview?.status,
+      compaction_checkpoint_count: session.compactionCheckpointCount,
+      latest_compaction_checkpoint: normalizeLatestCompactionCheckpoint(session),
     };
   });
 

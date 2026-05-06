@@ -30,6 +30,7 @@ const FALLBACK_THINKING_OPTIONS = [
 ];
 
 type ConversationComposerProps = {
+  transcriptScrollCompact?: boolean;
   focused: boolean;
   value: string;
   model: string;
@@ -52,6 +53,7 @@ type ConversationComposerProps = {
 };
 
 export function ConversationComposer({
+  transcriptScrollCompact = false,
   focused,
   value,
   model,
@@ -76,7 +78,8 @@ export function ConversationComposer({
   const resolvedThinkingOptions = thinkingOptions?.length ? thinkingOptions : FALLBACK_THINKING_OPTIONS;
 
   return (
-    <div className={`conversation-composer ${focused ? "focused" : ""}`}>
+    <div className={`conversation-composer ${focused ? "focused" : ""} ${transcriptScrollCompact ? "scroll-away" : ""}`}>
+      <p className="composer-session-hint">模型与思考选项仅作用于<strong>当前会话</strong>；默认模型请在「模型」页配置。</p>
       <div
         className="composer-input-wrap"
         tabIndex={-1}

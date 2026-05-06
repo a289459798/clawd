@@ -1,4 +1,23 @@
 import type { Agent } from "../types/app";
+import type { Conversation } from "../types/conversation";
+
+export function conversationMatchesSessionKey(conversation: Conversation, sessionKey: string | null | undefined) {
+  if (!sessionKey) return false;
+  if (conversation.id === sessionKey) return true;
+  return Boolean(conversation.alternateSessionKeys?.includes(sessionKey));
+}
+
+export function findConversationByGatewaySessionKey(agents: Agent[], sessionKey: string | null | undefined) {
+  if (!sessionKey) return null;
+  for (const agent of agents) {
+    for (const conversation of agent.conversations) {
+      if (conversationMatchesSessionKey(conversation, sessionKey)) {
+        return conversation;
+      }
+    }
+  }
+  return null;
+}
 
 export const getVisibleConversations = (agents: Agent[]) => {
   return agents

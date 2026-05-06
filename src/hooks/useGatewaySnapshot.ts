@@ -40,12 +40,13 @@ export function useGatewaySnapshot() {
         })
       : null;
 
-    return buildSnapshotFromGateway({
+    const snapshot = buildSnapshotFromGateway({
       agentsResult,
       sessionsResult,
       previewsResult,
       fallbackSnapshot: options?.fallbackSnapshot,
     });
+    return { snapshot, sessionsDefaults: sessionsResult.defaults };
   }, []);
 
   return { loadGatewaySnapshot };

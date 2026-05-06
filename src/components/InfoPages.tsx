@@ -1,6 +1,12 @@
 import { useMemo } from "react";
-import type { ChannelConnection, Skill, WeixinPluginStatus } from "../types/app";
-import type { GatewaySessionsUsageResult, GatewayUsageTotals } from "../types/gateway";
+import type { ChannelConnection, PluginRepairCard, Skill, SkillPolicyHint, WeixinPluginStatus } from "../types/app";
+import type { GatewayChannelsEventLoopHealth, GatewaySessionsUsageResult, GatewayUsageTotals } from "../types/gateway";
+import {
+  accountOperationalHealthHint,
+  describeHealthState,
+  formatGatewayEventLoopSummary,
+} from "../lib/channelHealth";
+import { buildChannelAccountReadiness, readinessHasSignals } from "../lib/channelCredentialHints";
 
 const supportedChannels = [
   { id: "bluebubbles", name: "BlueBubbles", detail: "iMessage 推荐通道，连接 BlueBubbles macOS server。", docsUrl: "https://docs.openclaw.ai/channels/bluebubbles" },
@@ -43,24 +49,149 @@ function resolveCost(totals?: GatewayUsageTotals) {
   return totals?.cost ?? totals?.totalCost ?? totals?.estimatedCostUsd ?? 0;
 }
 
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    /* ignore */
+  }
+}
+
+function PluginRepairActions({ actions }: { actions: PluginRepairCard["actions"] }) {
+  if (!actions.length) return null;
+  return (
+    <div className="plugin-repair-actions">
+      {actions.map((action) => (
+        <div className="plugin-repair-action" key={`${action.label}-${action.cli ?? action.docUrl ?? ""}`}>
+          <span className="plugin-repair-action-label">{action.label}</span>
+          {action.cli ? (
+            <button type="button" className="plugin-repair-cli" onClick={() => void copyToClipboard(action.cli!)} title="复制命令到剪贴板">
+              <code>{action.cli}</code>
+            </button>
+          ) : null}
+          {action.docUrl ? (
+            <a className="ghost-link-button" href={action.docUrl} target="_blank" rel="noreferrer">
+              打开文档
+            </a>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PluginRepairStack({
+  title,
+  items,
+  variant = "section",
+}: {
+  title: string;
+  items: PluginRepairCard[];
+  variant?: "section" | "inline";
+}) {
+  if (!items.length) return null;
+  return (
+    <div className={`plugin-repair-stack ${variant === "inline" ? "is-inline" : ""}`} role="region" aria-label={title}>
+      <div className="plugin-repair-stack-title">{title}</div>
+      <div className="plugin-repair-stack-body">
+        {items.map((card, index) => (
+          <article className="plugin-repair-card" key={`${card.pluginId}-${index}`}>
+            <div className="plugin-repair-card-head">
+              <strong>{card.headlineZh}</strong>
+              <span className="plugin-repair-id">{card.pluginId}</span>
+            </div>
+            <p className="plugin-repair-body">{card.bodyZh}</p>
+            {card.rawDetail ? (
+              <details className="plugin-repair-technical">
+                <summary>查看原始错误摘要</summary>
+                <pre>{card.rawDetail}</pre>
+              </details>
+            ) : null}
+            <PluginRepairActions actions={card.actions} />
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkillPolicyHints({ hints }: { hints: SkillPolicyHint[] }) {
+  if (!hints.length) return null;
+  return (
+    <div className="skill-policy-hints">
+      {hints.map((hint, index) => (
+        <div className={`skill-policy-hint is-${hint.severity}`} key={`${hint.title}-${index}`}>
+          <strong>{hint.title}</strong>
+          <p>{hint.body}</p>
+          <PluginRepairActions actions={hint.actions ?? []} />
+        </div>
+      ))}
+    </div>
+  );
+}
+function ChannelAccountReadinessPanel({
+  account,
+}: {
+  account: NonNullable<ChannelConnection["accounts"]>[number];
+}) {
+  const readiness = buildChannelAccountReadiness(account);
+  if (!readinessHasSignals(readiness)) {
+    return null;
+  }
+  return (
+    <div className="connection-account-readiness">
+      {readiness.secretResolution.length ? (
+        <div className="readiness-group readiness-secret-resolution">
+          <span className="readiness-group-label">密钥 / SecretRef（解析）</span>
+          <ul>
+            {readiness.secretResolution.map((line, idx) => (
+              <li key={`sr-${idx}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {readiness.credentialGaps.length ? (
+        <div className="readiness-group readiness-credential-gap">
+          <span className="readiness-group-label">凭证缺口</span>
+          <ul>
+            {readiness.credentialGaps.map((line, idx) => (
+              <li key={`cg-${idx}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {readiness.pluginContract ? (
+        <div className="readiness-group readiness-plugin-contract">
+          <span className="readiness-group-label">插件契约 / 清单</span>
+          <p>{readiness.pluginContract}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const connectionRank: Record<ChannelConnection["status"], number> = {
   connected: 0,
-  warning: 1,
-  disabled: 2,
+  degraded: 1,
+  warning: 2,
+  disabled: 3,
 };
 
 export function SkillsPage({
   skills,
+  pluginLoadRepairs,
   loading,
   onToggleSkill,
 }: {
   skills: Skill[];
+  pluginLoadRepairs: PluginRepairCard[];
   loading: boolean;
   onToggleSkill: (skillId: string, enabled: boolean) => void;
 }) {
   return (
     <section className="single-page">
       {loading ? <div className="inline-page-status">正在同步技能状态...</div> : null}
+      <PluginRepairStack title="插件运行时加载问题（来自 Gateway health）" items={pluginLoadRepairs} />
       <div className="card-grid-panel skills-grid">
         {skills.map((skill) => (
           <article className="info-card skill-card" key={skill.id}>
@@ -79,6 +210,7 @@ export function SkillsPage({
               </label>
             </div>
             <p>{skill.description || skill.summary || "暂无技能说明。"}</p>
+            <SkillPolicyHints hints={skill.policyHints ?? []} />
             {skill.missing?.length ? <div className="skill-missing">缺少：{skill.missing.join("、")}</div> : null}
           </article>
         ))}
@@ -91,6 +223,8 @@ export function SkillsPage({
 export function ConnectionsPage({
   connections,
   connectionLabel,
+  eventLoopHealth,
+  unmatchedPluginRepairs,
   loading,
   weixinStatus,
   weixinBusy,
@@ -103,6 +237,8 @@ export function ConnectionsPage({
 }: {
   connections: ChannelConnection[];
   connectionLabel: Record<ChannelConnection["status"], string>;
+  eventLoopHealth: GatewayChannelsEventLoopHealth | null;
+  unmatchedPluginRepairs: PluginRepairCard[];
   loading: boolean;
   weixinStatus: WeixinPluginStatus | null;
   weixinBusy: boolean;
@@ -113,6 +249,8 @@ export function ConnectionsPage({
   onUpdateWeixin: () => void;
   onLoginWeixin: () => void;
 }) {
+  const eventLoopBanner =
+    eventLoopHealth?.degraded === true ? formatGatewayEventLoopSummary(eventLoopHealth) : null;
   const connectionMap = new Map(connections.map((connection) => [connection.id, connection]));
   const rows = supportedChannels.map((channel) => {
     const gatewayConnection = connectionMap.get(channel.id);
@@ -132,13 +270,25 @@ export function ConnectionsPage({
   return (
     <section className="single-page">
       {loading ? <div className="inline-page-status">正在同步连接状态...</div> : null}
+      {eventLoopBanner ? (
+        <div className="channel-event-loop-banner" role="status">
+          <strong>Gateway 事件循环降级</strong>
+          <p>{eventLoopBanner}</p>
+        </div>
+      ) : null}
+      <PluginRepairStack
+        title="未能映射到单一通道卡片的插件加载错误（仍可能影响后台工具或其他模块）"
+        items={unmatchedPluginRepairs}
+      />
       <div className="connection-list-panel">
         {rows.map((connection) => {
           const isWeixin = connection.id === "openclaw-weixin";
-          const displayStatus = isWeixin && weixinStatus?.enabled && connection.status === "disabled" ? "warning" : connection.status;
-          const displayStatusLabel = isWeixin && weixinStatus?.enabled && connection.status !== "connected"
-            ? "已启用"
-            : connectionLabel[connection.status];
+          const displayStatus =
+            isWeixin && weixinStatus?.enabled && connection.status === "disabled" ? "warning" : connection.status;
+          const displayStatusLabel =
+            isWeixin && weixinStatus?.enabled && connection.status !== "connected" && connection.status !== "degraded"
+              ? "已启用"
+              : connectionLabel[connection.status];
           const weixinVersionText = weixinStatus?.installed
             ? [
                 weixinStatus.installedVersion ? `已安装 v${weixinStatus.installedVersion}` : "已安装",
@@ -164,14 +314,33 @@ export function ConnectionsPage({
                 )}
               </div>
               <p>{connection.detail}</p>
+              {connection.healthHint ? <div className="connection-health-hint">通道运行异常提示：{connection.healthHint}</div> : null}
+              {connection.pluginRepairs?.length ? (
+                <PluginRepairStack title="插件加载诊断" items={connection.pluginRepairs} variant="inline" />
+              ) : null}
               {isWeixin ? <div className="connection-version-line">{weixinVersionText}</div> : null}
               {connection.accounts?.length ? (
                 <div className="connection-accounts">
-                  {connection.accounts.map((account) => (
-                    <span key={account.accountId}>
-                      {account.name || account.accountId} · {account.connected ? "已连接" : account.configured ? "已配置" : "待配置"}
-                    </span>
-                  ))}
+                  {connection.accounts.map((account) => {
+                    const hint = accountOperationalHealthHint(account);
+                    const hs = account.healthState?.trim();
+                    const titleParts = [
+                      hint,
+                      hs && hs !== "healthy" ? `Gateway：${describeHealthState(hs)}（${hs}）` : null,
+                      account.linked === false ? "未关联到有效配置" : null,
+                    ].filter(Boolean);
+                    const summary = `${account.name || account.accountId} · ${
+                      account.connected ? "已连接" : account.configured ? "已配置" : "待配置"
+                    }${hint ? ` · ${hint}` : ""}`;
+                    return (
+                      <div className="connection-account-entry" key={account.accountId}>
+                        <span className="connection-account-pill" title={titleParts.length ? titleParts.join(" · ") : undefined}>
+                          {summary}
+                        </span>
+                        <ChannelAccountReadinessPanel account={account} />
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
               <div className="connection-actions-row">

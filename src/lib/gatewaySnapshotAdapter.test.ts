@@ -180,4 +180,36 @@ describe("buildSnapshotFromGateway", () => {
       agent_runtime: { id: "pi", label: "Pi", runtime: "pi" },
     });
   });
+
+  it("maps transcript preview status and compaction hints from gateway rows", () => {
+    const snapshot = buildSnapshotFromGateway({
+      sessionsResult: {
+        sessions: [
+          {
+            key: "agent:main:direct:x",
+            sessionId: "sid",
+            compactionCheckpointCount: 2,
+            latestCompactionCheckpoint: {
+              checkpointId: "cp-1",
+              createdAt: 1_700_000_000_000,
+              reason: "manual",
+            },
+          },
+        ],
+      },
+      previewsResult: {
+        ts: 1,
+        previews: [{ key: "agent:main:direct:x", status: "missing", items: [] }],
+      },
+    });
+    expect(snapshot.sessions[0]).toMatchObject({
+      transcript_preview_status: "missing",
+      compaction_checkpoint_count: 2,
+      latest_compaction_checkpoint: {
+        checkpoint_id: "cp-1",
+        created_at: 1_700_000_000_000,
+        reason: "manual",
+      },
+    });
+  });
 });
