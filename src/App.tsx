@@ -432,13 +432,15 @@ function App() {
                 const isFailedSnapshot = ["error", "failed", "timeout"].includes(nextLatestEventType ?? "");
                 const isStoppedSnapshot = ["aborted", "cancelled", "killed", "interrupted"].includes(nextLatestEventType ?? "");
                 const isCompletedSnapshot = ["turn_completed", "completed", "final", "done"].includes(nextLatestEventType ?? "");
+                const isActiveSnapshot = ["running", "started", "tool_stream", "assistant_stream", "delta", "tool_call", "tool_result"].includes(nextLatestEventType ?? "");
                 const isTerminalSnapshot = isCompletedSnapshot || isFailedSnapshot || isStoppedSnapshot;
+                const isFreshActiveSnapshot = isActiveSnapshot && Boolean(nextUpdatedAt) && Date.now() - Number(nextUpdatedAt) <= 6 * 60 * 60 * 1000;
                 const terminalReason: ConversationRuntime["lastTerminalReason"] = isFailedSnapshot
                   ? (nextLatestEventType === "timeout" ? "timeout" : "failed")
                   : isStoppedSnapshot
                     ? (nextLatestEventType === "killed" ? "killed" : nextLatestEventType === "cancelled" ? "cancelled" : "aborted")
                     : "completed";
-                const nextRuntime = latestIsToolOnly && !isTerminalSnapshot
+                const nextRuntime = latestIsToolOnly && isFreshActiveSnapshot && !isTerminalSnapshot
                   ? {
                       ...conversation.runtime,
                       activeRunId: conversation.runtime?.activeRunId ?? `snapshot-tool-${payload.session.key}`,
@@ -454,7 +456,16 @@ function App() {
                         lastTerminalAt: nextUpdatedAt,
                         lastTerminalReason: terminalReason,
                       }
-                    : conversation.runtime ?? {
+                    : isActiveSnapshot && !isFreshActiveSnapshot
+                      ? {
+                          ...conversation.runtime,
+                          activeRunId: undefined,
+                          activeStartedAt: undefined,
+                          lastEventAt: nextUpdatedAt,
+                          lastTerminalAt: conversation.runtime?.lastTerminalAt ?? nextUpdatedAt,
+                          lastTerminalReason: conversation.runtime?.lastTerminalReason ?? "interrupted",
+                        }
+                      : conversation.runtime ?? {
                       activeRunId: undefined,
                       activeStartedAt: undefined,
                       lastEventAt: nextUpdatedAt,

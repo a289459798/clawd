@@ -5,10 +5,16 @@ import type { OpenClawSnapshot } from "../types/gateway";
 import type { Agent, BuildAgentsOptions, ModelOption } from "../types/app";
 
 const COMPLETED_RECENT_WINDOW_MS = 10 * 60 * 1000;
+const SNAPSHOT_ACTIVE_GRACE_MS = 30 * 1000;
+const STALE_RUNNING_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 export const deriveConversationStatus = (runtime?: ConversationRuntime) => {
   const now = Date.now();
   if (runtime?.activeRunId) {
+    const lastActiveAt = runtime.lastEventAt ?? runtime.activeStartedAt;
+    if (lastActiveAt && now - lastActiveAt > STALE_RUNNING_WINDOW_MS) {
+      return "stopped" as const;
+    }
     return "working" as const;
   }
   if (runtime?.lastTerminalReason === "error" || runtime?.lastTerminalReason === "failed" || runtime?.lastTerminalReason === "timeout") {
@@ -34,7 +40,18 @@ function runtimeFromGatewaySession(
   latestRole: string | undefined,
 ): ConversationRuntime {
   const eventAt = session.updated_at;
+  const now = Date.now();
   if (session.session_status === "running") {
+    if (eventAt && now - eventAt > STALE_RUNNING_WINDOW_MS) {
+      return {
+        ...existingRuntime,
+        activeRunId: undefined,
+        activeStartedAt: undefined,
+        lastEventAt: eventAt,
+        lastTerminalAt: existingRuntime?.lastTerminalAt ?? eventAt,
+        lastTerminalReason: existingRuntime?.lastTerminalReason ?? "interrupted",
+      };
+    }
     return {
       ...existingRuntime,
       activeRunId: existingRuntime?.activeRunId ?? `snapshot-${session.key}`,
@@ -62,12 +79,38 @@ function runtimeFromGatewaySession(
       lastTerminalReason: session.session_status,
     };
   }
-  return existingRuntime ?? {
+  const canKeepFreshActiveRun = Boolean(
+    existingRuntime?.activeRunId
+    && existingRuntime.lastEventAt
+    && now - existingRuntime.lastEventAt <= SNAPSHOT_ACTIVE_GRACE_MS,
+  );
+  if (canKeepFreshActiveRun) {
+    return existingRuntime!;
+  }
+  return {
+    ...existingRuntime,
     activeRunId: undefined,
     activeStartedAt: undefined,
-    lastEventAt: eventAt,
-    lastTerminalAt: latestRole === "assistant" ? eventAt : undefined,
-    lastTerminalReason: latestRole === "assistant" ? "completed" : undefined,
+    lastEventAt: eventAt ?? existingRuntime?.lastEventAt,
+    lastTerminalAt: existingRuntime?.lastTerminalAt ?? (latestRole === "assistant" ? eventAt : undefined),
+    lastTerminalReason: existingRuntime?.lastTerminalReason ?? (latestRole === "assistant" ? "completed" : undefined),
+  };
+}
+
+function clearStaleActiveRuntime(runtime?: ConversationRuntime): ConversationRuntime | undefined {
+  if (!runtime?.activeRunId) {
+    return runtime;
+  }
+  const lastEventAt = runtime.lastEventAt ?? runtime.activeStartedAt;
+  if (lastEventAt && Date.now() - lastEventAt <= SNAPSHOT_ACTIVE_GRACE_MS) {
+    return runtime;
+  }
+  return {
+    ...runtime,
+    activeRunId: undefined,
+    activeStartedAt: undefined,
+    lastTerminalAt: runtime.lastTerminalAt ?? lastEventAt,
+    lastTerminalReason: runtime.lastTerminalReason ?? "interrupted",
   };
 }
 
@@ -175,7 +218,16 @@ export function buildAgentsFromSnapshot(
       conversations: (() => {
         if (options?.preserveExistingConversations && existing?.conversations) {
           const sessionIds = new Set(realSessions.map((s) => s.id));
-          const existingNotInSnapshot = existing.conversations.filter((c) => !sessionIds.has(c.id));
+          const existingNotInSnapshot = existing.conversations
+            .filter((c) => !sessionIds.has(c.id))
+            .map((conversation) => {
+              const runtime = clearStaleActiveRuntime(conversation.runtime);
+              return {
+                ...conversation,
+                runtime,
+                status: deriveConversationStatus(runtime),
+              };
+            });
           const merged = [...realSessions, ...existingNotInSnapshot];
           return merged.length > 0 ? merged : existing?.conversations ?? [];
         }

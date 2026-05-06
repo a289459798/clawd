@@ -168,4 +168,82 @@ describe("buildAgentsFromSnapshot", () => {
     expect(buildStatus("timeout")?.status).toBe("failed");
     expect(buildStatus("killed")?.status).toBe("stopped");
   });
+
+  it("treats stale gateway running sessions as stopped", () => {
+    const oldTimestamp = Date.now() - 8 * 60 * 60 * 1000;
+    const snapshot: OpenClawSnapshot = {
+      agents: [{ id: "master", name: "Master" }],
+      sessions: [
+        {
+          id: "sess-1",
+          agent_id: "master",
+          key: "agent:master:direct:stale",
+          title: "Old running session",
+          updated_at: oldTimestamp,
+          session_status: "running",
+          preview_messages: [],
+        },
+      ],
+      connections: [],
+      skills: [],
+    };
+
+    const conversation = buildAgentsFromSnapshot(snapshot, [])[0]?.conversations[0];
+    expect(conversation?.runtime?.activeRunId).toBeUndefined();
+    expect(conversation?.status).toBe("stopped");
+  });
+
+  it("does not preserve stale active runs when gateway no longer reports running", () => {
+    const tenMinutesAgo = Date.now() - 20 * 60 * 1000;
+    const snapshot: OpenClawSnapshot = {
+      agents: [{ id: "master", name: "Master" }],
+      sessions: [
+        {
+          id: "sess-1",
+          agent_id: "master",
+          key: "agent:master:direct:830d",
+          title: "Session",
+          updated_at: tenMinutesAgo,
+          last_role: "assistant",
+          preview_messages: [],
+        },
+      ],
+      connections: [],
+      skills: [],
+    };
+
+    const agents = buildAgentsFromSnapshot(snapshot, [
+      {
+        id: "master",
+        name: "Master",
+        color: "#fff",
+        status: "idle",
+        model: "gpt-5.5",
+        mdFile: "master.md",
+        configPath: "agents.master",
+        summary: "",
+        conversations: [
+          {
+            id: "agent:master:direct:830d",
+            title: "Session",
+            status: "working",
+            lastMessage: "",
+            lastTime: "",
+            tokens: "-",
+            model: "gpt-5.5",
+            workspace: "",
+            visible: true,
+            runtime: {
+              activeRunId: "stale-run",
+              activeStartedAt: tenMinutesAgo,
+              lastEventAt: tenMinutesAgo,
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(agents[0]?.conversations[0]?.runtime?.activeRunId).toBeUndefined();
+    expect(agents[0]?.conversations[0]?.status).toBe("idle");
+  });
 });
