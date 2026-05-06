@@ -142,4 +142,42 @@ describe("buildSnapshotFromGateway", () => {
       ],
     });
   });
+
+  it("maps agent runtime metadata from gateway sessions", () => {
+    const snapshot = buildSnapshotFromGateway({
+      sessionsResult: {
+        sessions: [
+          {
+            key: "agent:master:direct:830d",
+            displayName: "Runtime session",
+            agentRuntime: { id: "codex", label: "Codex", source: "agent" },
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      key: "agent:master:direct:830d",
+      agent_runtime: { id: "codex", label: "Codex", source: "agent" },
+    });
+  });
+
+  it("falls back to legacy runtime fields when agentRuntime is absent", () => {
+    const snapshot = buildSnapshotFromGateway({
+      sessionsResult: {
+        sessions: [
+          {
+            key: "agent:master:direct:830d",
+            displayName: "Runtime session",
+            runtime: "pi",
+            runtimeLabel: "Pi",
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      agent_runtime: { id: "pi", label: "Pi", runtime: "pi" },
+    });
+  });
 });

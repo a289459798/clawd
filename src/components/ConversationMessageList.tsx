@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 // import { Icon, IconNames } from "./Icon";
@@ -15,6 +16,7 @@ import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
 import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
+import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage, stripInboundWrapperText } from "../lib/gatewayMessages";
 import type { MessagePart, PreviewMessage } from "../types/conversation";
 
@@ -169,6 +171,7 @@ function StructuredMessageContent({
   imageVariant?: "user" | "assistant" | "tool";
 }) {
   const [toolsExpanded, setToolsExpanded] = useState(false);
+  const [openFileError, setOpenFileError] = useState<string | null>(null);
   const elements: React.ReactNode[] = [];
   let pendingToolCalls: Array<{ tool: string; args?: string }> = [];
 
@@ -219,11 +222,39 @@ function StructuredMessageContent({
           <span className="message-image-badge">{imageVariant === "user" ? "用户图片" : "图片"}</span>
         </button>,
       );
+    } else if (part.kind === "file") {
+      elements.push(
+        <button
+          className={`message-file-card ${imageVariant} ${part.path ? "clickable" : ""}`}
+          key={`${conversationId}-file-${i}`}
+          type="button"
+          disabled={!part.path}
+          title={part.path ? `打开 ${part.path}` : part.name}
+          onClick={async () => {
+            if (!part.path) return;
+            try {
+              setOpenFileError(null);
+              await openPath(part.path);
+            } catch (error) {
+              setOpenFileError(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        >
+          <span className="message-file-icon">{fileKindLabel(part.mime_type, part.name)}</span>
+          <span className="message-file-name" title={part.name}>{part.name}</span>
+          <span className="message-file-meta">{[part.mime_type, formatFileSize(part.size)].filter(Boolean).join(" · ")}</span>
+        </button>,
+      );
     }
   }
   flushToolCalls();
 
-  return <>{elements}</>;
+  return (
+    <>
+      {elements}
+      {openFileError ? <div className="message-file-error">无法打开附件：{openFileError}</div> : null}
+    </>
+  );
 }
 
 function hasMessageMeta(message: PreviewMessage) {

@@ -44,6 +44,9 @@ pub struct GatewayHistoryResult {
 pub struct GatewayAttachmentInput {
     pub data_url: String,
     pub mime_type: String,
+    pub file_name: Option<String>,
+    #[serde(rename = "type")]
+    pub attachment_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,7 +55,6 @@ pub struct GatewaySendParams {
     pub session_key: String,
     pub message: String,
     pub idempotency_key: String,
-    pub thinking: Option<String>,
     pub attachments: Option<Vec<GatewayAttachmentInput>>,
 }
 
@@ -1273,12 +1275,10 @@ pub fn gateway_chat_send(
                 .map(|(_, body)| body.to_string())
                 .unwrap_or(item.data_url);
             json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": item.mime_type,
-                    "data": data,
-                }
+                "type": item.attachment_type.unwrap_or_else(|| if item.mime_type.starts_with("image/") { "image".to_string() } else { "file".to_string() }),
+                "mimeType": item.mime_type,
+                "fileName": item.file_name,
+                "content": data,
             })
         })
         .collect();
@@ -1290,9 +1290,6 @@ pub fn gateway_chat_send(
     chat_params.insert("deliver".to_string(), json!(false));
     chat_params.insert("idempotencyKey".to_string(), json!(params.idempotency_key));
     chat_params.insert("attachments".to_string(), json!(attachment_payload));
-    if let Some(thinking) = &params.thinking {
-        chat_params.insert("thinking".to_string(), json!(thinking));
-    }
     let result = send_rpc(
         &state,
         "chat.send",

@@ -35,6 +35,11 @@ export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: 
           </div>
           <div className="conversation-card-subline">
             <span>{conversation.agentName} · {conversation.model} · {conversation.tokens}</span>
+            {conversation.agentRuntime ? (
+              <span className="runtime-badge" title={`Agent Runtime: ${conversation.agentRuntime.id}`}>
+                {conversation.agentRuntime.label ?? conversation.agentRuntime.id}
+              </span>
+            ) : null}
             <span className={`status-badge ${conversation.status}`}>{statusLabel[conversation.status]}</span>
           </div>
         </div>

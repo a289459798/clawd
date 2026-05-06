@@ -1,5 +1,7 @@
 import type {
+  GatewayAgentRuntime,
   GatewayAgentsListResult,
+  GatewaySessionRow,
   GatewaySessionsListResult,
   GatewaySessionsPreviewResult,
   OpenClawSnapshot,
@@ -57,6 +59,35 @@ function cleanDerivedTitle(value?: string) {
   return value
     ?.replace(/\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+GMT[+-]\d+\]\s*/g, "")
     .trim();
+}
+
+function normalizeAgentRuntime(session: GatewaySessionRow): GatewayAgentRuntime | undefined {
+  const rawRuntime = session.agentRuntime;
+  if (typeof rawRuntime === "string") {
+    const id = rawRuntime.trim();
+    return id ? { id } : undefined;
+  }
+  if (rawRuntime && typeof rawRuntime === "object") {
+    const id = (rawRuntime.id ?? rawRuntime.runtime ?? rawRuntime.harness ?? "").trim();
+    return id
+      ? {
+          id,
+          label: rawRuntime.label,
+          source: rawRuntime.source,
+          runtime: rawRuntime.runtime,
+          harness: rawRuntime.harness,
+        }
+      : undefined;
+  }
+  const id = (session.runtime ?? session.harness ?? "").trim();
+  return id
+    ? {
+        id,
+        label: session.runtimeLabel,
+        runtime: session.runtime,
+        harness: session.harness,
+      }
+    : undefined;
 }
 
 export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawSnapshot {
@@ -124,6 +155,8 @@ export function buildSnapshotFromGateway(input: GatewaySnapshotInput): OpenClawS
       total_tokens: session.totalTokens,
       total_tokens_fresh: session.totalTokensFresh,
       estimated_cost_usd: session.estimatedCostUsd,
+      session_status: session.status,
+      agent_runtime: normalizeAgentRuntime(session),
       preview_messages: previewMessages,
     };
   });

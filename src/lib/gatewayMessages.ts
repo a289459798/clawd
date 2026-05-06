@@ -21,6 +21,50 @@ export function stripInboundWrapperText(text: string) {
     .trim();
 }
 
+const MEDIA_ATTACHED_PATTERN = /\[media attached:\s+(.+?)\s+\(([^()\n]+)\)\]/g;
+
+function basenameFromPath(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function safeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function splitTextMediaAttachmentParts(text: string): MessagePart[] {
+  const parts: MessagePart[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  MEDIA_ATTACHED_PATTERN.lastIndex = 0;
+  while ((match = MEDIA_ATTACHED_PATTERN.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    const cleanBefore = stripInboundWrapperText(before);
+    if (cleanBefore && cleanBefore !== "fetch failed") {
+      parts.push({ kind: "text", text: cleanBefore });
+    }
+    const path = match[1]?.trim();
+    const mimeType = match[2]?.trim();
+    if (path) {
+      parts.push({
+        kind: "file",
+        name: basenameFromPath(path),
+        path,
+        mime_type: mimeType || undefined,
+      });
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  const after = text.slice(lastIndex);
+  const cleanAfter = stripInboundWrapperText(after);
+  if (cleanAfter && cleanAfter !== "fetch failed") {
+    parts.push({ kind: "text", text: cleanAfter });
+  }
+  return parts;
+}
+
+function stripMediaAttachmentMarkers(text: string) {
+  return text.replace(MEDIA_ATTACHED_PATTERN, "").trim();
+}
 
 function rawMessageText(message?: { text?: string; content?: unknown } | null) {
   if (!message) return "";
@@ -58,22 +102,22 @@ export function extractTextFromGatewayMessage(message?: GatewayMessage | null) {
   const messageError = (message as { errorMessage?: string } | null | undefined)?.errorMessage;
   if (!message || messageError) return "";
   if (typeof message.text === "string") {
-    const cleaned = stripInboundWrapperText(message.text);
+    const cleaned = stripMediaAttachmentMarkers(stripInboundWrapperText(message.text));
     return cleaned === "fetch failed" ? "" : cleaned;
   }
   if (typeof message.content === "string") {
-    const cleaned = stripInboundWrapperText(message.content);
+    const cleaned = stripMediaAttachmentMarkers(stripInboundWrapperText(message.content));
     return cleaned === "fetch failed" ? "" : cleaned;
   }
   if (Array.isArray(message.content)) {
     if (message.content.length === 0) return "";
-    const cleaned = stripInboundWrapperText(message.content
+    const cleaned = stripMediaAttachmentMarkers(stripInboundWrapperText(message.content
       .map((part) => {
         if (part.type === "text") return part.text ?? "";
         return "";
       })
       .join("\n")
-      .trim());
+      .trim()));
     return cleaned === "fetch failed" ? "" : cleaned;
   }
   return "";
@@ -95,8 +139,7 @@ export function mapGatewayContentToParts(message?: GatewayMessage | null): Messa
   }
 
   if (typeof message.content === "string") {
-    const cleaned = stripInboundWrapperText(message.content);
-    return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+    return splitTextMediaAttachmentParts(message.content);
   }
   if (Array.isArray(message.content)) {
     if (message.content.length === 0) return [];
@@ -115,17 +158,26 @@ export function mapGatewayContentToParts(message?: GatewayMessage | null): Messa
         const src = part.data ?? part.url ?? part.image_url?.url;
         return src ? [{ kind: "image", data: src, mime_type: part.mimeType ?? part.mime_type, alt: part.text ?? part.alt }] : [];
       }
+      if (part.type === "file" || part.type === "attachment" || part.type === "input_file") {
+        const path = part.path ?? part.url;
+        const name = part.fileName ?? part.filename ?? part.name ?? (path ? basenameFromPath(path) : "附件");
+        return [{
+          kind: "file",
+          name,
+          path,
+          mime_type: part.mimeType ?? part.mime_type,
+          size: safeNumber(part.size),
+        }];
+      }
       return [];
     });
     return mergeStreamingParts(mappedParts).flatMap<MessagePart>((part) => {
       if (part.kind !== "text") return [part];
-      const cleaned = stripInboundWrapperText(part.text);
-      return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+      return splitTextMediaAttachmentParts(part.text);
     });
   }
   if (typeof message.text === "string") {
-    const cleaned = stripInboundWrapperText(message.text);
-    return cleaned && cleaned !== "fetch failed" ? [{ kind: "text", text: cleaned }] : [];
+    return splitTextMediaAttachmentParts(message.text);
   }
   return [];
 }

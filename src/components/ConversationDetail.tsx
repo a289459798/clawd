@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getLatestUserMessage } from "../lib/conversationDetailState";
+import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
 import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
 
@@ -59,6 +61,7 @@ export function ConversationDetail({
 }: ConversationDetailProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState(activeConversation.title);
+  const [openFileError, setOpenFileError] = useState<string | null>(null);
 
   // 同步 titleInput 当 conversation 变化时
   useEffect(() => {
@@ -156,6 +159,14 @@ export function ConversationDetail({
         )}
         <span className="statusbar-divider">·</span>
         <span className="statusbar-tokens">总: {activeConversation.tokens}</span>
+        {activeConversation.agentRuntime ? (
+          <>
+            <span className="statusbar-divider">·</span>
+            <span className="statusbar-runtime" title={`Agent Runtime: ${activeConversation.agentRuntime.id}`}>
+              {activeConversation.agentRuntime.label ?? activeConversation.agentRuntime.id}
+            </span>
+          </>
+        ) : null}
         <span className="statusbar-divider">·</span>
         <span className={`statusbar-badge ${activeConversation.status}`}>{statusLabel[activeConversation.status]}</span>
         <div className="detail-mode-toggle" role="group" aria-label="详情展示模式">
@@ -194,6 +205,7 @@ export function ConversationDetail({
                 : parsed.time;
               const cleanText = parsed.cleanText;
               const userImages = (lastUserMsg?.parts ?? []).filter((part): part is Extract<MessagePart, { kind: "image" }> => part.kind === "image");
+              const userFiles = (lastUserMsg?.parts ?? []).filter((part): part is Extract<MessagePart, { kind: "file" }> => part.kind === "file");
               const lineCount = cleanText.split("\n").length;
               const shouldShowExpand = cleanText.length > 80 || lineCount > 2;
               return lastUserMsg ? (
@@ -216,6 +228,33 @@ export function ConversationDetail({
                       ))}
                     </div>
                   ) : null}
+                  {userFiles.length > 0 ? (
+                    <div className="top-user-files">
+                      {userFiles.map((file, index) => (
+                        <button
+                          className={`top-user-file-card ${file.path ? "clickable" : ""}`}
+                          key={`${lastUserMsg.timestamp ?? "user"}-file-${index}`}
+                          type="button"
+                          disabled={!file.path}
+                          title={file.path ? `打开 ${file.path}` : file.name}
+                          onClick={async () => {
+                            if (!file.path) return;
+                            try {
+                              setOpenFileError(null);
+                              await openPath(file.path);
+                            } catch (error) {
+                              setOpenFileError(error instanceof Error ? error.message : String(error));
+                            }
+                          }}
+                        >
+                          <span className="top-user-file-kind">{fileKindLabel(file.mime_type, file.name)}</span>
+                          <span className="top-user-file-name">{file.name}</span>
+                          <span className="top-user-file-size">{formatFileSize(file.size)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {openFileError ? <div className="top-user-file-error">无法打开附件：{openFileError}</div> : null}
                   {shouldShowExpand ? (
                     <button className="top-user-expand" type="button" onClick={() => onUserExpandedChange(!userExpanded)} title={userExpanded ? "收起" : "展开"}>
                       {userExpanded ? "⌃" : "⌄"}

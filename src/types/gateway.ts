@@ -23,7 +23,17 @@ export type SnapshotSession = {
   total_tokens?: number;
   total_tokens_fresh?: boolean;
   estimated_cost_usd?: number;
+  session_status?: GatewaySessionRow["status"];
+  agent_runtime?: GatewayAgentRuntime;
   preview_messages: Array<{ role?: string; text: string; parts?: MessagePart[]; model?: string; provider?: string; api?: string; timestamp?: number; input_tokens?: number; output_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number }>;
+};
+
+export type GatewayAgentRuntime = {
+  id: string;
+  label?: string;
+  source?: "env" | "agent" | "defaults" | "implicit" | string;
+  runtime?: string;
+  harness?: string;
 };
 
 export type OpenClawSnapshot = {
@@ -316,6 +326,10 @@ export type GatewaySessionRow = {
   thinkingDefault?: string;
   thinkingLevels?: Array<{ id: string; label?: string }>;
   contextTokens?: number;
+  agentRuntime?: GatewayAgentRuntime | string;
+  runtime?: string;
+  runtimeLabel?: string;
+  harness?: string;
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
@@ -357,7 +371,8 @@ export type GatewayPart =
   | { type: "text"; text: string }
   | { type: "toolcall" | "toolCall"; name?: string; arguments?: unknown }
   | { type: "toolresult" | "toolResult"; name?: string; text?: string }
-  | { type: "image" | "input_image" | "image_url"; data?: string; url?: string; mimeType?: string; mime_type?: string; text?: string; alt?: string; image_url?: { url?: string } };
+  | { type: "image" | "input_image" | "image_url"; data?: string; url?: string; mimeType?: string; mime_type?: string; text?: string; alt?: string; image_url?: { url?: string } }
+  | { type: "file" | "attachment" | "input_file"; path?: string; url?: string; fileName?: string; filename?: string; name?: string; mimeType?: string; mime_type?: string; size?: number; text?: string };
 
 export type GatewayUsage = {
   input?: number;

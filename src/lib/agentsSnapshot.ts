@@ -11,14 +11,65 @@ export const deriveConversationStatus = (runtime?: ConversationRuntime) => {
   if (runtime?.activeRunId) {
     return "working" as const;
   }
-  if (runtime?.lastTerminalReason === "error" || runtime?.lastTerminalReason === "failed") {
-    return "idle" as const;
+  if (runtime?.lastTerminalReason === "error" || runtime?.lastTerminalReason === "failed" || runtime?.lastTerminalReason === "timeout") {
+    return "failed" as const;
+  }
+  if (
+    runtime?.lastTerminalReason === "aborted"
+    || runtime?.lastTerminalReason === "killed"
+    || runtime?.lastTerminalReason === "cancelled"
+    || runtime?.lastTerminalReason === "interrupted"
+  ) {
+    return "stopped" as const;
   }
   if (runtime?.lastTerminalAt && now - runtime.lastTerminalAt <= COMPLETED_RECENT_WINDOW_MS) {
     return "completed" as const;
   }
   return "idle" as const;
 };
+
+function runtimeFromGatewaySession(
+  session: OpenClawSnapshot["sessions"][number],
+  existingRuntime: ConversationRuntime | undefined,
+  latestRole: string | undefined,
+): ConversationRuntime {
+  const eventAt = session.updated_at;
+  if (session.session_status === "running") {
+    return {
+      ...existingRuntime,
+      activeRunId: existingRuntime?.activeRunId ?? `snapshot-${session.key}`,
+      activeStartedAt: existingRuntime?.activeStartedAt ?? eventAt,
+      lastEventAt: eventAt,
+    };
+  }
+  if (session.session_status === "done") {
+    return {
+      ...existingRuntime,
+      activeRunId: undefined,
+      activeStartedAt: undefined,
+      lastEventAt: eventAt,
+      lastTerminalAt: eventAt,
+      lastTerminalReason: "completed",
+    };
+  }
+  if (session.session_status === "failed" || session.session_status === "timeout" || session.session_status === "killed") {
+    return {
+      ...existingRuntime,
+      activeRunId: undefined,
+      activeStartedAt: undefined,
+      lastEventAt: eventAt,
+      lastTerminalAt: eventAt,
+      lastTerminalReason: session.session_status,
+    };
+  }
+  return existingRuntime ?? {
+    activeRunId: undefined,
+    activeStartedAt: undefined,
+    lastEventAt: eventAt,
+    lastTerminalAt: latestRole === "assistant" ? eventAt : undefined,
+    lastTerminalReason: latestRole === "assistant" ? "completed" : undefined,
+  };
+}
 
 export const patchConversation = (conversation: Conversation, updater: (conversation: Conversation) => Conversation): Conversation => {
   const next = updater(conversation);
@@ -64,13 +115,7 @@ export function buildAgentsFromSnapshot(
           .find((message) => (message.role?.toLowerCase() ?? "") === "assistant");
 
         const existingConversation = existing?.conversations.find((item) => item.id === session.key);
-        const runtime: ConversationRuntime = existingConversation?.runtime ?? {
-          activeRunId: undefined,
-          activeStartedAt: undefined,
-          lastEventAt: session.updated_at,
-          lastTerminalAt: latestRole === "assistant" ? session.updated_at : undefined,
-          lastTerminalReason: latestRole === "assistant" ? "completed" : undefined,
-        };
+        const runtime = runtimeFromGatewaySession(session, existingConversation?.runtime, latestRole);
         const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message));
         const mergedPreviewMessages = sessionMessages as PreviewMessage[];
         const displayTitle = session.label || session.title;
@@ -96,9 +141,10 @@ export function buildAgentsFromSnapshot(
             return text || "暂无回复内容";
           })(),
           previewMessages: mergedPreviewMessages,
+          agentRuntime: session.agent_runtime,
           lastRole: latestRole,
           latestEventRole: session.latest_event_role?.toLowerCase(),
-          latestEventType: session.latest_event_type?.toLowerCase(),
+          latestEventType: (session.latest_event_type ?? session.session_status)?.toLowerCase(),
           lastTime: session.updated_at ? new Date(session.updated_at).toLocaleString("zh-CN") : "未知时间",
           updatedAt: session.updated_at,
           tokens: formatTokenCount(session.total_tokens),

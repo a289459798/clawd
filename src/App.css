@@ -248,6 +248,23 @@ p {
   flex-shrink: 0;
 }
 
+.statusbar-runtime {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(122, 162, 255, 0.1);
+  color: rgba(176, 198, 255, 0.9);
+  font-size: 0.72rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .statusbar-badge {
   display: inline-flex;
   align-items: center;
@@ -268,6 +285,16 @@ p {
 .statusbar-badge.completed {
   background: rgba(240, 139, 125, 0.14);
   color: #f08b7d;
+}
+
+.statusbar-badge.failed {
+  background: rgba(240, 139, 125, 0.16);
+  color: #f08b7d;
+}
+
+.statusbar-badge.stopped {
+  background: rgba(243, 191, 99, 0.14);
+  color: #f3bf63;
 }
 
 .statusbar-badge.idle {
@@ -1757,6 +1784,14 @@ p {
   background: var(--peach);
 }
 
+.status-dot.failed {
+  background: #f08b7d;
+}
+
+.status-dot.stopped {
+  background: var(--yellow);
+}
+
 .status-dot.idle {
   background: var(--muted);
 }
@@ -1766,6 +1801,28 @@ p {
   color: rgba(255, 255, 255, 0.2);
   font-family: 'SF Mono', 'Fira Code', monospace;
   flex-shrink: 0;
+}
+
+.tree-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.conversation-tree-item .tree-item-runtime {
+  max-width: 54px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(122, 162, 255, 0.1);
+  color: rgba(176, 198, 255, 0.78);
+  font-size: 10px;
+  line-height: 1;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-status-corner {
@@ -1807,6 +1864,10 @@ p {
   position: relative;
   width: 128px;
   flex-shrink: 0;
+}
+
+.conversation-sort-select.runtime-filter-select {
+  width: 154px;
 }
 
 .conversation-sort-select::after {
@@ -1983,6 +2044,16 @@ p {
   color: var(--peach);
 }
 
+.status-badge.failed {
+  background: rgba(240, 139, 125, 0.16);
+  color: #f08b7d;
+}
+
+.status-badge.stopped {
+  background: rgba(243, 191, 99, 0.14);
+  color: var(--yellow);
+}
+
 .status-badge.idle {
   background: rgba(155, 149, 136, 0.14);
   color: var(--muted);
@@ -2071,6 +2142,22 @@ p {
   height: 20px;
   padding: 0 7px;
   font-size: 0.7rem;
+}
+
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(122, 162, 255, 0.1);
+  color: rgba(176, 198, 255, 0.86);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .compact-time-row {
@@ -2598,6 +2685,83 @@ p {
   background: rgba(0, 0, 0, 0.52);
   color: rgba(255, 255, 255, 0.86);
   font-size: 0.72rem;
+}
+
+.message-file-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-areas:
+    "icon name"
+    "icon meta";
+  gap: 2px 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  cursor: default;
+  font: inherit;
+  text-align: left;
+}
+
+.message-file-card.user {
+  border-color: rgba(82, 242, 197, 0.22);
+  background: rgba(82, 242, 197, 0.055);
+}
+
+.message-file-card.clickable {
+  cursor: pointer;
+}
+
+.message-file-card.clickable:hover {
+  border-color: rgba(82, 242, 197, 0.28);
+  background: rgba(82, 242, 197, 0.08);
+}
+
+.message-file-card:disabled {
+  color: inherit;
+}
+
+.message-file-icon {
+  grid-area: icon;
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.message-file-name {
+  grid-area: name;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.86rem;
+}
+
+.message-file-meta {
+  grid-area: meta;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 0.72rem;
+}
+
+.message-file-error {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(240, 139, 125, 0.1);
+  color: #f08b7d;
+  font-size: 0.76rem;
 }
 
 .image-lightbox {
@@ -4696,6 +4860,27 @@ p {
   display: block;
 }
 
+.composer-file-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background: linear-gradient(135deg, rgba(98, 201, 176, 0.2), rgba(255, 255, 255, 0.06));
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.composer-file-preview span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-attachment-meta {
   position: absolute;
   left: 0;
@@ -4712,6 +4897,14 @@ p {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-attachment-meta small {
+  display: block;
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.56rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
 .composer-attachment-card button {
@@ -4772,6 +4965,68 @@ p {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.top-user-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.top-user-file-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  max-width: min(100%, 360px);
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(82, 242, 197, 0.16);
+  background: rgba(82, 242, 197, 0.08);
+  color: rgba(230, 255, 248, 0.82);
+  font: inherit;
+  cursor: default;
+}
+
+.top-user-file-card.clickable {
+  cursor: pointer;
+}
+
+.top-user-file-card.clickable:hover {
+  border-color: rgba(82, 242, 197, 0.28);
+  background: rgba(82, 242, 197, 0.12);
+}
+
+.top-user-file-card:disabled {
+  color: rgba(230, 255, 248, 0.82);
+}
+
+.top-user-file-kind {
+  color: #52f2c5;
+  font-size: 0.66rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-weight: 700;
+}
+
+.top-user-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+}
+
+.top-user-file-size {
+  color: rgba(230, 255, 248, 0.46);
+  font-size: 0.66rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.top-user-file-error {
+  margin-top: 6px;
+  color: #f08b7d;
+  font-size: 0.72rem;
 }
 
 .tool-call-box {

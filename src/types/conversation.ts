@@ -1,10 +1,11 @@
-export type ConversationStatus = "working" | "completed" | "idle";
+export type ConversationStatus = "working" | "completed" | "failed" | "stopped" | "idle";
 
 export type MessagePart =
   | { kind: "text"; text: string }
   | { kind: "tool_call"; tool: string; args?: string }
   | { kind: "tool_result"; tool?: string; text?: string }
-  | { kind: "image"; mime_type?: string; data: string; alt?: string };
+  | { kind: "image"; mime_type?: string; data: string; alt?: string }
+  | { kind: "file"; mime_type?: string; name: string; size?: number; path?: string };
 
 export type PreviewMessage = {
   role?: string;
@@ -26,7 +27,13 @@ export type ConversationRuntime = {
   activeStartedAt?: number;
   lastEventAt?: number;
   lastTerminalAt?: number;
-  lastTerminalReason?: "completed" | "aborted" | "error" | "failed" | "cancelled" | "interrupted";
+  lastTerminalReason?: "completed" | "aborted" | "error" | "failed" | "timeout" | "killed" | "cancelled" | "interrupted";
+};
+
+export type ConversationAgentRuntime = {
+  id: string;
+  label?: string;
+  source?: string;
 };
 
 export type Conversation = {
@@ -54,6 +61,7 @@ export type Conversation = {
   latestEventType?: string;
   previewMessages?: PreviewMessage[];
   runtime?: ConversationRuntime;
+  agentRuntime?: ConversationAgentRuntime;
   isDraft?: boolean;  // 本地草稿状态，未创建真实 session
   draftAgentId?: string;  // 草稿对应的 agentId
 };

@@ -121,4 +121,51 @@ describe("buildAgentsFromSnapshot", () => {
       ],
     });
   });
+
+  it("carries agent runtime metadata onto conversations", () => {
+    const snapshot: OpenClawSnapshot = {
+      agents: [{ id: "master", name: "Master" }],
+      sessions: [
+        {
+          id: "sess-1",
+          agent_id: "master",
+          key: "agent:master:direct:830d",
+          title: "Session",
+          agent_runtime: { id: "codex", label: "Codex", source: "agent" },
+          preview_messages: [],
+        },
+      ],
+      connections: [],
+      skills: [],
+    };
+
+    expect(buildAgentsFromSnapshot(snapshot, [])[0]?.conversations[0]?.agentRuntime).toEqual({
+      id: "codex",
+      label: "Codex",
+      source: "agent",
+    });
+  });
+
+  it("maps gateway session status to conversation runtime status", () => {
+    const baseSession = {
+      id: "sess-1",
+      agent_id: "master",
+      key: "agent:master:direct:830d",
+      title: "Session",
+      updated_at: Date.now(),
+      preview_messages: [],
+    };
+    const buildStatus = (session_status: "running" | "done" | "failed" | "killed" | "timeout") => buildAgentsFromSnapshot({
+      agents: [{ id: "master", name: "Master" }],
+      sessions: [{ ...baseSession, session_status }],
+      connections: [],
+      skills: [],
+    }, [])[0]?.conversations[0];
+
+    expect(buildStatus("running")?.status).toBe("working");
+    expect(buildStatus("done")?.status).toBe("completed");
+    expect(buildStatus("failed")?.status).toBe("failed");
+    expect(buildStatus("timeout")?.status).toBe("failed");
+    expect(buildStatus("killed")?.status).toBe("stopped");
+  });
 });

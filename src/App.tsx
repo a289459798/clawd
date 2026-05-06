@@ -13,7 +13,7 @@ import { ModelsPage } from "./components/ModelsPage";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
-import { readImageComposerAttachments } from "./lib/composerAttachments";
+import { readComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
 import { useGatewayChat } from "./hooks/useGatewayChat";
 import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
@@ -24,7 +24,7 @@ import { connectionLabel, formatTokenCount, statusLabel } from "./lib/appFormatt
 import { parseSenderMeta } from "./lib/messageMeta";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
-import type { Conversation, PreviewMessage } from "./types/conversation";
+import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
 import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
@@ -108,6 +108,7 @@ function App() {
   const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
   const [conversationSearch, setConversationSearch] = useState("");
+  const [conversationRuntimeFilter, setConversationRuntimeFilter] = useState("all");
   const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">("updated");
   const [openedConversationIds, setOpenedConversationIds] = useState<Record<string, true>>({});
   const [agents, setAgents] = useState(agentsSeed);
@@ -428,7 +429,15 @@ function App() {
                 const latestSnapshotParts = latestSnapshotMessage?.parts ?? [];
                 const latestIsToolOnly = latestSnapshotParts.some((part) => part.kind === "tool_call" || part.kind === "tool_result")
                   && !latestSnapshotParts.some((part) => part.kind === "text" && part.text?.trim());
-                const isTerminalSnapshot = ["turn_completed", "completed", "final", "aborted", "error", "failed", "cancelled"].includes(nextLatestEventType ?? "");
+                const isFailedSnapshot = ["error", "failed", "timeout"].includes(nextLatestEventType ?? "");
+                const isStoppedSnapshot = ["aborted", "cancelled", "killed", "interrupted"].includes(nextLatestEventType ?? "");
+                const isCompletedSnapshot = ["turn_completed", "completed", "final", "done"].includes(nextLatestEventType ?? "");
+                const isTerminalSnapshot = isCompletedSnapshot || isFailedSnapshot || isStoppedSnapshot;
+                const terminalReason: ConversationRuntime["lastTerminalReason"] = isFailedSnapshot
+                  ? (nextLatestEventType === "timeout" ? "timeout" : "failed")
+                  : isStoppedSnapshot
+                    ? (nextLatestEventType === "killed" ? "killed" : nextLatestEventType === "cancelled" ? "cancelled" : "aborted")
+                    : "completed";
                 const nextRuntime = latestIsToolOnly && !isTerminalSnapshot
                   ? {
                       ...conversation.runtime,
@@ -436,7 +445,16 @@ function App() {
                       activeStartedAt: conversation.runtime?.activeStartedAt ?? nextUpdatedAt ?? Date.now(),
                       lastEventAt: nextUpdatedAt,
                     }
-                  : conversation.runtime ?? {
+                  : isTerminalSnapshot
+                    ? {
+                        ...conversation.runtime,
+                        activeRunId: undefined,
+                        activeStartedAt: undefined,
+                        lastEventAt: nextUpdatedAt,
+                        lastTerminalAt: nextUpdatedAt,
+                        lastTerminalReason: terminalReason,
+                      }
+                    : conversation.runtime ?? {
                       activeRunId: undefined,
                       activeStartedAt: undefined,
                       lastEventAt: nextUpdatedAt,
@@ -978,6 +996,25 @@ function App() {
 
   const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
 
+  const conversationRuntimeOptions = useMemo(() => {
+    const runtimeById = new Map<string, { value: string; label: string; count: number }>();
+    for (const conversation of visibleConversations) {
+      const runtime = conversation.agentRuntime;
+      if (!runtime?.id) continue;
+      const existing = runtimeById.get(runtime.id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        runtimeById.set(runtime.id, {
+          value: runtime.id,
+          label: runtime.label ?? runtime.id,
+          count: 1,
+        });
+      }
+    }
+    return [...runtimeById.values()].sort((left, right) => left.label.localeCompare(right.label));
+  }, [visibleConversations]);
+
   const filteredVisibleConversations = useMemo(() => {
     const query = conversationSearch.trim().toLowerCase();
     const now = Date.now();
@@ -991,8 +1028,11 @@ function App() {
       }
       return typeof conversation.updatedAt === "number" && now - conversation.updatedAt <= RECENT_CONVERSATION_WINDOW_MS;
     });
+    const runtimeFiltered = conversationRuntimeFilter === "all"
+      ? recentConversations
+      : recentConversations.filter((conversation) => conversation.agentRuntime?.id === conversationRuntimeFilter);
     const filtered = query
-      ? recentConversations.filter((conversation) =>
+      ? runtimeFiltered.filter((conversation) =>
           [
             conversation.title,
             conversation.id,
@@ -1000,24 +1040,27 @@ function App() {
             conversation.channel,
             conversation.lastMessage,
             conversation.model,
+            conversation.agentRuntime?.id,
+            conversation.agentRuntime?.label,
+            conversation.agentRuntime?.source,
           ]
             .filter(Boolean)
             .some((value) => String(value).toLowerCase().includes(query)),
         )
-      : recentConversations;
+      : runtimeFiltered;
 
     return [...filtered].sort((left, right) => {
       if (conversationSort === "tokens") {
         return (right.totalTokens ?? 0) - (left.totalTokens ?? 0);
       }
       if (conversationSort === "status") {
-        const statusRank = { working: 0, completed: 1, idle: 2 };
+        const statusRank = { working: 0, failed: 1, stopped: 2, completed: 3, idle: 4 };
         const byStatus = statusRank[left.status] - statusRank[right.status];
         if (byStatus !== 0) return byStatus;
       }
       return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
     });
-  }, [activeConversationId, conversationSearch, conversationSort, expandedConversationId, openedConversationIds, visibleConversations]);
+  }, [activeConversationId, conversationRuntimeFilter, conversationSearch, conversationSort, expandedConversationId, openedConversationIds, visibleConversations]);
 
   // Always get activeConversation from agents to ensure we have the latest data
   // (including previewMessages updated by gateway_chat_history)
@@ -1267,11 +1310,7 @@ function App() {
 
   const handleComposerFiles = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
-    if (!Array.from(fileList).some((file) => file.type.startsWith("image/"))) {
-      setGatewayError("当前只支持上传图片");
-      return;
-    }
-    const next = await readImageComposerAttachments(fileList);
+    const next = await readComposerAttachments(fileList);
     setComposerAttachments((current) => [...current, ...next]);
   }, []);
 
@@ -1334,11 +1373,12 @@ function App() {
 
   const handleAbort = useCallback(async () => {
     if (!activeConversationId || !sending) return;
+    const runIdForAbort = activeConversation?.runtime?.activeRunId ?? activeRunId;
     try {
       await invoke("gateway_connect");
       await invoke("gateway_chat_abort", {
         sessionKey: activeConversationId,
-        runId: activeRunId,
+        runId: runIdForAbort,
       });
       setGatewayError(null);
     } catch (error) {
@@ -1346,7 +1386,7 @@ function App() {
       setGatewayError(messageText);
       setGatewayStatusText(`停止失败: ${messageText}`);
     }
-  }, [activeConversationId, activeRunId, sending]);
+  }, [activeConversation?.runtime?.activeRunId, activeConversationId, activeRunId, sending]);
 
   const handleSend = useCallback(async () => {
     if (!activeConversationId) return;
@@ -1479,6 +1519,8 @@ function App() {
               visibleConversations={visibleConversations}
               filteredVisibleConversations={filteredVisibleConversations}
               conversationSearch={conversationSearch}
+              conversationRuntimeFilter={conversationRuntimeFilter}
+              conversationRuntimeOptions={conversationRuntimeOptions}
               conversationSort={conversationSort}
               statusLabel={statusLabel}
               userExpanded={userExpanded}
@@ -1529,6 +1571,7 @@ function App() {
               onOpenConversation={openConversationDetail}
               onHideConversation={(agentId, conversationId) => toggleConversationVisibility(agentId, conversationId, false)}
               onConversationSearchChange={setConversationSearch}
+              onConversationRuntimeFilterChange={setConversationRuntimeFilter}
               onConversationSortChange={setConversationSort}
               onFocusChange={setComposerFocused}
               onValueChange={setComposerValue}

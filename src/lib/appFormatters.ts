@@ -1,6 +1,8 @@
 export const statusLabel = {
   working: "进行中",
   completed: "已完成",
+  failed: "失败",
+  stopped: "已停止",
   idle: "空闲中",
 } as const;
 

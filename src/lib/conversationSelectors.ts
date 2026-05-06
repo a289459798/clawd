@@ -13,7 +13,7 @@ export const getVisibleConversations = (agents: Agent[]) => {
         })),
     )
     .sort((left, right) => {
-      const statusRank = { working: 0, completed: 1, idle: 2 };
+      const statusRank = { working: 0, failed: 1, stopped: 2, completed: 3, idle: 4 };
       const byStatus = statusRank[left.status] - statusRank[right.status];
       if (byStatus !== 0) return byStatus;
       return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);

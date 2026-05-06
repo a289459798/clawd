@@ -94,12 +94,22 @@ export function useMessageSender({
     if (message) {
       optimisticUserParts.push({ kind: "text", text: message });
     }
-    optimisticUserParts.push(...attachments.map((item) => ({
-      kind: "image" as const,
-      data: item.dataUrl,
-      mime_type: item.mimeType,
-      alt: item.name,
-    })));
+    optimisticUserParts.push(...attachments.map((item) => (
+      item.mimeType.startsWith("image/")
+        ? {
+            kind: "image" as const,
+            data: item.dataUrl,
+            mime_type: item.mimeType,
+            alt: item.name,
+          }
+        : {
+            kind: "file" as const,
+            name: item.name,
+            mime_type: item.mimeType,
+            size: item.size,
+            path: item.path,
+          }
+    )));
 
     onGatewayError(null);
     onConversationSendError(conversationId, null);
@@ -109,12 +119,14 @@ export function useMessageSender({
     const targetConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
     const isDraft = targetConversation?.isDraft;
     const draftAgentId = targetConversation?.draftAgentId;
+    let optimisticStarted = false;
 
     // If draft, create real session first
     let realSessionKey = conversationId;
-    if (isDraft && draftAgentId) {
-      try {
-        await invoke("gateway_connect");
+    try {
+      await invoke("gateway_connect");
+
+      if (isDraft && draftAgentId) {
         const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
           params: {
             agentId: draftAgentId,
@@ -158,69 +170,93 @@ export function useMessageSender({
             [realSessionKey]: draftQueue,
           };
         });
-      } catch (error) {
-        const messageText = error instanceof Error ? error.message : String(error);
-        onGatewayError(messageText);
-        onGatewayStatusTextChange(`创建会话失败: ${messageText}`);
-        onSendingChange(false);
-        return;
       }
-    }
 
-    const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    onActiveRunIdChange(runId);
-
-    const optimisticTimestamp = Date.now();
-    onAgentsChange((current) => current.map((agent) => ({
-      ...agent,
-      conversations: agent.conversations.map((conversation) => {
-        if (conversation.id !== realSessionKey) return conversation;
-        return patchConversation(conversation, (currentConversation) => ({
-          ...currentConversation,
-          status: "working",
-          lastRole: "user",
-          lastMessage: message || (attachments.length > 0 ? `[图片] ${attachments.map((item) => item.name).join(", ")}` : currentConversation.lastMessage),
-          updatedAt: optimisticTimestamp,
-          lastTime: new Date().toLocaleString("zh-CN"),
-          previewMessages: [
-            ...(currentConversation.previewMessages ?? []),
-            { role: "user", text: message || attachments.map((item) => `[图片] ${item.name}`).join("\n"), parts: optimisticUserParts, timestamp: optimisticTimestamp },
-          ],
-          runtime: {
-            ...currentConversation.runtime,
-            activeRunId: runId,
-            activeStartedAt: optimisticTimestamp,
-            lastEventAt: optimisticTimestamp,
-          },
-        }));
-      }),
-    })));
-
-    try {
-      await invoke("gateway_connect");
-
-      const updatedConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === realSessionKey);
-      if (composerModel && composerModel !== updatedConversation?.model) {
+      const updatedConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === realSessionKey) ?? targetConversation;
+      const selectedThinking = composerThinking || "off";
+      const patchParams: Record<string, unknown> = { sessionKey: realSessionKey };
+      if (composerModel && composerModel !== "未配置" && composerModel !== updatedConversation?.model) {
+        patchParams.model = composerModel;
+      }
+      if (selectedThinking !== (updatedConversation?.thinkingDefault ?? "off")) {
+        patchParams.thinkingLevel = selectedThinking;
+      }
+      if (Object.keys(patchParams).length > 1) {
         await invoke("gateway_sessions_patch", {
-          params: {
-            sessionKey: realSessionKey,
-            model: composerModel,
-          },
+          params: patchParams,
         });
+        onAgentsChange((current) => current.map((agent) => ({
+          ...agent,
+          conversations: agent.conversations.map((conversation) => {
+            if (conversation.id !== realSessionKey) return conversation;
+            return {
+              ...conversation,
+              model: typeof patchParams.model === "string" ? patchParams.model : conversation.model,
+              thinkingDefault: typeof patchParams.thinkingLevel === "string" ? patchParams.thinkingLevel : conversation.thinkingDefault,
+            };
+          }),
+        })));
       }
+
+      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      onActiveRunIdChange(runId);
+      optimisticStarted = true;
+
+      const optimisticTimestamp = Date.now();
+      onAgentsChange((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) => {
+          if (conversation.id !== realSessionKey) return conversation;
+          return patchConversation(conversation, (currentConversation) => ({
+            ...currentConversation,
+            status: "working",
+            lastRole: "user",
+            lastMessage: message || (attachments.length > 0 ? `[附件] ${attachments.map((item) => item.name).join(", ")}` : currentConversation.lastMessage),
+            updatedAt: optimisticTimestamp,
+            lastTime: new Date().toLocaleString("zh-CN"),
+            previewMessages: [
+              ...(currentConversation.previewMessages ?? []),
+              { role: "user", text: message || attachments.map((item) => `[附件] ${item.name}`).join("\n"), parts: optimisticUserParts, timestamp: optimisticTimestamp },
+            ],
+            runtime: {
+              ...currentConversation.runtime,
+              activeRunId: runId,
+              activeStartedAt: optimisticTimestamp,
+              lastEventAt: optimisticTimestamp,
+            },
+          }));
+        }),
+      })));
 
       const chatSendResult = await invoke<unknown>("gateway_chat_send", {
         params: {
           sessionKey: realSessionKey,
           message,
           idempotencyKey: runId,
-          thinking: composerThinking === "off" ? null : composerThinking,
-          attachments: attachments.map((item) => ({ dataUrl: item.dataUrl, mimeType: item.mimeType })),
+          attachments: attachments.map((item) => ({
+            dataUrl: item.dataUrl,
+            mimeType: item.mimeType,
+            fileName: item.name,
+            type: item.mimeType.startsWith("image/") ? "image" : "file",
+          })),
         },
       });
       const started = assertGatewayChatSendStarted(chatSendResult);
       if (started.runId && started.runId !== runId) {
         onActiveRunIdChange(started.runId);
+        onAgentsChange((current) => current.map((agent) => ({
+          ...agent,
+          conversations: agent.conversations.map((conversation) => {
+            if (conversation.id !== realSessionKey) return conversation;
+            return patchConversation(conversation, (currentConversation) => ({
+              ...currentConversation,
+              runtime: {
+                ...currentConversation.runtime,
+                activeRunId: started.runId,
+              },
+            }));
+          }),
+        })));
       }
       await refreshGatewayStatus();
     } catch (error) {
@@ -230,24 +266,26 @@ export function useMessageSender({
       onGatewayStatusTextChange(`Gateway 请求失败: ${messageText}`);
       onSendingChange(false);
       onActiveRunIdChange(null);
-      onAgentsChange((current) => current.map((agent) => ({
-        ...agent,
-        conversations: agent.conversations.map((conversation) => {
-          if (conversation.id !== realSessionKey) return conversation;
-          return patchConversation(conversation, (currentConversation) => ({
-            ...currentConversation,
-            latestEventType: "error",
-            runtime: {
-              ...currentConversation.runtime,
-              activeRunId: undefined,
-              activeStartedAt: undefined,
-              lastEventAt: Date.now(),
-              lastTerminalAt: Date.now(),
-              lastTerminalReason: "error",
-            },
-          }));
-        }),
-      })));
+      if (optimisticStarted) {
+        onAgentsChange((current) => current.map((agent) => ({
+          ...agent,
+          conversations: agent.conversations.map((conversation) => {
+            if (conversation.id !== realSessionKey) return conversation;
+            return patchConversation(conversation, (currentConversation) => ({
+              ...currentConversation,
+              latestEventType: "error",
+              runtime: {
+                ...currentConversation.runtime,
+                activeRunId: undefined,
+                activeStartedAt: undefined,
+                lastEventAt: Date.now(),
+                lastTerminalAt: Date.now(),
+                lastTerminalReason: "error",
+              },
+            }));
+          }),
+        })));
+      }
       if (options?.restoreToComposerOnError) {
         onComposerValueChange(message);
         onComposerAttachmentsChange(attachments);

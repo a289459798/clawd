@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Icon, IconNames } from "./Icon";
+import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 
 type ComposerAttachment = {
   id: string;
@@ -7,6 +8,8 @@ type ComposerAttachment = {
   mimeType: string;
   dataUrl: string;
   previewUrl?: string;
+  size?: number;
+  path?: string;
 };
 
 type QueuedComposerMessage = {
@@ -87,7 +90,6 @@ export function ConversationComposer({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
           multiple
           style={{ display: "none" }}
           onChange={(e) => {
@@ -106,7 +108,7 @@ export function ConversationComposer({
                 <div className="composer-queue-item" key={item.id}>
                   <span className="composer-queue-index">#{index + 1}</span>
                   <span className="composer-queue-text">
-                    {item.text || (item.attachments.length > 0 ? `[图片] ${item.attachments.map((attachment) => attachment.name).join(", ")}` : "空消息")}
+                    {item.text || (item.attachments.length > 0 ? `[附件] ${item.attachments.map((attachment) => attachment.name).join(", ")}` : "空消息")}
                   </span>
                   <button type="button" onClick={() => onRemoveQueuedMessage(item.id)} title="删除待发送消息">×</button>
                 </div>
@@ -127,14 +129,21 @@ export function ConversationComposer({
           value={value}
         />
         {attachments.length > 0 ? (
-          <div className="composer-attachments" aria-label="已选择图片">
+          <div className="composer-attachments" aria-label="已选择附件">
             {attachments.map((attachment) => (
               <div className="composer-attachment-card" key={attachment.id}>
-                <img src={attachment.previewUrl ?? attachment.dataUrl} alt={attachment.name} />
+                {attachment.previewUrl ? (
+                  <img src={attachment.previewUrl} alt={attachment.name} />
+                ) : (
+                  <div className="composer-file-preview" aria-hidden="true">
+                    <span>{fileKindLabel(attachment.mimeType, attachment.name)}</span>
+                  </div>
+                )}
                 <div className="composer-attachment-meta">
                   <span title={attachment.name}>{attachment.name}</span>
+                  {attachment.size ? <small>{formatFileSize(attachment.size)}</small> : null}
                 </div>
-                <button type="button" onClick={() => onRemoveAttachment(attachment.id)} title="移除图片">×</button>
+                <button type="button" onClick={() => onRemoveAttachment(attachment.id)} title="移除附件">×</button>
               </div>
             ))}
           </div>

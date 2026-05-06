@@ -140,7 +140,14 @@ export function ResourceSidebar({
                         <span className={`status-dot ${conversation.status}`} />
                         <span className="conversation-title">{conversation.title}</span>
                       </div>
-                      <span className="tree-item-tokens">{conversation.tokens}</span>
+                      <span className="tree-item-meta">
+                        {conversation.agentRuntime ? (
+                          <span className="tree-item-runtime" title={`Agent Runtime: ${conversation.agentRuntime.id}`}>
+                            {conversation.agentRuntime.label ?? conversation.agentRuntime.id}
+                          </span>
+                        ) : null}
+                        <span className="tree-item-tokens">{conversation.tokens}</span>
+                      </span>
                     </button>
                   ))}
                   {hiddenCount > 0 ? (

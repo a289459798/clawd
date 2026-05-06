@@ -19,6 +19,8 @@ type ConversationWorkspaceProps = {
   visibleConversations: VisibleConversation[];
   filteredVisibleConversations: VisibleConversation[];
   conversationSearch: string;
+  conversationRuntimeFilter: string;
+  conversationRuntimeOptions: Array<{ value: string; label: string; count: number }>;
   conversationSort: "updated" | "tokens" | "status";
   statusLabel: Record<Conversation["status"], string>;
   userExpanded: boolean;
@@ -45,6 +47,7 @@ type ConversationWorkspaceProps = {
   onOpenConversation: (conversationId: string) => void | Promise<void>;
   onHideConversation: (agentId: string, conversationId: string) => void;
   onConversationSearchChange: (value: string) => void;
+  onConversationRuntimeFilterChange: (value: string) => void;
   onConversationSortChange: (value: "updated" | "tokens" | "status") => void;
   onFocusChange: (focused: boolean) => void;
   onValueChange: (value: string) => void;
@@ -62,6 +65,8 @@ export function ConversationWorkspace({
   visibleConversations,
   filteredVisibleConversations,
   conversationSearch,
+  conversationRuntimeFilter,
+  conversationRuntimeOptions,
   conversationSort,
   statusLabel,
   userExpanded,
@@ -88,6 +93,7 @@ export function ConversationWorkspace({
   onOpenConversation,
   onHideConversation,
   onConversationSearchChange,
+  onConversationRuntimeFilterChange,
   onConversationSortChange,
   onFocusChange,
   onValueChange,
@@ -247,6 +253,20 @@ export function ConversationWorkspace({
                 <option value="updated">最近更新</option>
                 <option value="status">运行状态</option>
                 <option value="tokens">Token 用量</option>
+              </select>
+            </div>
+            <div className="conversation-sort-select runtime-filter-select">
+              <select
+                value={conversationRuntimeFilter}
+                onChange={(event) => onConversationRuntimeFilterChange(event.target.value)}
+                aria-label="按 Agent Runtime 筛选对话"
+              >
+                <option value="all">全部 Runtime</option>
+                {conversationRuntimeOptions.map((runtime) => (
+                  <option value={runtime.value} key={runtime.value}>
+                    {runtime.label} · {runtime.count}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

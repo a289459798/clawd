@@ -95,6 +95,8 @@ export type ComposerAttachment = {
   mimeType: string;
   dataUrl: string;
   previewUrl?: string;
+  size?: number;
+  path?: string;
 };
 
 export type QueuedComposerMessage = {
