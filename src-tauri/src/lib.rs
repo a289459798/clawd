@@ -1,6 +1,6 @@
 mod gateway_proxy;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::utils::config::Color;
 
 #[derive(Serialize, Clone)]
 struct AgentSummary {
@@ -155,6 +156,35 @@ struct OpenClawCliStatus {
     latest_check_error: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PetSummary {
+    id: String,
+    name: String,
+    species: String,
+    description: String,
+    status: String,
+    source: String,
+    path: Option<String>,
+    icon: Option<String>,
+    image: Option<String>,
+    compatible_with: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PetManifestDraft {
+    id: Option<String>,
+    name: Option<String>,
+    species: Option<String>,
+    description: Option<String>,
+    status: Option<String>,
+    icon: Option<String>,
+    image: Option<String>,
+    #[serde(default)]
+    compatible_with: Vec<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSessionPatch {
@@ -191,6 +221,10 @@ struct RealtimeState {
 
 fn openclaw_config_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".openclaw").join("openclaw.json"))
+}
+
+fn codex_pets_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".codex").join("pets"))
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -1978,6 +2012,201 @@ fn openclaw_gateway_service_command(action: &'static str) -> Result<String, Stri
     }
 }
 
+fn default_pet_summary() -> PetSummary {
+    PetSummary {
+        id: "rock".to_string(),
+        name: "Pet Rock".to_string(),
+        species: "rock".to_string(),
+        description: "Codex 兼容的默认宠物。安静、稳定，偶尔显示当前对话状态。".to_string(),
+        status: "content".to_string(),
+        source: "builtin".to_string(),
+        path: None,
+        icon: Some("rock".to_string()),
+        image: None,
+        compatible_with: vec!["codex".to_string(), "clawx".to_string()],
+    }
+}
+
+fn pet_manifest_path(path: &Path) -> Option<PathBuf> {
+    if path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("json") {
+        return Some(path.to_path_buf());
+    }
+    ["pet.json", "manifest.json", "codex-pet.json"]
+        .iter()
+        .map(|file_name| path.join(file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn slugify_pet_id(value: &str) -> String {
+    let mut slug = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if (ch == '-' || ch == '_' || ch.is_whitespace()) && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "pet".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn read_pet_summary(path: &Path) -> Option<PetSummary> {
+    let manifest_path = pet_manifest_path(path)?;
+    let raw = fs::read_to_string(&manifest_path).ok()?;
+    let draft = serde_json::from_str::<PetManifestDraft>(&raw).ok()?;
+    let base_name = path
+        .file_stem()
+        .or_else(|| path.file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or("pet");
+    let id = draft
+        .id
+        .as_deref()
+        .map(slugify_pet_id)
+        .unwrap_or_else(|| slugify_pet_id(base_name));
+    let name = draft.name.unwrap_or_else(|| id.clone());
+    let species = draft.species.unwrap_or_else(|| "pet".to_string());
+    let description = draft
+        .description
+        .unwrap_or_else(|| "从 Codex pets 目录导入的宠物。".to_string());
+    let status = draft.status.unwrap_or_else(|| "idle".to_string());
+    let root_path = if path.is_file() {
+        path.parent().unwrap_or(path).to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+    let image = draft.image.map(|image| root_path.join(image).to_string_lossy().to_string());
+    Some(PetSummary {
+        id,
+        name,
+        species,
+        description,
+        status,
+        source: "codex".to_string(),
+        path: Some(root_path.to_string_lossy().to_string()),
+        icon: draft.icon,
+        image,
+        compatible_with: if draft.compatible_with.is_empty() {
+            vec!["codex".to_string()]
+        } else {
+            draft.compatible_with
+        },
+    })
+}
+
+fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    for entry in fs::read_dir(source).map_err(|error| format!("failed to read {}: {error}", source.display()))? {
+        let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+        let file_type = entry.file_type().map_err(|error| format!("failed to inspect file type: {error}"))?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &target).map_err(|error| format!("failed to copy {}: {error}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn position_pet_window_bottom_right(window: &WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let Ok(window_size) = window.outer_size() else {
+        return;
+    };
+    let margin = 28_i32;
+    let x = monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - margin;
+    let y = monitor_position.y + monitor_size.height as i32 - window_size.height as i32 - margin;
+    let _ = window.set_position(PhysicalPosition::new(x.max(monitor_position.x), y.max(monitor_position.y)));
+}
+
+#[tauri::command]
+async fn list_codex_pets() -> Result<Vec<PetSummary>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let pets_dir = codex_pets_dir()?;
+        fs::create_dir_all(&pets_dir).map_err(|error| format!("failed to create {}: {error}", pets_dir.display()))?;
+        let mut pets = vec![default_pet_summary()];
+        for entry in fs::read_dir(&pets_dir).map_err(|error| format!("failed to read {}: {error}", pets_dir.display()))? {
+            let entry = entry.map_err(|error| format!("failed to read pet entry: {error}"))?;
+            if let Some(summary) = read_pet_summary(&entry.path()) {
+                if !pets.iter().any(|pet| pet.id == summary.id) {
+                    pets.push(summary);
+                }
+            }
+        }
+        Ok(pets)
+    })
+    .await
+    .map_err(|error| format!("failed to list pets: {error}"))?
+}
+
+#[tauri::command]
+async fn import_codex_pet() -> Result<PetSummary, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let picked = rfd::FileDialog::new()
+            .set_title("选择宠物目录或 pet.json")
+            .add_filter("Pet manifest", &["json"])
+            .pick_folder()
+            .or_else(|| rfd::FileDialog::new().set_title("选择 pet.json").add_filter("Pet manifest", &["json"]).pick_file())
+            .ok_or_else(|| "未选择宠物文件或目录。".to_string())?;
+        let summary = read_pet_summary(&picked).ok_or_else(|| {
+            "未找到可识别的宠物清单。请导入包含 pet.json、manifest.json 或 codex-pet.json 的目录。".to_string()
+        })?;
+        let pets_dir = codex_pets_dir()?;
+        fs::create_dir_all(&pets_dir).map_err(|error| format!("failed to create {}: {error}", pets_dir.display()))?;
+        let target_dir = pets_dir.join(slugify_pet_id(&summary.id));
+        if target_dir.exists() {
+            return Err(format!("宠物 {} 已存在。", summary.id));
+        }
+        if picked.is_dir() {
+            copy_dir_all(&picked, &target_dir)?;
+        } else {
+            fs::create_dir_all(&target_dir).map_err(|error| format!("failed to create {}: {error}", target_dir.display()))?;
+            let file_name = picked.file_name().ok_or_else(|| "无效的宠物文件名。".to_string())?;
+            fs::copy(&picked, target_dir.join(file_name)).map_err(|error| format!("failed to import pet: {error}"))?;
+        }
+        read_pet_summary(&target_dir).ok_or_else(|| "宠物已导入，但无法重新读取清单。".to_string())
+    })
+    .await
+    .map_err(|error| format!("failed to import pet: {error}"))?
+}
+
+#[tauri::command]
+async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
+    let label = "pet";
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        position_pet_window_bottom_right(&window);
+        let _ = window.set_focus();
+        let _ = window.emit("clawx://pet-selected", pet_id);
+        return Ok(());
+    }
+    let url = WebviewUrl::App(format!("index.html?window=pet&petId={}", slugify_pet_id(&pet_id)).into());
+    let window = WebviewWindowBuilder::new(&app, label, url)
+        .title("Clawx Pet")
+        .inner_size(420.0, 300.0)
+        .min_inner_size(360.0, 260.0)
+        .resizable(true)
+        .decorations(false)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .build()
+        .map_err(|error| format!("failed to open pet window: {error}"))?;
+    position_pet_window_bottom_right(&window);
+    Ok(())
+}
+
 #[tauri::command]
 async fn openclaw_gateway_start() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| openclaw_gateway_service_command("start"))
@@ -2071,6 +2300,9 @@ pub fn run() {
             open_weixin_plugin_update_terminal,
             open_openclaw_install_terminal,
             open_openclaw_update_terminal,
+            list_codex_pets,
+            import_codex_pet,
+            open_pet_window,
             openclaw_gateway_start,
             openclaw_gateway_stop,
             subscribe_gateway_realtime,

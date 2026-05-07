@@ -1,7 +1,7 @@
 import type { Conversation, ConversationRuntime, MessagePart, PreviewMessage } from "./conversation";
 import type { GatewayModelsResult, OpenClawSnapshot } from "./gateway";
 
-export type NavKey = "conversations" | "models" | "skills" | "connections" | "usage" | "cron";
+export type NavKey = "conversations" | "models" | "skills" | "connections" | "usage" | "cron" | "pets";
 export type AgentStatus = "working" | "completed" | "idle";
 
 export type Agent = {

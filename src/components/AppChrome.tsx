@@ -75,6 +75,7 @@ export function NavSidebar({
     { key: "connections", label: "连接", icon: "plug" },
     { key: "cron", label: "定时", icon: "cron" },
     { key: "usage", label: "用量", icon: "usage" },
+    { key: "pets", label: "宠物", icon: "pet" },
   ];
   const openClawTitle = [
     gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接",

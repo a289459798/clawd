@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { defaultWindowIcon } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
@@ -12,6 +13,7 @@ import { CronPage } from "./components/CronPage";
 import { OpenClawUiDiagnostics } from "./components/OpenClawUiDiagnostics";
 import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
 import { ModelsPage } from "./components/ModelsPage";
+import { PetsPage } from "./components/PetsPage";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { conversationMatchesSessionKey, findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
@@ -38,6 +40,7 @@ import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import { describeUpdateRestartSentinel, extrapolateGatewayUptimeMs, formatApproxDurationMs } from "./lib/gatewayRuntimeInfo";
 import { resolveComposerThinkingOptions } from "./lib/thinkingOptions";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
+import type { PetConversationContext } from "./types/pet";
 import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, GatewayUpdateStatusResult, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
@@ -48,6 +51,7 @@ const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const PET_COMPLETED_VISIBLE_MS = 60 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -82,6 +86,77 @@ function resolveConfigDefaultModel(config: unknown): string | null {
   const defaultModels = readNestedRecord(config, ["agents", "defaults", "models"]);
   const firstConfiguredDefault = defaultModels ? Object.keys(defaultModels).find((key) => key.trim()) : null;
   return firstConfiguredDefault ?? null;
+}
+
+function normalizePetTimestamp(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
+function resolvePetRunStartedAt(conversation: Conversation | null) {
+  return normalizePetTimestamp(conversation?.runtime?.activeStartedAt);
+}
+
+function resolvePetLastReply(conversation: Conversation | null): string | null {
+  if (!conversation) return null;
+  const messages = conversation.previewMessages ?? [];
+  const runStartedAt = resolvePetRunStartedAt(conversation);
+  const assistant = [...messages].reverse().find((message) => {
+    if (message.role !== "assistant" || !message.text.trim()) return false;
+    if (!runStartedAt) return true;
+    const messageTime = normalizePetTimestamp(message.timestamp);
+    return typeof messageTime === "number" && messageTime >= runStartedAt - 1000;
+  });
+  if (runStartedAt) return assistant?.text.trim() || null;
+  const fallback = conversation.lastRole === "assistant" ? conversation.lastMessage : null;
+  return assistant?.text.trim() || fallback || null;
+}
+
+function resolvePetLastUserMessage(conversation: Conversation | null): string | null {
+  if (!conversation) return null;
+  const messages = conversation.previewMessages ?? [];
+  const user = [...messages].reverse().find((message) => message.role === "user" && message.text.trim());
+  return user?.text.trim() || null;
+}
+
+function conversationHasActivePetReply(conversation: Conversation) {
+  if (conversation.runtime?.activeRunId || conversation.status === "working") return true;
+  const completedAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt);
+  return conversation.status === "completed"
+    && typeof completedAt === "number"
+    && Date.now() - completedAt <= PET_COMPLETED_VISIBLE_MS;
+}
+
+function buildPetContext(agents: Agent[], conversation: Conversation | null): PetConversationContext {
+  const activeReplies = agents
+    .flatMap((agent) => agent.conversations)
+    .filter((item) => conversationHasActivePetReply(item))
+    .map((item) => {
+      const reply = resolvePetLastReply(item);
+      return {
+        conversationId: item.id,
+        title: item.title,
+        status: item.status,
+        model: item.model,
+        reply: reply ?? "",
+        loading: !reply && (Boolean(item.runtime?.activeRunId) || item.status === "working"),
+        updatedAt: item.runtime?.lastEventAt ?? item.runtime?.lastTerminalAt ?? item.updatedAt ?? null,
+      };
+    })
+    .filter((item) => item.loading || item.reply.trim())
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+
+  return {
+    conversationId: conversation?.id ?? null,
+    title: conversation?.title ?? null,
+    status: conversation?.status ?? "idle",
+    model: conversation?.model ?? null,
+    lastUserMessage: resolvePetLastUserMessage(conversation),
+    lastReply: resolvePetLastReply(conversation),
+    updatedAt: conversation?.updatedAt ?? null,
+    tokens: conversation?.tokens ?? null,
+    replies: activeReplies,
+  };
 }
 
 function normalizeSkillMissing(missing: unknown): string[] {
@@ -1344,6 +1419,7 @@ function App() {
   // Always get activeConversation from agents to ensure we have the latest data
   // (including previewMessages updated by gateway_chat_history)
   const activeConversation = findConversationById(agents, activeConversationId);
+  const petContext = useMemo(() => buildPetContext(agents, activeConversation), [activeConversation, agents]);
   const composerThinkingOptions = useMemo(
     () => resolveComposerThinkingOptions(activeConversation ?? null, gatewaySessionsDefaults),
     [activeConversation, gatewaySessionsDefaults],
@@ -1353,6 +1429,11 @@ function App() {
   useEffect(() => {
     activeConversationRef.current = activeConversation;
   }, [activeConversation]);
+
+  useEffect(() => {
+    localStorage.setItem("clawx.petContext", JSON.stringify(petContext));
+    void emit("clawx://pet-context", petContext);
+  }, [petContext]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
     const lastAssistant = getLastAssistantMessage(conversation?.previewMessages ?? []);
@@ -2101,6 +2182,10 @@ function App() {
 
         {activeNav === "usage" ? (
           <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} />
+        ) : null}
+
+        {activeNav === "pets" ? (
+          <PetsPage context={petContext} />
         ) : null}
       </div>
 
