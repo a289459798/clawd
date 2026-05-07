@@ -16,6 +16,8 @@ type QueuedComposerMessage = {
   id: string;
   text: string;
   attachments: ComposerAttachment[];
+  model?: string;
+  thinking?: string;
 };
 
 type ModelOption = {

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Agent, ComposerAttachment, GatewayCreateSessionResult, QueuedComposerMessage } from "../types/app";
+import type { Agent, ComposerAttachment, GatewayCreateSessionResult, ModelOption, QueuedComposerMessage } from "../types/app";
 import type { MessagePart } from "../types/conversation";
 import { patchConversation } from "../lib/agentsSnapshot";
+import { canonicalizeModelRef } from "../lib/modelOptions";
 
 interface UseMessageSenderProps {
   agents: Agent[];
+  modelOptions: ModelOption[];
   composerModel: string;
   composerThinking: string;
   activeConversationId: string | null;
@@ -29,6 +31,13 @@ type GatewayChatSendResult = {
   status?: string;
 };
 
+type SendMessageOptions = {
+  restoreToComposerOnError?: boolean;
+  requeueOnError?: QueuedComposerMessage;
+  model?: string;
+  thinking?: string;
+};
+
 function assertGatewayChatSendStarted(value: unknown): GatewayChatSendResult {
   if (typeof value === "string") {
     throw new Error(value);
@@ -50,6 +59,7 @@ function isReplyRunConflictError(message: string) {
 
 export function useMessageSender({
   agents,
+  modelOptions,
   composerModel,
   composerThinking,
   activeConversationId,
@@ -93,7 +103,7 @@ export function useMessageSender({
     conversationId: string,
     message: string,
     attachments: ComposerAttachment[],
-    options?: { restoreToComposerOnError?: boolean; requeueOnError?: QueuedComposerMessage },
+    options?: SendMessageOptions,
   ) => {
     const optimisticUserParts: MessagePart[] = [];
     if (message) {
@@ -179,10 +189,15 @@ export function useMessageSender({
       }
 
       const updatedConversation = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === realSessionKey) ?? targetConversation;
-      const selectedThinking = composerThinking || "off";
+      const lastAssistantProvider = [...(updatedConversation?.previewMessages ?? [])]
+        .reverse()
+        .find((previewMessage) => previewMessage.role?.toLowerCase() === "assistant")
+        ?.provider;
+      const selectedModel = canonicalizeModelRef(options?.model ?? composerModel, modelOptions, lastAssistantProvider);
+      const selectedThinking = options?.thinking ?? (composerThinking || "off");
       const patchParams: Record<string, unknown> = { sessionKey: realSessionKey };
-      if (composerModel && composerModel !== "未配置" && composerModel !== updatedConversation?.model) {
-        patchParams.model = composerModel;
+      if (selectedModel && selectedModel !== "未配置") {
+        patchParams.model = selectedModel;
       }
       if (selectedThinking !== (updatedConversation?.thinkingDefault ?? "off")) {
         patchParams.thinkingLevel = selectedThinking;
@@ -362,7 +377,7 @@ export function useMessageSender({
       }
       await refreshGatewayStatus();
     }
-  }, [agents, composerModel, composerThinking, onAgentsChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, onComposerValueChange, onComposerAttachmentsChange, onConversationSendError, onQueuedMessagesChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
+  }, [agents, composerModel, composerThinking, modelOptions, onAgentsChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, onComposerValueChange, onComposerAttachmentsChange, onConversationSendError, onQueuedMessagesChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
 
   return {
     sendMessageToConversation,

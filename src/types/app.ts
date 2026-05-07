@@ -147,6 +147,8 @@ export type QueuedComposerMessage = {
   text: string;
   attachments: ComposerAttachment[];
   createdAt: number;
+  model?: string;
+  thinking?: string;
 };
 
 export type GatewayCreateSessionResult = {

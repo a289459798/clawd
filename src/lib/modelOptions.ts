@@ -11,27 +11,44 @@ export const qualifyModelId = (id: string, provider?: string) => {
   return `${trimmedProvider}/${trimmedId}`;
 };
 
-export const buildModelOptions = (result?: GatewayModelsResult | null): ModelOption[] => {
+const matchesDefaultModel = (value: string, defaultModel?: string | null) => {
+  const normalizedDefault = normalizeModelKey(defaultModel ?? "");
+  if (!normalizedDefault) return false;
+  return normalizeModelKey(value) === normalizedDefault;
+};
+
+export const buildModelOptions = (result?: GatewayModelsResult | null, defaultModel?: string | null): ModelOption[] => {
   const models = Array.isArray(result?.models) ? result.models : [];
   const seen = new Set<string>();
-  return models
+  const options = models
     .map((model) => {
-      const value = model.ref?.trim() || qualifyModelId(model.id, model.provider);
+      const value = model.ref?.trim() || model.key?.trim() || qualifyModelId(model.id, model.provider);
       if (!value) return null;
       const displayName = model.alias?.trim() || model.label?.trim() || model.name?.trim() || model.id.trim();
       const provider = model.provider?.trim();
-      const label = provider && !displayName.toLowerCase().includes(provider.toLowerCase())
+      const baseLabel = provider && !displayName.toLowerCase().includes(provider.toLowerCase())
         ? `${displayName} · ${provider}`
         : displayName;
-      return { value, label };
+      const isDefault =
+        matchesDefaultModel(value, defaultModel) ||
+        (model.tags ?? []).some((tag) => tag.toLowerCase() === "default");
+      const label = isDefault ? `${baseLabel} · 默认` : baseLabel;
+      return { value, label, isDefault };
     })
-    .filter((option): option is ModelOption => {
+    .filter((option): option is ModelOption & { isDefault: boolean } => {
       if (!option) return false;
       const key = normalizeModelKey(option.value);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    });
+    })
+    .sort((left, right) => Number(right.isDefault) - Number(left.isDefault))
+    .map(({ isDefault: _isDefault, ...option }) => option);
+  const defaultValue = defaultModel?.trim();
+  if (!defaultValue || options.some((option) => normalizeModelKey(option.value) === normalizeModelKey(defaultValue))) {
+    return options;
+  }
+  return [{ value: defaultValue, label: `${defaultValue} · 默认` }, ...options];
 };
 
 export const ensureSelectedModelOption = (options: ModelOption[], selectedModel: string): ModelOption[] => {
@@ -40,5 +57,31 @@ export const ensureSelectedModelOption = (options: ModelOption[], selectedModel:
   if (options.some((option) => normalizeModelKey(option.value) === normalizeModelKey(selected))) {
     return options;
   }
-  return [{ value: selected, label: `当前: ${selected}` }, ...options];
+  const currentOption = { value: selected, label: `当前: ${selected}` };
+  const defaultIndex = options.findIndex((option) => option.label.includes("默认"));
+  if (defaultIndex < 0) return [currentOption, ...options];
+  return [
+    ...options.slice(0, defaultIndex + 1),
+    currentOption,
+    ...options.slice(defaultIndex + 1),
+  ];
+};
+
+export const canonicalizeModelRef = (value: string, options: ModelOption[], provider?: string) => {
+  const selected = value.trim();
+  if (!selected || selected === "未配置") return selected;
+  const selectedKey = normalizeModelKey(selected);
+  const exact = options.find((option) => normalizeModelKey(option.value) === selectedKey);
+  if (exact) return exact.value;
+  if (selected.includes("/")) return selected;
+
+  const providerPrefix = provider?.trim();
+  if (providerPrefix) {
+    const byProvider = options.find((option) => normalizeModelKey(option.value) === normalizeModelKey(`${providerPrefix}/${selected}`));
+    if (byProvider) return byProvider.value;
+  }
+
+  const suffixMatches = options.filter((option) => normalizeModelKey(option.value).endsWith(`/${selectedKey}`));
+  if (suffixMatches.length > 0) return suffixMatches[0].value;
+  return selected;
 };

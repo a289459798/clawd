@@ -428,8 +428,8 @@ p {
 }
 
 .statusbar-badge.completed {
-  background: rgba(240, 139, 125, 0.14);
-  color: #f08b7d;
+  background: rgba(82, 242, 197, 0.1);
+  color: #52f2c5;
 }
 
 .statusbar-badge.failed {
@@ -1974,7 +1974,7 @@ p {
 }
 
 .mini-status.completed {
-  background: var(--peach);
+  background: var(--green);
 }
 
 .mini-status.idle {
@@ -2079,7 +2079,7 @@ p {
 }
 
 .status-dot.completed {
-  background: var(--peach);
+  background: var(--green);
 }
 
 .status-dot.failed {
@@ -2339,8 +2339,8 @@ p {
 }
 
 .status-badge.completed {
-  background: rgba(240, 139, 125, 0.14);
-  color: var(--peach);
+  background: rgba(82, 242, 197, 0.1);
+  color: var(--green);
 }
 
 .status-badge.failed {
@@ -4045,6 +4045,11 @@ p {
   border-color: rgba(82, 242, 197, 0.1);
 }
 
+.model-row.default {
+  border-color: rgba(82, 242, 197, 0.28);
+  background: rgba(82, 242, 197, 0.055);
+}
+
 .model-row.disabled {
   opacity: 0.52;
 }
@@ -4090,6 +4095,12 @@ p {
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.55);
   font-size: 0.68rem;
+}
+
+.model-row-tags .model-default-tag {
+  background: rgba(82, 242, 197, 0.12);
+  color: #52f2c5;
+  border: 1px solid rgba(82, 242, 197, 0.18);
 }
 
 .current-model-pill {

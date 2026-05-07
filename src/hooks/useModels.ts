@@ -6,6 +6,7 @@ import { buildModelOptions } from "../lib/modelOptions";
 
 interface UseModelsProps {
   enabled: boolean;
+  defaultModel?: string | null;
 }
 
 interface UseModelsReturn {
@@ -15,7 +16,7 @@ interface UseModelsReturn {
   reloadModels: () => Promise<void>;
 }
 
-export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
+export function useModels({ enabled, defaultModel }: UseModelsProps): UseModelsReturn {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -24,14 +25,14 @@ export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
     try {
       await invoke("gateway_connect");
       const result = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } });
-      setModelOptions(buildModelOptions(result));
+      setModelOptions(buildModelOptions(result, defaultModel));
     } catch (error) {
       console.error("Failed to load OpenClaw models", error);
       setModelOptions([]);
     } finally {
       setModelsLoading(false);
     }
-  }, []);
+  }, [defaultModel]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -44,7 +45,7 @@ export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
         await invoke("gateway_connect");
         const result = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } });
         if (!cancelled) {
-          setModelOptions(buildModelOptions(result));
+          setModelOptions(buildModelOptions(result, defaultModel));
         }
       } catch (error) {
         console.error("Failed to load OpenClaw models", error);
@@ -63,7 +64,7 @@ export function useModels({ enabled }: UseModelsProps): UseModelsReturn {
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [enabled, defaultModel]);
 
   return {
     modelOptions,

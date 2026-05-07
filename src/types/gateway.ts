@@ -89,6 +89,7 @@ export type GatewayUpdateStatusResult = {
 
 export type GatewayModelSummary = {
   id: string;
+  key?: string;
   ref?: string;
   provider?: string;
   name?: string;

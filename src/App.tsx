@@ -32,6 +32,7 @@ import {
 } from "./lib/pluginPackagingDiagnostics";
 import { resolveChannelHealthHint, resolveChannelOperationalDegraded } from "./lib/channelHealth";
 import { parseSenderMeta } from "./lib/messageMeta";
+import { buildModelOptions, canonicalizeModelRef } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import { describeUpdateRestartSentinel, extrapolateGatewayUptimeMs, formatApproxDurationMs } from "./lib/gatewayRuntimeInfo";
@@ -46,6 +47,42 @@ const agentsSeed: Agent[] = [];
 const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function readNestedRecord(root: unknown, path: string[]): Record<string, unknown> | null {
+  let current: unknown = root;
+  for (const key of path) {
+    const record = asRecord(current);
+    if (!record) return null;
+    current = record[key];
+  }
+  return asRecord(current);
+}
+
+function readNestedString(root: unknown, path: string[]): string | null {
+  let current: unknown = root;
+  for (const key of path) {
+    const record = asRecord(current);
+    if (!record) return null;
+    current = record[key];
+  }
+  return typeof current === "string" && current.trim() ? current.trim() : null;
+}
+
+function resolveConfigDefaultModel(config: unknown): string | null {
+  const modelPrimary = readNestedString(config, ["agents", "defaults", "model", "primary"]);
+  if (modelPrimary) return modelPrimary;
+  const model = readNestedString(config, ["agents", "defaults", "model"]);
+  if (model) return model;
+  const defaultModels = readNestedRecord(config, ["agents", "defaults", "models"]);
+  const firstConfiguredDefault = defaultModels ? Object.keys(defaultModels).find((key) => key.trim()) : null;
+  return firstConfiguredDefault ?? null;
+}
 
 function normalizeSkillMissing(missing: unknown): string[] {
   if (!missing) return [];
@@ -206,6 +243,8 @@ function App() {
   const [modelsPageReady, setModelsPageReady] = useState(false);
   const [gatewaySessionsDefaults, setGatewaySessionsDefaults] = useState<GatewaySessionsListResult["defaults"] | null>(null);
   const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
+  const [openClawConfigDefaultModel, setOpenClawConfigDefaultModel] = useState<string | null>(null);
+  const [openClawConfigDefaultModelLoaded, setOpenClawConfigDefaultModelLoaded] = useState(false);
   const [openClawCliStatus, setOpenClawCliStatus] = useState<OpenClawCliStatus | null>(null);
   const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
   const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
@@ -216,7 +255,11 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  const { modelOptions, modelsLoading, reloadModels } = useModels({ enabled: bootstrapStep === "ready" });
+  const currentDefaultModel = openClawStatus?.sessions?.defaults?.model ?? gatewaySessionsDefaults?.model ?? openClawConfigDefaultModel ?? null;
+  const { modelOptions, modelsLoading, setModelOptions } = useModels({
+    enabled: bootstrapStep === "ready" && openClawConfigDefaultModelLoaded,
+    defaultModel: currentDefaultModel,
+  });
   const { loadGatewaySnapshot } = useGatewaySnapshot();
   const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
@@ -342,23 +385,14 @@ function App() {
     }
   }, []);
 
-  const refreshGatewayMetadata = useCallback(async () => {
+  const refreshGatewaySkills = useCallback(async () => {
     setMetadataLoading(true);
     try {
       await invoke("gateway_connect");
-      const [skillsResult, channelsResult, healthRaw] = await Promise.all([
-        invoke<GatewaySkillsStatusResult>("gateway_skills_status", { params: {} }),
-        invoke<GatewayChannelsStatusResult>("gateway_channels_status", { params: { probe: false, timeoutMs: 2000 } }),
-        invoke<unknown>("gateway_health", { probe: false }).catch(() => null),
-      ]);
+      const skillsResult = await invoke<GatewaySkillsStatusResult>("gateway_skills_status", { params: {} });
       setSkills(mapGatewaySkills(skillsResult));
-      const applied = applyPluginHealthToChannels(channelsResult, healthRaw);
-      setConnections(applied.connections);
-      setChannelEventLoopHealth(applied.eventLoop ?? null);
-      setPluginLoadRepairs(applied.repairs);
-      setUnmatchedPluginRepairs(applied.unmatched);
     } catch (error) {
-      console.warn("Failed to refresh Gateway metadata", error);
+      console.warn("Failed to refresh Gateway skills", error);
     } finally {
       setMetadataLoading(false);
     }
@@ -393,14 +427,14 @@ function App() {
       const message = await invoke<string>("ensure_weixin_plugin_enabled");
       setWeixinMessage(message);
       await refreshWeixinPluginStatus();
-      await refreshGatewayMetadata();
+      await refreshGatewayConnections();
     } catch (error) {
       console.error("Failed to enable WeChat plugin", error);
       setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件启用失败");
     } finally {
       setWeixinBusy(false);
     }
-  }, [refreshGatewayMetadata, refreshWeixinPluginStatus]);
+  }, [refreshGatewayConnections, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     void loadBootstrapStatus();
@@ -472,7 +506,6 @@ function App() {
           }
         }
         setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots, { preserveExistingConversations: true }));
-        void refreshGatewayMetadata();
       } catch (error) {
         console.error("Failed to load OpenClaw snapshot", error);
       }
@@ -517,7 +550,6 @@ function App() {
         }
         setAgents(mergeGatewaySessionRowsIntoAgents(currentAgentSnapshots, rows, { transcriptSourceOfTruthIds }));
         setGatewaySessionsDefaults(sessionsResult.defaults ?? null);
-        void refreshGatewayMetadata();
       } catch (error) {
         console.warn("Gateway sessions.list merge failed, falling back to full snapshot", error);
         await loadSnapshot();
@@ -563,7 +595,7 @@ function App() {
       }
       eventCleanup?.();
     };
-  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot, refreshGatewayMetadata]);
+  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot]);
 
   useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured || bootstrapStep !== "ready") {
@@ -766,14 +798,29 @@ function App() {
     }
   }, []);
 
+  const refreshOpenClawDefaultModel = useCallback(async () => {
+    try {
+      await invoke("gateway_connect");
+      const configResult = await invoke<GatewayConfigGetResult>("gateway_config_get");
+      setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult.config));
+    } catch (error) {
+      console.warn("Failed to load OpenClaw default model", error);
+    } finally {
+      setOpenClawConfigDefaultModelLoaded(true);
+    }
+  }, []);
+
   const refreshOpenClawStatus = useCallback(async () => {
     try {
       await invoke("gateway_connect");
-      const [status, updateStatus] = await Promise.all([
+      const [status, updateStatus, configResult] = await Promise.all([
         invoke<GatewayOpenClawStatusResult>("gateway_openclaw_status"),
         invoke<GatewayUpdateStatusResult>("gateway_update_status").catch(() => null),
+        invoke<GatewayConfigGetResult>("gateway_config_get").catch(() => null),
       ]);
       setOpenClawStatus(status);
+      setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult?.config));
+      setOpenClawConfigDefaultModelLoaded(true);
       setGatewayUpdateRestartSentinel(updateStatus?.sentinel ?? null);
       await refreshGatewayStatus();
     } catch (error) {
@@ -794,9 +841,9 @@ function App() {
       startTransition(() => {
         setConfiguredModels(configuredResult.models ?? []);
         setModelAuthStatus(authResult);
+        setModelOptions(buildModelOptions(configuredResult, currentDefaultModel));
       });
       setModelsPageLoading(false);
-      void reloadModels();
       void (async () => {
         try {
           const allResult = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "all" } });
@@ -810,7 +857,7 @@ function App() {
       setModelsActionMessage(error instanceof Error ? error.message : "模型状态刷新失败");
       setModelsPageLoading(false);
     }
-  }, [reloadModels]);
+  }, [currentDefaultModel, setModelOptions]);
 
   const patchOpenClawConfig = useCallback(async (patch: unknown) => {
     const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
@@ -833,6 +880,8 @@ function App() {
       await patchOpenClawConfig({ agents: { defaults: { model: { primary: modelRef }, models: { [modelRef]: {} } } } });
       setModelsActionMessage(`已设为默认模型：${modelRef}`);
       setComposerModel(modelRef);
+      setOpenClawConfigDefaultModel(modelRef);
+      setOpenClawConfigDefaultModelLoaded(true);
       setOpenClawStatus((current) => current ? {
         ...current,
         sessions: {
@@ -919,6 +968,8 @@ function App() {
       await patchOpenClawConfig(patch);
       if (draft.setDefault) {
         setComposerModel(modelRef);
+        setOpenClawConfigDefaultModel(modelRef);
+        setOpenClawConfigDefaultModelLoaded(true);
         setOpenClawStatus((current) => current ? {
           ...current,
           sessions: {
@@ -1062,12 +1113,12 @@ function App() {
           enabled,
         },
       });
-      await refreshGatewayMetadata();
+      await refreshGatewaySkills();
     } catch (error) {
       console.error("Failed to update skill", error);
       setSkills((current) => current.map((skill) => (skill.id === skillId ? { ...skill, enabled: !enabled } : skill)));
     }
-  }, []);
+  }, [refreshGatewaySkills]);
 
   const toggleOpenClawInfo = useCallback(() => {
     setOpenClawInfoOpen((current) => !current);
@@ -1100,7 +1151,7 @@ function App() {
     if (activeNav === "skills") {
       scheduleAfterPaint(() => {
         setMetadataPageReady(true);
-        void refreshGatewayMetadata();
+        void refreshGatewaySkills();
       }, 80);
     }
     if (activeNav === "connections") {
@@ -1110,7 +1161,7 @@ function App() {
       }, 80);
       scheduleAfterPaint(() => void refreshWeixinPluginStatus(), 430);
     }
-    if (activeNav === "models") {
+    if (activeNav === "models" && openClawConfigDefaultModelLoaded) {
       scheduleAfterPaint(() => {
         setModelsPageReady(true);
         void refreshModelsPage({ refreshAuth: true });
@@ -1127,15 +1178,26 @@ function App() {
       frames.forEach((frame) => window.cancelAnimationFrame(frame));
       timeouts.forEach((timeout) => clearTimeout(timeout));
     };
-  }, [activeNav, bootstrapStep, refreshGatewayConnections, refreshGatewayMetadata, refreshModelsPage, refreshUsage, refreshWeixinPluginStatus]);
+  }, [activeNav, bootstrapStep, openClawConfigDefaultModelLoaded, refreshGatewayConnections, refreshGatewaySkills, refreshModelsPage, refreshUsage, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     if (bootstrapStep !== "ready") {
+      setOpenClawConfigDefaultModelLoaded(false);
       return;
     }
-    void refreshOpenClawStatus();
+    void refreshOpenClawDefaultModel();
+  }, [bootstrapStep, refreshOpenClawDefaultModel]);
+
+  useEffect(() => {
+    if (bootstrapStep !== "ready") {
+      return undefined;
+    }
     void refreshOpenClawCliStatus();
-  }, [bootstrapStep, refreshOpenClawCliStatus, refreshOpenClawStatus]);
+    const interval = window.setInterval(() => {
+      void refreshOpenClawCliStatus();
+    }, OPENCLAW_VERSION_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [bootstrapStep, refreshOpenClawCliStatus]);
 
   const refreshGatewaySnapshot = useCallback(async (options?: { priorityAgentId?: string }) => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
@@ -1145,8 +1207,7 @@ function App() {
       preserveExistingConversations: true,
       priorityAgentId: options?.priorityAgentId,
     }));
-    await refreshGatewayMetadata();
-  }, [loadGatewaySnapshot, refreshGatewayMetadata]);
+  }, [loadGatewaySnapshot]);
 
   const runWeixinTerminalAction = useCallback(async (command: "open_weixin_plugin_install_terminal" | "open_weixin_plugin_update_terminal" | "open_weixin_login_terminal") => {
     setWeixinBusy(true);
@@ -1157,7 +1218,7 @@ function App() {
       if (command !== "open_weixin_login_terminal") {
         window.setTimeout(() => {
           void refreshWeixinPluginStatus();
-          void refreshGatewayMetadata();
+          void refreshGatewayConnections();
         }, 1500);
       }
     } catch (error) {
@@ -1166,7 +1227,7 @@ function App() {
     } finally {
       setWeixinBusy(false);
     }
-  }, [refreshGatewayMetadata, refreshWeixinPluginStatus]);
+  }, [refreshGatewayConnections, refreshWeixinPluginStatus]);
 
   const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string }) => {
     setAgentCreating(true);
@@ -1294,7 +1355,9 @@ function App() {
   }, [activeConversation]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
-    return resolveConversationModel(conversation, modelOptions[0]?.value ?? "");
+    const lastAssistant = getLastAssistantMessage(conversation?.previewMessages ?? []);
+    const rawModel = resolveConversationModel(conversation, modelOptions[0]?.value ?? "");
+    return canonicalizeModelRef(rawModel, modelOptions, lastAssistant?.provider);
   }, [modelOptions]);
 
   const resolveConversationDefaultThinking = useCallback((conversation: Conversation | null) => {
@@ -1578,12 +1641,14 @@ function App() {
       text,
       attachments,
       createdAt: Date.now(),
+      model: composerModel,
+      thinking: composerThinking,
     };
     setQueuedMessagesByConversation((current) => ({
       ...current,
       [conversationId]: [...(current[conversationId] ?? []), item],
     }));
-  }, []);
+  }, [composerModel, composerThinking]);
 
   const removeQueuedMessage = useCallback((messageId: string) => {
     if (!activeConversationId) return;
@@ -1595,6 +1660,7 @@ function App() {
 
   const { sendMessageToConversation } = useMessageSender({
     agents,
+    modelOptions,
     composerModel,
     composerThinking,
     activeConversationId,
@@ -1773,8 +1839,12 @@ function App() {
       return;
     }
 
-    await sendMessageToConversation(activeConversationId, message, attachments, { restoreToComposerOnError: true });
-  }, [activeConversation, activeConversationId, composerAttachments, composerValue, enqueueComposerMessage, sendMessageToConversation, sending]);
+    await sendMessageToConversation(activeConversationId, message, attachments, {
+      restoreToComposerOnError: true,
+      model: composerModel,
+      thinking: composerThinking,
+    });
+  }, [activeConversation, activeConversationId, composerAttachments, composerModel, composerThinking, composerValue, enqueueComposerMessage, sendMessageToConversation, sending]);
 
   useEffect(() => {
     if (!activeConversationId || !activeConversation || sending) return;
@@ -1791,7 +1861,11 @@ function App() {
     }));
     const queuedPayload = nextQueuedMessage;
     window.setTimeout(() => {
-      void sendMessageToConversation(activeConversationId, queuedPayload.text, queuedPayload.attachments, { requeueOnError: queuedPayload })
+      void sendMessageToConversation(activeConversationId, queuedPayload.text, queuedPayload.attachments, {
+        requeueOnError: queuedPayload,
+        model: queuedPayload.model,
+        thinking: queuedPayload.thinking,
+      })
         .finally(() => {
           if (autoSendingQueuedMessageRef.current === queuedPayload.id) {
             autoSendingQueuedMessageRef.current = null;
@@ -1980,7 +2054,7 @@ function App() {
             allModels={modelsPageReady ? allModels : []}
             authStatus={modelsPageReady ? modelAuthStatus : null}
             loading={modelsPageLoading || !modelsPageReady}
-            currentDefaultModel={openClawStatus?.sessions?.defaults?.model}
+            currentDefaultModel={currentDefaultModel}
             actionBusy={modelActionBusy}
             message={modelsActionMessage}
             onRefresh={() => void refreshModelsPage({ refreshAuth: true })}

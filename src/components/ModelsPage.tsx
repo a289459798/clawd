@@ -47,6 +47,8 @@ const oauthProviderLabels: Record<string, string> = {
 function qualifyModelRef(model: GatewayModelSummary) {
   const explicit = model.ref?.trim();
   if (explicit) return explicit;
+  const key = model.key?.trim();
+  if (key) return key;
   const id = model.id.trim();
   const provider = model.provider?.trim();
   if (!provider || id.includes("/")) return id;
@@ -179,6 +181,19 @@ export function ModelsPage({
         modelId,
         displayName: model.alias || model.label || model.name || modelId,
         configured: configuredRefs.has(key) || Boolean(existing?.configured),
+      });
+    }
+    const defaultRef = currentDefaultModel?.trim();
+    if (defaultRef && !byRef.has(normalize(defaultRef))) {
+      const provider = defaultRef.includes("/") ? defaultRef.split("/")[0] : "default";
+      const modelId = defaultRef.startsWith(`${provider}/`) ? defaultRef.slice(provider.length + 1) : defaultRef;
+      byRef.set(normalize(defaultRef), {
+        id: modelId,
+        ref: defaultRef,
+        provider,
+        modelId,
+        displayName: modelId,
+        configured: true,
       });
     }
 
@@ -362,7 +377,7 @@ export function ModelsPage({
                   const isDefault = normalize(model.ref) === normalize(currentDefaultModel);
                   const providerConfigured = activeProviderGroup.configured;
                   return (
-                    <div className={`model-row ${model.configured ? "configured" : "missing"} ${providerConfigured ? "" : "disabled"}`} key={model.ref}>
+                    <div className={`model-row ${model.configured ? "configured" : "missing"} ${isDefault ? "default" : ""} ${providerConfigured ? "" : "disabled"}`} key={model.ref}>
                       <div className="model-row-main">
                         <strong>{model.displayName}</strong>
                         <code>{model.ref}</code>
@@ -375,6 +390,7 @@ export function ModelsPage({
                               {tag}
                             </span>
                           ))}
+                          {isDefault ? <span className="model-default-tag">默认模型</span> : null}
                           {providerConfigured ? (model.configured ? <span>已添加</span> : <span>可添加</span>) : <span>Provider 未配置</span>}
                         </div>
                       </div>

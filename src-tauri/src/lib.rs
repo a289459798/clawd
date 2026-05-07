@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -228,10 +228,93 @@ fn local_prefix_openclaw_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+fn openclaw_candidate_paths() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = local_prefix_openclaw_path() {
+        candidates.push(path);
+    }
+
+    if let Ok(home) = home_dir() {
+        if cfg!(windows) {
+            candidates.extend([
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("openclaw.cmd"),
+                home.join("scoop").join("shims").join("openclaw.cmd"),
+            ]);
+        } else {
+            candidates.extend([
+                home.join(".local").join("bin").join("openclaw"),
+                home.join(".npm-global").join("bin").join("openclaw"),
+                home.join("Library").join("pnpm").join("openclaw"),
+                home.join(".pnpm").join("openclaw"),
+            ]);
+
+            let nvm_versions = home.join(".nvm").join("versions").join("node");
+            if let Ok(entries) = fs::read_dir(nvm_versions) {
+                for entry in entries.flatten() {
+                    candidates.push(entry.path().join("bin").join("openclaw"));
+                }
+            }
+        }
+    }
+
+    if !cfg!(windows) {
+        candidates.extend([
+            PathBuf::from("/opt/homebrew/bin/openclaw"),
+            PathBuf::from("/usr/local/bin/openclaw"),
+            PathBuf::from("/usr/bin/openclaw"),
+        ]);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
+fn enhanced_path_env(extra_command_path: Option<&Path>) -> Option<std::ffi::OsString> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Some(command_path) = extra_command_path.and_then(Path::parent) {
+        paths.push(command_path.to_path_buf());
+    }
+    paths.extend(
+        openclaw_candidate_paths()
+            .into_iter()
+            .filter_map(|path| path.parent().map(Path::to_path_buf)),
+    );
+    if !cfg!(windows) {
+        paths.extend([
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/usr/sbin"),
+            PathBuf::from("/sbin"),
+        ]);
+    }
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    std::env::join_paths(paths.into_iter().filter(|path| seen.insert(path.clone()))).ok()
+}
+
 fn resolve_openclaw_command() -> Option<PathBuf> {
+    if let Some(path) = openclaw_candidate_paths()
+        .into_iter()
+        .find(|path| path.is_file())
+    {
+        return Some(path);
+    }
+
     if cfg!(windows) {
         let path_output = Command::new("cmd")
             .args(["/C", "where", "openclaw"])
+            .env("PATH", enhanced_path_env(None)?)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
@@ -245,12 +328,13 @@ fn resolve_openclaw_command() -> Option<PathBuf> {
                     .map(PathBuf::from)
             });
 
-        return path_output.or_else(local_prefix_openclaw_path);
+        return path_output;
     }
 
     let path_output = Command::new("sh")
         .arg("-lc")
         .arg("command -v openclaw")
+        .env("PATH", enhanced_path_env(None)?)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
@@ -265,23 +349,32 @@ fn resolve_openclaw_command() -> Option<PathBuf> {
             }
         });
 
-    path_output.or_else(local_prefix_openclaw_path)
+    path_output
 }
 
 fn run_openclaw_command(args: &[&str]) -> Result<Output, String> {
     let command_path = resolve_openclaw_command().ok_or_else(|| {
         "OpenClaw command not found. Expected openclaw in PATH, ~/.openclaw/bin/openclaw, or %USERPROFILE%\\.openclaw\\bin\\openclaw.cmd".to_string()
     })?;
-    Command::new(&command_path)
-        .args(args)
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to run {} {}: {error}",
-                command_path.display(),
-                args.join(" ")
-            )
-        })
+    let mut command = Command::new(&command_path);
+    if let Some(path_env) = enhanced_path_env(Some(&command_path)) {
+        command.env("PATH", path_env);
+    }
+    command.args(args).output().map_err(|error| {
+        format!(
+            "failed to run {} {}: {error}",
+            command_path.display(),
+            args.join(" ")
+        )
+    })
+}
+
+fn openclaw_command(path: &Path) -> Command {
+    let mut command = Command::new(path);
+    if let Some(path_env) = enhanced_path_env(Some(path)) {
+        command.env("PATH", path_env);
+    }
+    command
 }
 
 fn session_title_from_key(key: &str) -> String {
@@ -1202,7 +1295,7 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
     let openclaw_path = resolve_openclaw_command()
         .filter(|path| {
-            Command::new(path)
+            openclaw_command(path)
                 .arg("--version")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -1414,6 +1507,18 @@ fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn openclaw_terminal_env_prefix(command_path: &Path) -> String {
+    let Some(path_env) = enhanced_path_env(Some(command_path)) else {
+        return String::new();
+    };
+    let path_text = path_env.to_string_lossy();
+    if cfg!(windows) {
+        format!("$env:PATH = {}; ", powershell_quote(&path_text))
+    } else {
+        format!("export PATH={}; ", shell_quote(&path_text))
+    }
+}
+
 fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
     let command_path = resolve_openclaw_command().ok_or_else(|| {
         "OpenClaw command not found. Expected openclaw in PATH, ~/.openclaw/bin/openclaw, or %USERPROFILE%\\.openclaw\\bin\\openclaw.cmd".to_string()
@@ -1424,9 +1529,9 @@ fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
         shell_quote
     };
     let mut parts = if cfg!(windows) {
-        vec![format!("& {}", quote(&command_path.to_string_lossy()))]
+        vec![format!("{}& {}", openclaw_terminal_env_prefix(&command_path), quote(&command_path.to_string_lossy()))]
     } else {
-        vec![quote(&command_path.to_string_lossy())]
+        vec![format!("{}{}", openclaw_terminal_env_prefix(&command_path), quote(&command_path.to_string_lossy()))]
     };
     parts.extend(args.iter().map(|arg| quote(arg)));
     Ok(parts.join(" "))
@@ -1501,8 +1606,31 @@ fn open_terminal_command(command_line: &str, label: &str) -> Result<(), String> 
 fn npm_command_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     candidates.push(PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" }));
+    for command_path in openclaw_candidate_paths() {
+        if let Some(bin_dir) = command_path.parent() {
+            candidates.push(bin_dir.join(if cfg!(windows) { "npm.cmd" } else { "npm" }));
+        }
+    }
 
     if let Ok(home) = home_dir() {
+        if cfg!(windows) {
+            candidates.extend([
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("npm.cmd"),
+                home.join("scoop").join("shims").join("npm.cmd"),
+            ]);
+        } else {
+            candidates.extend([
+                home.join("Library").join("pnpm").join("npm"),
+                home.join(".npm-global").join("bin").join("npm"),
+                home.join(".local").join("bin").join("npm"),
+                PathBuf::from("/opt/homebrew/bin/npm"),
+                PathBuf::from("/usr/local/bin/npm"),
+            ]);
+        }
+
         if let Ok(entries) = fs::read_dir(home.join(".openclaw").join("tools")) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -1524,19 +1652,34 @@ fn npm_command_candidates() -> Vec<PathBuf> {
         }
     }
 
+    let mut seen = std::collections::HashSet::new();
     candidates
+        .into_iter()
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
 }
 
 fn latest_npm_package_version(package_name: &str) -> Result<String, String> {
     let mut errors = Vec::new();
     for npm in npm_command_candidates() {
-        let output = Command::new(&npm)
+        let mut command = Command::new(&npm);
+        if let Some(path_env) = enhanced_path_env(Some(&npm)) {
+            command.env("PATH", path_env);
+        }
+        let output = command
             .args(["view", package_name, "version", "--json"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output();
         let Ok(output) = output else {
-            errors.push(format!("{}: command failed to start", npm.display()));
+            errors.push(format!(
+                "{}: command failed to start: {}",
+                npm.display(),
+                output
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_default()
+            ));
             continue;
         };
         if !output.status.success() {
@@ -1602,7 +1745,7 @@ fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
 fn openclaw_cli_status_blocking() -> OpenClawCliStatus {
     let command_path = resolve_openclaw_command().filter(|path| path.is_file());
     let installed_version = command_path.as_ref().and_then(|path| {
-        let output = Command::new(path)
+        let output = openclaw_command(path)
             .arg("--version")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

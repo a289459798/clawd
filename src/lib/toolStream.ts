@@ -137,6 +137,36 @@ export const messageOrderKey = (message: PreviewMessage) => {
   return `${role}|${timestamp}|${text}|${parts}`;
 };
 
+const normalizeMessageText = (value?: string) => (value ?? "").replace(/^__streaming__(?:[^_]+__)?/, "").trim();
+
+const normalizePartForContentKey = (part: MessagePart) => {
+  if (part.kind === "text") return { kind: part.kind, text: normalizeMessageText(part.text) };
+  if (part.kind === "tool_call") return { kind: part.kind, tool: part.tool, args: part.args ?? "" };
+  if (part.kind === "tool_result") return { kind: part.kind, tool: part.tool ?? "", text: part.text ?? "" };
+  if (part.kind === "image") return { kind: part.kind, data: part.data, mime_type: part.mime_type ?? "", alt: part.alt ?? "" };
+  return { kind: part.kind, name: part.name, path: part.path ?? "", mime_type: part.mime_type ?? "", size: part.size ?? 0 };
+};
+
+export const messageContentKey = (message: PreviewMessage) => {
+  const role = message.role?.toLowerCase() ?? "";
+  const text = normalizeMessageText(message.text);
+  const parts = (message.parts ?? [])
+    .map(normalizePartForContentKey)
+    .filter((part) => part.kind !== "text" || ("text" in part && part.text));
+  return `${role}|${text}|${JSON.stringify(parts)}`;
+};
+
+const timestampsCompatibleForReplacement = (left?: number, right?: number) => {
+  if (typeof left !== "number" || typeof right !== "number") return true;
+  return Math.abs(left - right) <= 2 * 60 * 1000;
+};
+
+const shouldReplaceWithSnapshotMessage = (current: PreviewMessage, snapshot: PreviewMessage) => {
+  if (messageContentKey(current) !== messageContentKey(snapshot)) return false;
+  if (!timestampsCompatibleForReplacement(current.timestamp, snapshot.timestamp)) return false;
+  return true;
+};
+
 export const mergeSnapshotMessagesPreservingCurrentOrder = (currentMessages: PreviewMessage[] = [], snapshotMessages: PreviewMessage[] = []) => {
   if (currentMessages.length === 0) return snapshotMessages;
   if (snapshotMessages.length === 0) return currentMessages;
@@ -146,6 +176,13 @@ export const mergeSnapshotMessagesPreservingCurrentOrder = (currentMessages: Pre
   for (const message of snapshotMessages) {
     const key = messageOrderKey(message);
     if (seen.has(key)) continue;
+    const replaceIndex = next.findIndex((item) => shouldReplaceWithSnapshotMessage(item.message, message));
+    if (replaceIndex >= 0) {
+      seen.delete(messageOrderKey(next[replaceIndex].message));
+      next[replaceIndex] = { ...next[replaceIndex], message };
+      seen.add(key);
+      continue;
+    }
     seen.add(key);
     next.push({ message, index: next.length });
   }

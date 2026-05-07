@@ -26,6 +26,47 @@ describe("mergeSnapshotMessagesPreservingCurrentOrder", () => {
     ];
     expect(mergeSnapshotMessagesPreservingCurrentOrder(full, gatewayWindow)).toEqual(full);
   });
+
+  it("replaces local streaming final text with canonical snapshot instead of duplicating it", () => {
+    const current: PreviewMessage[] = [
+      { role: "user", text: "讲个笑话", timestamp: 1000 },
+      {
+        role: "assistant",
+        text: "__streaming__run-1__好的",
+        parts: [{ kind: "text", text: "好的" }],
+        timestamp: 2000,
+      },
+    ];
+    const snapshot: PreviewMessage[] = [
+      { role: "user", text: "讲个笑话", timestamp: 1000 },
+      {
+        role: "assistant",
+        text: "好的",
+        parts: [{ kind: "text", text: "好的" }],
+        timestamp: 2500,
+        model: "moonshot/kimi-k2.5",
+        output_tokens: 12,
+      },
+    ];
+
+    expect(mergeSnapshotMessagesPreservingCurrentOrder(current, snapshot)).toEqual([
+      { role: "user", text: "讲个笑话", timestamp: 1000 },
+      {
+        role: "assistant",
+        text: "好的",
+        parts: [{ kind: "text", text: "好的" }],
+        timestamp: 2500,
+        model: "moonshot/kimi-k2.5",
+        output_tokens: 12,
+      },
+    ]);
+  });
+
+  it("does not collapse repeated same text messages that are far apart", () => {
+    const first: PreviewMessage = { role: "assistant", text: "收到", timestamp: 1000 };
+    const second: PreviewMessage = { role: "assistant", text: "收到", timestamp: 10 * 60 * 1000 };
+    expect(mergeSnapshotMessagesPreservingCurrentOrder([first], [second])).toEqual([first, second]);
+  });
 });
 
 describe("buildToolTimelineItems", () => {
