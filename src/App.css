@@ -23,7 +23,8 @@
 .pets-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
+  padding-top: 0;
 }
 
 .page-header,
@@ -64,27 +65,39 @@
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
+  grid-template-columns: minmax(340px, 470px) minmax(300px, 1fr);
   gap: 14px;
 }
 
 .pets-list,
-.pet-detail-panel {
+.pet-detail-panel,
+.pets-list-panel {
   min-height: 0;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.035);
   border-radius: 10px;
 }
 
+.pets-list-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
 .pets-list {
   padding: 8px;
   overflow: auto;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
 }
 
 .pet-row {
   width: 100%;
   min-height: 72px;
   padding: 10px;
+  display: flex;
+  align-items: center;
   gap: 12px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -92,12 +105,14 @@
   color: var(--text);
   text-align: left;
   cursor: pointer;
+  outline: none;
 }
 
 .pet-row:hover,
+.pet-row:focus-visible,
 .pet-row.active {
-  border-color: rgba(82, 242, 197, 0.22);
-  background: rgba(82, 242, 197, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .pet-row-avatar,
@@ -126,6 +141,23 @@
   object-fit: cover;
 }
 
+.pet-sprite-preview {
+  display: block;
+  width: 34px;
+  height: 37px;
+  max-width: 100%;
+  background-color: transparent;
+  overflow: hidden;
+}
+
+.pet-sprite-atlas {
+  display: block;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  transform-origin: left top;
+}
+
 .pet-row-main {
   min-width: 0;
   flex: 1;
@@ -149,42 +181,132 @@
   font-size: 0.78rem;
 }
 
-.pet-row-status {
-  max-width: 82px;
+.pet-row-summon {
+  flex-shrink: 0;
+  min-width: 72px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.pet-row-summon:hover:not(:disabled) {
+  border-color: rgba(82, 242, 197, 0.28);
+  background: rgba(82, 242, 197, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.pet-row-summon:disabled {
+  cursor: default;
+  color: rgba(255, 255, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.pet-row-summon.summoned {
+  color: rgba(82, 242, 197, 0.72);
+  border-color: rgba(82, 242, 197, 0.16);
 }
 
 .pet-detail-panel {
-  padding: 18px;
+  padding: 22px 20px 18px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .pet-detail-hero {
-  gap: 16px;
-  align-items: flex-start;
+  display: grid;
+  gap: 18px;
+  justify-items: center;
+  text-align: center;
+  padding-top: 10px;
 }
 
 .pet-detail-avatar {
-  width: 86px;
-  height: 86px;
+  width: 224px;
+  height: 244px;
   font-size: 3.1rem;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.pet-detail-avatar .pet-sprite-preview,
+.pet-state-sprite .pet-sprite-preview {
+  width: 204px;
+  height: 221px;
+}
+
+.pet-state-sprite .pet-sprite-preview {
+  width: 50px;
+  height: 54px;
 }
 
 .pet-detail-hero h2 {
-  margin: 4px 0 8px;
+  margin: 0 0 8px;
   font-size: 1.2rem;
+}
+
+.pet-detail-copy {
+  max-width: 34rem;
+  margin-bottom: 8px;
 }
 
 .pet-detail-hero p,
 .pet-context-preview p {
+  margin: 0;
   color: rgba(255, 255, 255, 0.7);
   line-height: 1.55;
+}
+
+.pet-summon-button {
+  width: 100%;
+}
+
+.pet-state-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.pet-state-preview {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  padding: 10px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pet-state-preview strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.78rem;
+}
+
+.pet-state-preview span {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.pet-state-sprite {
+  width: 54px;
+  min-height: 58px;
+  display: grid;
+  place-items: center;
 }
 
 .pet-meta-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin: 18px 0 0;
+  margin: 24px 0 0;
 }
 
 .pet-meta-grid div,
@@ -210,6 +332,55 @@
   margin-top: 14px;
   display: grid;
   gap: 8px;
+}
+
+.pet-detail-empty {
+  height: 100%;
+  min-height: 220px;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.pet-detail-empty strong {
+  color: var(--text);
+}
+
+.pets-list-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.pets-list-actions button {
+  min-width: 84px;
+}
+
+@media (max-width: 900px) {
+  .pets-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .pets-list-panel {
+    min-height: 280px;
+  }
+}
+
+@media (max-width: 640px) {
+  .pet-detail-hero {
+    display: grid;
+    justify-items: start;
+  }
+
+  .pet-state-preview-grid,
+  .pet-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .page-inline-message,
@@ -466,8 +637,27 @@
 }
 
 .pet-avatar-large.has-image::before,
-.pet-avatar-large.has-image::after {
+.pet-avatar-large.has-image::after,
+.pet-avatar-large.has-sprite::before,
+.pet-avatar-large.has-sprite::after {
   display: none;
+}
+
+.pet-avatar-large.has-sprite {
+  width: 90px;
+  height: 98px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.pet-sprite-frame {
+  width: 90px;
+  height: 98px;
+  background-color: transparent;
+  overflow: hidden;
+  transform-origin: center bottom;
 }
 
 .pet-avatar-large img {
@@ -479,10 +669,6 @@
 .pet-avatar-large span {
   position: relative;
   z-index: 2;
-}
-
-.pet-character-layer.busy .pet-avatar-large {
-  animation: pet-breathe 1.2s ease-in-out infinite;
 }
 
 .pet-shadow {
@@ -524,16 +710,6 @@
 .pet-context-menu button:hover {
   background: rgba(240, 139, 125, 0.16);
   color: #ffffff;
-}
-
-@keyframes pet-breathe {
-  0%,
-  100% {
-    transform: translateY(0) scale(1);
-  }
-  50% {
-    transform: translateY(-5px) scale(1.03);
-  }
 }
 
 * {

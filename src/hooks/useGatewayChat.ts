@@ -146,6 +146,7 @@ export function useGatewayChat({
                       ...currentConversation.runtime,
                       activeRunId: toolRunId,
                       activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
+                      lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt ?? eventTimestamp,
                       lastEventAt: eventTimestamp,
                     },
                   };
@@ -238,6 +239,7 @@ export function useGatewayChat({
                       ...currentConversation.runtime,
                       activeRunId: effectiveRunId,
                       activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
+                      lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt ?? eventTimestamp,
                       lastEventAt: eventTimestamp,
                     },
                   };
@@ -358,6 +360,7 @@ export function useGatewayChat({
                       ...currentConversation.runtime,
                       activeRunId: undefined,
                       activeStartedAt: undefined,
+                      lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
                       lastEventAt: eventTimestamp,
                       lastTerminalAt: eventTimestamp,
                       lastTerminalReason: chat.state === "aborted" ? "aborted" : "completed",
@@ -391,6 +394,7 @@ export function useGatewayChat({
                     ...currentConversation.runtime,
                     activeRunId: undefined,
                     activeStartedAt: undefined,
+                    lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
                     lastEventAt: Date.now(),
                     lastTerminalAt: Date.now(),
                     lastTerminalReason: "error",

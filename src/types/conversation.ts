@@ -27,6 +27,7 @@ export type PreviewMessage = {
 export type ConversationRuntime = {
   activeRunId?: string | null;
   activeStartedAt?: number;
+  lastRunStartedAt?: number;
   lastEventAt?: number;
   lastTerminalAt?: number;
   lastTerminalReason?: "completed" | "aborted" | "error" | "failed" | "timeout" | "killed" | "cancelled" | "interrupted";

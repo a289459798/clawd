@@ -1,3 +1,16 @@
+export type PetAtlas = {
+  columns: number;
+  rows: number;
+  cellWidth: number;
+  cellHeight: number;
+};
+
+export type PetAnimation = {
+  row: number;
+  frames: number;
+  frameMs: number[];
+};
+
 export type PetSummary = {
   id: string;
   name: string;
@@ -8,6 +21,10 @@ export type PetSummary = {
   path?: string | null;
   icon?: string | null;
   image?: string | null;
+  spritesheet?: string | null;
+  spritesheetDataUrl?: string | null;
+  atlas?: PetAtlas | null;
+  animations?: Record<string, PetAnimation> | null;
   compatibleWith: string[];
 };
 

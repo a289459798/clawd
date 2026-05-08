@@ -1,5 +1,6 @@
 mod gateway_proxy;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -11,8 +12,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri::utils::config::Color;
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
 #[derive(Serialize, Clone)]
 struct AgentSummary {
@@ -168,19 +172,46 @@ struct PetSummary {
     path: Option<String>,
     icon: Option<String>,
     image: Option<String>,
+    spritesheet: Option<String>,
+    spritesheet_data_url: Option<String>,
+    atlas: Option<PetAtlas>,
+    animations: Option<HashMap<String, PetAnimation>>,
     compatible_with: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PetAtlas {
+    columns: u32,
+    rows: u32,
+    cell_width: u32,
+    cell_height: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PetAnimation {
+    row: u32,
+    frames: u32,
+    frame_ms: Vec<u32>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PetManifestDraft {
     id: Option<String>,
+    #[serde(alias = "displayName")]
     name: Option<String>,
     species: Option<String>,
     description: Option<String>,
     status: Option<String>,
     icon: Option<String>,
     image: Option<String>,
+    spritesheet_path: Option<String>,
+    spritesheet: Option<String>,
+    atlas: Option<PetAtlas>,
+    #[serde(default, alias = "states")]
+    animations: HashMap<String, PetAnimation>,
     #[serde(default)]
     compatible_with: Vec<String>,
 }
@@ -227,11 +258,37 @@ fn codex_pets_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".codex").join("pets"))
 }
 
+fn clawkit_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".clawkit"))
+}
+
+fn clawkit_pets_dir() -> Result<PathBuf, String> {
+    Ok(clawkit_dir()?.join("pets"))
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .map_err(|error| format!("home directory not found: {error}"))
+}
+
+fn ensure_clawkit_home() -> Result<(), String> {
+    let root = clawkit_dir()?;
+    fs::create_dir_all(root.join("pets"))
+        .map_err(|error| format!("failed to create {}: {error}", root.join("pets").display()))?;
+    fs::create_dir_all(root.join("skills")).map_err(|error| {
+        format!(
+            "failed to create {}: {error}",
+            root.join("skills").display()
+        )
+    })?;
+    let config_path = root.join("clawkit.json");
+    if !config_path.exists() {
+        fs::write(&config_path, "{\n  \"version\": 1\n}\n")
+            .map_err(|error| format!("failed to create {}: {error}", config_path.display()))?;
+    }
+    Ok(())
 }
 
 fn clawx_recommended_origin() -> String {
@@ -1563,9 +1620,17 @@ fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
         shell_quote
     };
     let mut parts = if cfg!(windows) {
-        vec![format!("{}& {}", openclaw_terminal_env_prefix(&command_path), quote(&command_path.to_string_lossy()))]
+        vec![format!(
+            "{}& {}",
+            openclaw_terminal_env_prefix(&command_path),
+            quote(&command_path.to_string_lossy())
+        )]
     } else {
-        vec![format!("{}{}", openclaw_terminal_env_prefix(&command_path), quote(&command_path.to_string_lossy()))]
+        vec![format!(
+            "{}{}",
+            openclaw_terminal_env_prefix(&command_path),
+            quote(&command_path.to_string_lossy())
+        )]
     };
     parts.extend(args.iter().map(|arg| quote(arg)));
     Ok(parts.join(" "))
@@ -2012,21 +2077,6 @@ fn openclaw_gateway_service_command(action: &'static str) -> Result<String, Stri
     }
 }
 
-fn default_pet_summary() -> PetSummary {
-    PetSummary {
-        id: "rock".to_string(),
-        name: "Pet Rock".to_string(),
-        species: "rock".to_string(),
-        description: "Codex 兼容的默认宠物。安静、稳定，偶尔显示当前对话状态。".to_string(),
-        status: "content".to_string(),
-        source: "builtin".to_string(),
-        path: None,
-        icon: Some("rock".to_string()),
-        image: None,
-        compatible_with: vec!["codex".to_string(), "clawx".to_string()],
-    }
-}
-
 fn pet_manifest_path(path: &Path) -> Option<PathBuf> {
     if path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("json") {
         return Some(path.to_path_buf());
@@ -2054,7 +2104,70 @@ fn slugify_pet_id(value: &str) -> String {
     }
 }
 
-fn read_pet_summary(path: &Path) -> Option<PetSummary> {
+fn codex_pet_atlas() -> PetAtlas {
+    PetAtlas {
+        columns: 8,
+        rows: 9,
+        cell_width: 192,
+        cell_height: 208,
+    }
+}
+
+fn codex_pet_animations() -> HashMap<String, PetAnimation> {
+    [
+        ("idle", 0, vec![280, 110, 110, 140, 140, 320]),
+        (
+            "running-right",
+            1,
+            vec![120, 120, 120, 120, 120, 120, 120, 220],
+        ),
+        (
+            "running-left",
+            2,
+            vec![120, 120, 120, 120, 120, 120, 120, 220],
+        ),
+        ("waving", 3, vec![140, 140, 140, 280]),
+        ("jumping", 4, vec![140, 140, 140, 140, 280]),
+        ("failed", 5, vec![140, 140, 140, 140, 140, 140, 140, 240]),
+        ("waiting", 6, vec![150, 150, 150, 150, 150, 260]),
+        ("running", 7, vec![120, 120, 120, 120, 120, 220]),
+        ("review", 8, vec![150, 150, 150, 150, 150, 280]),
+    ]
+    .into_iter()
+    .map(|(state, row, frame_ms)| {
+        (
+            state.to_string(),
+            PetAnimation {
+                row,
+                frames: frame_ms.len() as u32,
+                frame_ms,
+            },
+        )
+    })
+    .collect()
+}
+
+fn resolve_pet_asset(root_path: &Path, value: Option<String>) -> Option<String> {
+    value.map(|asset| root_path.join(asset).to_string_lossy().to_string())
+}
+
+fn pet_asset_data_url(path: Option<&str>) -> Option<String> {
+    let path = path?;
+    let bytes = fs::read(path).ok()?;
+    let mime = match Path::new(path).extension().and_then(|value| value.to_str()) {
+        Some("webp") => "image/webp",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        _ => "application/octet-stream",
+    };
+    Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+fn read_pet_summary(path: &Path, source: &str) -> Option<PetSummary> {
     let manifest_path = pet_manifest_path(path)?;
     let raw = fs::read_to_string(&manifest_path).ok()?;
     let draft = serde_json::from_str::<PetManifestDraft>(&raw).ok()?;
@@ -2079,19 +2192,37 @@ fn read_pet_summary(path: &Path) -> Option<PetSummary> {
     } else {
         path.to_path_buf()
     };
-    let image = draft.image.map(|image| root_path.join(image).to_string_lossy().to_string());
+    let spritesheet = resolve_pet_asset(
+        &root_path,
+        draft.spritesheet_path.or(draft.spritesheet.clone()),
+    );
+    let image = resolve_pet_asset(&root_path, draft.image).or_else(|| spritesheet.clone());
+    let has_spritesheet = spritesheet.is_some();
+    let animations = if draft.animations.is_empty() && has_spritesheet {
+        Some(codex_pet_animations())
+    } else if draft.animations.is_empty() {
+        None
+    } else {
+        Some(draft.animations)
+    };
     Some(PetSummary {
         id,
         name,
         species,
         description,
         status,
-        source: "codex".to_string(),
+        source: source.to_string(),
         path: Some(root_path.to_string_lossy().to_string()),
         icon: draft.icon,
         image,
+        spritesheet_data_url: pet_asset_data_url(spritesheet.as_deref()),
+        spritesheet,
+        atlas: draft
+            .atlas
+            .or_else(|| has_spritesheet.then(codex_pet_atlas)),
+        animations,
         compatible_with: if draft.compatible_with.is_empty() {
-            vec!["codex".to_string()]
+            vec!["codex".to_string(), "clawx".to_string()]
         } else {
             draft.compatible_with
         },
@@ -2099,15 +2230,21 @@ fn read_pet_summary(path: &Path) -> Option<PetSummary> {
 }
 
 fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination).map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
-    for entry in fs::read_dir(source).map_err(|error| format!("failed to read {}: {error}", source.display()))? {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("failed to read {}: {error}", source.display()))?
+    {
         let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
-        let file_type = entry.file_type().map_err(|error| format!("failed to inspect file type: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to inspect file type: {error}"))?;
         let target = destination.join(entry.file_name());
         if file_type.is_dir() {
             copy_dir_all(&entry.path(), &target)?;
         } else if file_type.is_file() {
-            fs::copy(entry.path(), &target).map_err(|error| format!("failed to copy {}: {error}", target.display()))?;
+            fs::copy(entry.path(), &target)
+                .map_err(|error| format!("failed to copy {}: {error}", target.display()))?;
         }
     }
     Ok(())
@@ -2125,20 +2262,31 @@ fn position_pet_window_bottom_right(window: &WebviewWindow) {
     let margin = 28_i32;
     let x = monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - margin;
     let y = monitor_position.y + monitor_size.height as i32 - window_size.height as i32 - margin;
-    let _ = window.set_position(PhysicalPosition::new(x.max(monitor_position.x), y.max(monitor_position.y)));
+    let _ = window.set_position(PhysicalPosition::new(
+        x.max(monitor_position.x),
+        y.max(monitor_position.y),
+    ));
 }
 
 #[tauri::command]
 async fn list_codex_pets() -> Result<Vec<PetSummary>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let pets_dir = codex_pets_dir()?;
-        fs::create_dir_all(&pets_dir).map_err(|error| format!("failed to create {}: {error}", pets_dir.display()))?;
-        let mut pets = vec![default_pet_summary()];
-        for entry in fs::read_dir(&pets_dir).map_err(|error| format!("failed to read {}: {error}", pets_dir.display()))? {
-            let entry = entry.map_err(|error| format!("failed to read pet entry: {error}"))?;
-            if let Some(summary) = read_pet_summary(&entry.path()) {
-                if !pets.iter().any(|pet| pet.id == summary.id) {
-                    pets.push(summary);
+        let mut pets = Vec::new();
+        for (source, pets_dir) in [
+            ("codex", codex_pets_dir()?),
+            ("clawkit", clawkit_pets_dir()?),
+        ] {
+            if !pets_dir.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&pets_dir)
+                .map_err(|error| format!("failed to read {}: {error}", pets_dir.display()))?
+            {
+                let entry = entry.map_err(|error| format!("failed to read pet entry: {error}"))?;
+                if let Some(summary) = read_pet_summary(&entry.path(), source) {
+                    if !pets.iter().any(|pet: &PetSummary| pet.id == summary.id) {
+                        pets.push(summary);
+                    }
                 }
             }
         }
@@ -2151,16 +2299,17 @@ async fn list_codex_pets() -> Result<Vec<PetSummary>, String> {
 #[tauri::command]
 async fn import_codex_pet() -> Result<PetSummary, String> {
     tauri::async_runtime::spawn_blocking(|| {
+        ensure_clawkit_home()?;
         let picked = rfd::FileDialog::new()
             .set_title("选择宠物目录或 pet.json")
             .add_filter("Pet manifest", &["json"])
             .pick_folder()
             .or_else(|| rfd::FileDialog::new().set_title("选择 pet.json").add_filter("Pet manifest", &["json"]).pick_file())
             .ok_or_else(|| "未选择宠物文件或目录。".to_string())?;
-        let summary = read_pet_summary(&picked).ok_or_else(|| {
+        let summary = read_pet_summary(&picked, "clawkit").ok_or_else(|| {
             "未找到可识别的宠物清单。请导入包含 pet.json、manifest.json 或 codex-pet.json 的目录。".to_string()
         })?;
-        let pets_dir = codex_pets_dir()?;
+        let pets_dir = clawkit_pets_dir()?;
         fs::create_dir_all(&pets_dir).map_err(|error| format!("failed to create {}: {error}", pets_dir.display()))?;
         let target_dir = pets_dir.join(slugify_pet_id(&summary.id));
         if target_dir.exists() {
@@ -2169,11 +2318,10 @@ async fn import_codex_pet() -> Result<PetSummary, String> {
         if picked.is_dir() {
             copy_dir_all(&picked, &target_dir)?;
         } else {
-            fs::create_dir_all(&target_dir).map_err(|error| format!("failed to create {}: {error}", target_dir.display()))?;
-            let file_name = picked.file_name().ok_or_else(|| "无效的宠物文件名。".to_string())?;
-            fs::copy(&picked, target_dir.join(file_name)).map_err(|error| format!("failed to import pet: {error}"))?;
+            let source_dir = picked.parent().ok_or_else(|| "无效的宠物文件路径。".to_string())?;
+            copy_dir_all(source_dir, &target_dir)?;
         }
-        read_pet_summary(&target_dir).ok_or_else(|| "宠物已导入，但无法重新读取清单。".to_string())
+        read_pet_summary(&target_dir, "clawkit").ok_or_else(|| "宠物已导入，但无法重新读取清单。".to_string())
     })
     .await
     .map_err(|error| format!("failed to import pet: {error}"))?
@@ -2189,7 +2337,8 @@ async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
         let _ = window.emit("clawx://pet-selected", pet_id);
         return Ok(());
     }
-    let url = WebviewUrl::App(format!("index.html?window=pet&petId={}", slugify_pet_id(&pet_id)).into());
+    let url =
+        WebviewUrl::App(format!("index.html?window=pet&petId={}", slugify_pet_id(&pet_id)).into());
     let window = WebviewWindowBuilder::new(&app, label, url)
         .title("Clawx Pet")
         .inner_size(420.0, 300.0)
@@ -2241,6 +2390,12 @@ pub fn run() {
         .manage(Arc::new(RealtimeState::default()))
         .manage(Arc::new(gateway_proxy::GatewayProxyState::default()))
         .plugin(tauri_plugin_opener::init())
+        .setup(|_| {
+            if let Err(error) = ensure_clawkit_home() {
+                eprintln!("failed to initialize .clawkit: {error}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             resolve_dashboard_url,
             load_openclaw_snapshot,

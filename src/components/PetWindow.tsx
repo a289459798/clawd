@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { PetConversationContext, PetSummary } from "../types/pet";
+import type { PetAnimation, PetConversationContext, PetSummary } from "../types/pet";
 import "../App.css";
 
 const emptyContext: PetConversationContext = {
@@ -19,12 +20,6 @@ function readStoredContext() {
   } catch {
     return emptyContext;
   }
-}
-
-function glyphForPet(pet: PetSummary | null) {
-  if (!pet) return "●";
-  if (pet.icon === "rock" || pet.species.toLowerCase() === "rock") return "●";
-  return "◆";
 }
 
 function compactLine(value: string | null | undefined, fallback: string) {
@@ -44,14 +39,33 @@ function compactTail(value: string | null | undefined, fallback: string) {
   return `…${tail.slice(-120)}`;
 }
 
+type PetRuntimeState = "idle" | "waiting" | "running" | "failed" | "review";
+
+function resolvePetState(replies: PetConversationContext["replies"], status: string): PetRuntimeState {
+  const items = replies ?? [];
+  if (items.some((reply) => reply.status === "failed" || reply.status === "error" || reply.status === "stopped")) return "failed";
+  if (items.some((reply) => reply.loading)) return "waiting";
+  if (items.some((reply) => reply.status === "working") || status === "working") return "running";
+  if (items.length > 0) return "review";
+  return "idle";
+}
+
+function resolveAnimation(pet: PetSummary | null, state: string): PetAnimation | null {
+  const animations = pet?.animations ?? null;
+  if (!animations) return null;
+  return animations[state] ?? animations.review ?? animations.waiting ?? animations.idle ?? null;
+}
+
 export function PetWindow() {
-  const initialPetId = new URLSearchParams(window.location.search).get("petId") ?? "rock";
+  const initialPetId = new URLSearchParams(window.location.search).get("petId") ?? "";
   const [pets, setPets] = useState<PetSummary[]>([]);
   const [petId, setPetId] = useState(initialPetId);
   const [context, setContext] = useState<PetConversationContext>(readStoredContext);
   const [collapsed, setCollapsed] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [lastExpandedSignature, setLastExpandedSignature] = useState("");
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [hoveringPet, setHoveringPet] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.add("pet-window-document");
@@ -80,12 +94,17 @@ export function PetWindow() {
   }, []);
 
   const pet = useMemo(
-    () => pets.find((item) => item.id === petId) ?? pets.find((item) => item.id === "rock") ?? null,
+    () => pets.find((item) => item.id === petId) ?? pets[0] ?? null,
     [petId, pets],
   );
   const replies = context.replies ?? [];
   const busy = replies.some((reply) => reply.loading) || context.status === "working";
-  const imageSrc = pet?.image ? convertFileSrc(pet.image) : null;
+  const petState = resolvePetState(replies, context.status);
+  const effectivePetState = hoveringPet && (petState === "idle" || petState === "waiting") ? "waving" : petState;
+  const animation = resolveAnimation(pet, effectivePetState);
+  const atlas = pet?.atlas ?? null;
+  const spritesheetSrc = pet?.spritesheetDataUrl ?? (pet?.spritesheet ? convertFileSrc(pet.spritesheet) : null);
+  const imageSrc = !spritesheetSrc && pet?.image ? convertFileSrc(pet.image) : null;
   const hasReplies = replies.length > 0;
   const visibleReplies = replies.slice(0, 4);
   const hiddenCount = visibleReplies.length;
@@ -102,6 +121,28 @@ export function PetWindow() {
       setLastExpandedSignature(replySignature);
     }
   }, [replySignature, hasReplies, lastExpandedSignature]);
+
+  useEffect(() => {
+    setFrameIndex(0);
+  }, [pet?.id, effectivePetState]);
+
+  useEffect(() => {
+    if (!animation || animation.frames <= 1) return;
+    const currentFrame = frameIndex % animation.frames;
+    const frameMs = animation.frameMs[currentFrame % animation.frameMs.length] ?? 140;
+    const timer = window.setTimeout(() => {
+      setFrameIndex((value) => (value + 1) % animation.frames);
+    }, frameMs);
+    return () => window.clearTimeout(timer);
+  }, [animation, frameIndex]);
+
+  const currentFrame = animation ? frameIndex % animation.frames : 0;
+  const spriteStyle = spritesheetSrc && atlas && animation ? {
+    width: `${atlas.columns * 100}%`,
+    height: `${atlas.rows * 100}%`,
+    transform: `translate(${-currentFrame * (100 / atlas.columns)}%, ${-animation.row * (100 / atlas.rows)}%)`,
+  } as CSSProperties : null;
+
   const handleStartDrag = (event: React.MouseEvent<HTMLElement>) => {
     if (event.button !== 0) return;
     if ((event.target as HTMLElement).closest("button")) return;
@@ -148,7 +189,11 @@ export function PetWindow() {
         </section>
       ) : null}
 
-      <section className={`pet-character-layer ${busy ? "busy" : ""}`}>
+      <section
+        className={`pet-character-layer ${busy ? "busy" : ""} state-${effectivePetState}`}
+        onMouseEnter={() => setHoveringPet(true)}
+        onMouseLeave={() => setHoveringPet(false)}
+      >
         {hasReplies ? (
           <button
             className={`pet-collapse-button ${collapsed ? "collapsed" : ""}`}
@@ -168,8 +213,13 @@ export function PetWindow() {
             )}
           </button>
         ) : null}
-        <div className={`pet-avatar-large ${imageSrc ? "has-image" : ""}`} aria-hidden="true">
-          {imageSrc ? <img src={imageSrc} alt="" /> : <span>{glyphForPet(pet)}</span>}
+        <div className={`pet-avatar-large ${spritesheetSrc ? "has-sprite" : ""} ${imageSrc ? "has-image" : ""}`} aria-hidden="true">
+          {spriteStyle && spritesheetSrc ? (
+            <div className="pet-sprite-frame">
+              <img className="pet-sprite-atlas" src={spritesheetSrc} alt="" style={spriteStyle} />
+            </div>
+          ) : null}
+          {!spriteStyle && imageSrc ? <img src={imageSrc} alt="" /> : null}
         </div>
         <div className="pet-shadow" />
       </section>

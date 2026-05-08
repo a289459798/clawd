@@ -51,7 +51,35 @@ const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
-const PET_COMPLETED_VISIBLE_MS = 60 * 1000;
+const BOOTSTRAP_DEBUG_STORAGE_KEY = "clawx.debug.bootstrapStep";
+
+function readBootstrapDebugStep() {
+  try {
+    const value = window.localStorage.getItem(BOOTSTRAP_DEBUG_STORAGE_KEY);
+    return value === "install" || value === "bind" || value === "connect_test" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildBootstrapDebugStatus(step: "install" | "bind" | "connect_test"): ClawxBootstrapStatus {
+  const base: ClawxBootstrapStatus = {
+    openclawInstalled: step !== "install",
+    openclawPath: step === "install" ? null : "/debug/openclaw",
+    configExists: step !== "install",
+    configPath: "~/.openclaw/openclaw.json",
+    bindingConfigured: step === "connect_test",
+    allowedOrigins: [],
+    recommendedOrigin: "http://localhost:1420",
+    gatewayPort: 18789,
+    bindingWrites: [
+      "gateway.clients.clawx.enabled = true",
+      "gateway.clients.clawx.origins += http://localhost:1420",
+    ],
+  };
+  return base;
+}
+const PET_COMPLETED_VISIBLE_MS = 10 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -94,20 +122,23 @@ function normalizePetTimestamp(value?: number) {
 }
 
 function resolvePetRunStartedAt(conversation: Conversation | null) {
-  return normalizePetTimestamp(conversation?.runtime?.activeStartedAt);
+  return normalizePetTimestamp(conversation?.runtime?.activeStartedAt ?? conversation?.runtime?.lastRunStartedAt);
 }
 
 function resolvePetLastReply(conversation: Conversation | null): string | null {
   if (!conversation) return null;
   const messages = conversation.previewMessages ?? [];
   const runStartedAt = resolvePetRunStartedAt(conversation);
+  const terminalAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt);
   const assistant = [...messages].reverse().find((message) => {
     if (message.role !== "assistant" || !message.text.trim()) return false;
     if (!runStartedAt) return true;
     const messageTime = normalizePetTimestamp(message.timestamp);
-    return typeof messageTime === "number" && messageTime >= runStartedAt - 1000;
+    return typeof messageTime === "number"
+      && messageTime >= runStartedAt - 1000
+      && (!terminalAt || messageTime <= terminalAt + 1000);
   });
-  if (runStartedAt) return assistant?.text.trim() || null;
+  if (runStartedAt) return assistant?.text.trim() || (conversation.lastRole === "assistant" ? conversation.lastMessage : null) || null;
   const fallback = conversation.lastRole === "assistant" ? conversation.lastMessage : null;
   return assistant?.text.trim() || fallback || null;
 }
@@ -119,18 +150,18 @@ function resolvePetLastUserMessage(conversation: Conversation | null): string | 
   return user?.text.trim() || null;
 }
 
-function conversationHasActivePetReply(conversation: Conversation) {
+function conversationHasActivePetReply(conversation: Conversation, now: number) {
   if (conversation.runtime?.activeRunId || conversation.status === "working") return true;
-  const completedAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt);
+  const completedAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt ?? conversation.updatedAt);
   return conversation.status === "completed"
     && typeof completedAt === "number"
-    && Date.now() - completedAt <= PET_COMPLETED_VISIBLE_MS;
+    && now - completedAt <= PET_COMPLETED_VISIBLE_MS;
 }
 
-function buildPetContext(agents: Agent[], conversation: Conversation | null): PetConversationContext {
+function buildPetContext(agents: Agent[], conversation: Conversation | null, now: number): PetConversationContext {
   const activeReplies = agents
     .flatMap((agent) => agent.conversations)
-    .filter((item) => conversationHasActivePetReply(item))
+    .filter((item) => conversationHasActivePetReply(item, now))
     .map((item) => {
       const reply = resolvePetLastReply(item);
       return {
@@ -341,7 +372,7 @@ function App() {
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [queuedMessagesByConversation, setQueuedMessagesByConversation] = useState<Record<string, QueuedComposerMessage[]>>({});
   const [sendErrorsByConversation, setSendErrorsByConversation] = useState<Record<string, string>>({});
-  const [sending, setSending] = useState(false);
+  const [, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoSendingQueuedMessageRef = useRef<string | null>(null);
   const agentsRef = useRef<Agent[]>(agentsSeed);
@@ -420,6 +451,12 @@ function App() {
     setBootstrapLoading(true);
     setBootstrapError(null);
     try {
+      const debugStep = readBootstrapDebugStep();
+      if (debugStep) {
+        setBootstrapStatus(buildBootstrapDebugStatus(debugStep));
+        setBootstrapStep(debugStep);
+        return;
+      }
       const status = await invoke<ClawxBootstrapStatus>("get_clawx_bootstrap_status");
       setBootstrapStatus(status);
       setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
@@ -723,6 +760,7 @@ function App() {
                       ...conversation.runtime,
                       activeRunId: conversation.runtime?.activeRunId ?? `snapshot-tool-${payload.session.key}`,
                       activeStartedAt: conversation.runtime?.activeStartedAt ?? nextUpdatedAt ?? Date.now(),
+                      lastRunStartedAt: conversation.runtime?.activeStartedAt ?? conversation.runtime?.lastRunStartedAt ?? nextUpdatedAt ?? Date.now(),
                       lastEventAt: nextUpdatedAt,
                     }
                   : isTerminalSnapshot
@@ -730,6 +768,7 @@ function App() {
                         ...conversation.runtime,
                         activeRunId: undefined,
                         activeStartedAt: undefined,
+                        lastRunStartedAt: conversation.runtime?.activeStartedAt ?? conversation.runtime?.lastRunStartedAt,
                         lastEventAt: nextUpdatedAt,
                         lastTerminalAt: nextUpdatedAt,
                         lastTerminalReason: terminalReason,
@@ -737,15 +776,17 @@ function App() {
                     : isActiveSnapshot && !isFreshActiveSnapshot
                       ? {
                           ...conversation.runtime,
-                          activeRunId: undefined,
-                          activeStartedAt: undefined,
-                          lastEventAt: nextUpdatedAt,
-                          lastTerminalAt: conversation.runtime?.lastTerminalAt ?? nextUpdatedAt,
-                          lastTerminalReason: conversation.runtime?.lastTerminalReason ?? "interrupted",
+                      activeRunId: undefined,
+                      activeStartedAt: undefined,
+                      lastRunStartedAt: conversation.runtime?.activeStartedAt ?? conversation.runtime?.lastRunStartedAt,
+                      lastEventAt: nextUpdatedAt,
+                      lastTerminalAt: conversation.runtime?.lastTerminalAt ?? nextUpdatedAt,
+                      lastTerminalReason: conversation.runtime?.lastTerminalReason ?? "interrupted",
                         }
                       : conversation.runtime ?? {
                       activeRunId: undefined,
                       activeStartedAt: undefined,
+                      lastRunStartedAt: undefined,
                       lastEventAt: nextUpdatedAt,
                       lastTerminalAt: nextLastRole === "assistant" ? nextUpdatedAt : undefined,
                       lastTerminalReason: nextLastRole === "assistant" ? "completed" : undefined,
@@ -837,6 +878,7 @@ function App() {
                 ...currentConversation.runtime,
                 activeRunId: undefined,
                 activeStartedAt: undefined,
+                lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
                 lastEventAt: disconnectedAt,
                 lastTerminalAt: disconnectedAt,
                 lastTerminalReason: "interrupted",
@@ -863,6 +905,7 @@ function App() {
               ...currentConversation.runtime,
               activeRunId: undefined,
               activeStartedAt: undefined,
+              lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
               lastEventAt: disconnectedAt,
               lastTerminalAt: disconnectedAt,
               lastTerminalReason: "interrupted",
@@ -1419,7 +1462,17 @@ function App() {
   // Always get activeConversation from agents to ensure we have the latest data
   // (including previewMessages updated by gateway_chat_history)
   const activeConversation = findConversationById(agents, activeConversationId);
-  const petContext = useMemo(() => buildPetContext(agents, activeConversation), [activeConversation, agents]);
+  const [petClock, setPetClock] = useState(() => Date.now());
+  const hasTimedPetReplies = useMemo(
+    () => agents.some((agent) => agent.conversations.some((conversation) => conversation.status === "completed" && typeof normalizePetTimestamp(conversation.runtime?.lastTerminalAt ?? conversation.updatedAt) === "number")),
+    [agents],
+  );
+  useEffect(() => {
+    if (!hasTimedPetReplies) return;
+    const interval = window.setInterval(() => setPetClock(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [hasTimedPetReplies]);
+  const petContext = useMemo(() => buildPetContext(agents, activeConversation, petClock), [activeConversation, agents, petClock]);
   const composerThinkingOptions = useMemo(
     () => resolveComposerThinkingOptions(activeConversation ?? null, gatewaySessionsDefaults),
     [activeConversation, gatewaySessionsDefaults],
@@ -1617,6 +1670,7 @@ function App() {
               runtime: conversation.runtime ?? {
                 activeRunId: undefined,
                 activeStartedAt: undefined,
+                lastRunStartedAt: undefined,
                 lastEventAt: conversation.updatedAt,
                 lastTerminalAt: lastAssistant ? conversation.updatedAt : undefined,
                 lastTerminalReason: lastAssistant ? "completed" : undefined,
@@ -1714,6 +1768,9 @@ function App() {
   }, []);
 
   const activeQueuedMessages = activeConversationId ? queuedMessagesByConversation[activeConversationId] ?? [] : [];
+  const activeConversationSending =
+    activeConversation?.status === "working" ||
+    Boolean(activeConversation?.runtime?.activeRunId);
   const activeSendError = activeConversationId ? sendErrorsByConversation[activeConversationId] ?? null : null;
 
   const enqueueComposerMessage = useCallback((conversationId: string, text: string, attachments: ComposerAttachment[]) => {
@@ -1771,8 +1828,8 @@ function App() {
 
   const handleAbort = useCallback(async () => {
     if (!activeConversationId) return;
-    const runIdForAbort = activeConversation?.runtime?.activeRunId ?? activeRunId;
-    if (!sending && activeConversation?.status !== "working" && !runIdForAbort) return;
+    const runIdForAbort = activeConversation?.runtime?.activeRunId ?? null;
+    if (!activeConversationSending && !runIdForAbort) return;
     setSessionActionBusy("abort");
     setSessionActionError(null);
     try {
@@ -1791,7 +1848,7 @@ function App() {
     } finally {
       setSessionActionBusy(null);
     }
-  }, [activeConversation?.runtime?.activeRunId, activeConversation?.status, activeConversationId, activeRunId, announceWorkspace, sending]);
+  }, [activeConversation?.runtime?.activeRunId, activeConversationId, activeConversationSending, announceWorkspace]);
 
   const handleCopySessionKey = useCallback(async (conversationId: string) => {
     setSessionActionError(null);
@@ -1911,7 +1968,7 @@ function App() {
     const attachments = composerAttachments;
     if (!message && attachments.length === 0) return;
 
-    const shouldQueue = sending || activeConversation?.status === "working" || Boolean(activeConversation?.runtime?.activeRunId);
+    const shouldQueue = activeConversationSending;
     setComposerValue("");
     setComposerAttachments([]);
 
@@ -1925,11 +1982,11 @@ function App() {
       model: composerModel,
       thinking: composerThinking,
     });
-  }, [activeConversation, activeConversationId, composerAttachments, composerModel, composerThinking, composerValue, enqueueComposerMessage, sendMessageToConversation, sending]);
+  }, [activeConversationId, activeConversationSending, composerAttachments, composerModel, composerThinking, composerValue, enqueueComposerMessage, sendMessageToConversation]);
 
   useEffect(() => {
-    if (!activeConversationId || !activeConversation || sending) return;
-    if (activeConversation.status === "working" || activeConversation.runtime?.activeRunId) return;
+    if (!activeConversationId || !activeConversation) return;
+    if (activeConversationSending) return;
     const nextQueuedMessage = queuedMessagesByConversation[activeConversationId]?.[0];
     if (!nextQueuedMessage) return;
     if (autoSendingQueuedMessageRef.current === nextQueuedMessage.id) return;
@@ -1951,13 +2008,9 @@ function App() {
           if (autoSendingQueuedMessageRef.current === queuedPayload.id) {
             autoSendingQueuedMessageRef.current = null;
           }
-          if (remainingQueuedMessages.length > 0) {
-            setSending(false);
-            setActiveRunId(null);
-          }
         });
     }, 180);
-  }, [activeConversation, activeConversationId, queuedMessagesByConversation, sendMessageToConversation, sending]);
+  }, [activeConversation, activeConversationId, activeConversationSending, queuedMessagesByConversation, sendMessageToConversation]);
 
 
 
@@ -2066,7 +2119,7 @@ function App() {
               composerValue={composerValue}
               composerModel={composerModel}
               composerThinking={composerThinking}
-              sending={sending}
+              sending={activeConversationSending}
               composerAttachments={composerAttachments}
               activeQueuedMessages={activeQueuedMessages}
               gatewayError={activeSendError}
