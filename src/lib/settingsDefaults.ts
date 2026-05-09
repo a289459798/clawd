@@ -17,7 +17,7 @@ export const DEFAULT_CLAWKIT_SETTINGS: ClawKitSettings = {
   general: {
     defaultConversationMode: "focus",
     language: "auto",
-    sendShortcut: "modEnterToSend",
+    sendShortcut: "enterToSend",
     restoreLastConversation: false,
     rememberConversationFilters: true,
     autoCheckUpdates: true,

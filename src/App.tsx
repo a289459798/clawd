@@ -5,6 +5,7 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
+import { MandatoryAppUpdateModal } from "./components/MandatoryAppUpdateModal";
 import { AgentCreateDialog } from "./components/AgentCreateDialog";
 import { AgentFilesDialog } from "./components/AgentFilesDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
@@ -21,6 +22,7 @@ import { conversationMatchesSessionKey, findConversationById, getVisibleConversa
 import { readComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
 import { useClawKitSettings } from "./hooks/useClawKitSettings";
+import { useClawKitSelfUpdate } from "./hooks/useClawKitSelfUpdate";
 import { useGatewayChat } from "./hooks/useGatewayChat";
 import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
 import { useMessageSender } from "./hooks/useMessageSender";
@@ -445,6 +447,9 @@ function App() {
     [clawKitSettings.general.language],
   );
   const t = useMemo(() => createTranslator(locale), [locale]);
+  const clawKitSelfUpdate = useClawKitSelfUpdate(
+    bootstrapStep === "ready" && !clawKitSettingsLoading && clawKitSettings.general.autoCheckUpdates,
+  );
   const [gatewayUpdateRestartSentinel, setGatewayUpdateRestartSentinel] = useState<unknown>(null);
   const [gatewayRuntimeTick, setGatewayRuntimeTick] = useState(0);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
@@ -2305,6 +2310,13 @@ function App() {
     <main className="app-shell" {...appearanceDataAttributes}>
       <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} />
       <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} />
+      <MandatoryAppUpdateModal
+        open={clawKitSelfUpdate.mandatoryUpdateOpen}
+        version={clawKitSelfUpdate.pendingVersion}
+        installing={clawKitSelfUpdate.installingUpdate}
+        onApply={() => void clawKitSelfUpdate.applyPendingUpdate()}
+        t={t}
+      />
       <AgentCreateDialog
         open={agentCreateOpen}
         creating={agentCreating}
@@ -2340,6 +2352,9 @@ function App() {
           updateAvailable={openClawCliStatus?.updateAvailable}
           sessionCount={openClawStatus?.sessions?.count}
           onOpenStatus={toggleOpenClawInfo}
+          clawKitUpdateReady={clawKitSelfUpdate.showOptionalUpdateChrome}
+          clawKitUpdateInstalling={clawKitSelfUpdate.installingUpdate}
+          onApplyClawKitUpdate={() => void clawKitSelfUpdate.applyPendingUpdate()}
         />
 
         {activeNav === "conversations" ? (

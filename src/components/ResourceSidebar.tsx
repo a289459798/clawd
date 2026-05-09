@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Agent } from "../types/app";
+import { Icon, IconNames } from "./Icon";
 
 type ResourceSidebarProps = {
   agents: Agent[];
@@ -93,7 +94,9 @@ export function ResourceSidebar({
                 aria-expanded={!isCollapsed}
               >
                 <div className="agent-group-title">
-                  <span className="agent-collapse-icon">{isCollapsed ? "›" : "⌄"}</span>
+                  <span className="agent-collapse-icon" aria-hidden>
+                    <Icon name={IconNames.ARROW} size={14} className="icon-arrow" />
+                  </span>
                   <strong className="agent-name">{agent.name}</strong>
                 </div>
                 <div className="agent-inline-actions">

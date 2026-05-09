@@ -23,7 +23,8 @@ type IconProps = {
 function iconPaths(name: string) {
   switch (name) {
     case IconNames.ARROW:
-      return <path d="M15 18l-6-6 6-6" />;
+      /* Chevron down (24×24); rotate parent for collapsed → side */
+      return <path d="M6 9l6 6 6-6" />;
     case IconNames.MESSAGE:
       return <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H9l-5 4v-4.5A2.5 2.5 0 0 1 4 12.5z" />;
     case IconNames.INTERNET:

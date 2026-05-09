@@ -1,5 +1,13 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_CLAWKIT_UPDATE_MANIFEST_URL?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
 
 declare module "react-syntax-highlighter" {
   import type { ComponentType, CSSProperties, ReactNode } from "react";

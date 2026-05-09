@@ -1,5 +1,14 @@
 import type { NavKey } from "../types/app";
 
+/** Alibaba iconfont Symbol JS injects `#icon-*` defs into the document body. */
+function NavSidebarIconfont({ symbolId }: { symbolId: string }) {
+  return (
+    <svg className="nav-iconfont svgfont" aria-hidden width={22} height={22}>
+      <use href={`#${symbolId}`} />
+    </svg>
+  );
+}
+
 export function GatewayBanner({
   connected,
   statusText,
@@ -60,6 +69,9 @@ export function NavSidebar({
   updateAvailable,
   sessionCount,
   onOpenStatus,
+  clawKitUpdateReady,
+  clawKitUpdateInstalling,
+  onApplyClawKitUpdate,
 }: {
   activeNav: NavKey;
   onNavChange: (nav: NavKey) => void;
@@ -69,6 +81,9 @@ export function NavSidebar({
   updateAvailable?: boolean;
   sessionCount?: number;
   onOpenStatus?: () => void;
+  clawKitUpdateReady?: boolean;
+  clawKitUpdateInstalling?: boolean;
+  onApplyClawKitUpdate?: () => void;
 }) {
   const translate = t ?? ((key: string) => key);
   const navItems: Array<{ key: NavKey; label: string; icon: string }> = [
@@ -98,13 +113,28 @@ export function NavSidebar({
             type="button"
             key={item.key}
           >
-            <span className={`nav-symbol ${item.icon}`} />
+            {item.key === "conversations" ? (
+              <NavSidebarIconfont symbolId="icon-chat" />
+            ) : (
+              <span className={`nav-symbol ${item.icon}`} />
+            )}
             <span>{item.label}</span>
           </button>
         ))}
       </div>
 
       <div className="sidebar-bottom-actions">
+        {clawKitUpdateReady ? (
+          <button
+            type="button"
+            className="clawkit-app-update-sidebar-button"
+            title={translate("appUpdate.sidebarTitle")}
+            disabled={clawKitUpdateInstalling}
+            onClick={() => onApplyClawKitUpdate?.()}
+          >
+            {clawKitUpdateInstalling ? translate("appUpdate.installing") : translate("appUpdate.sidebarButton")}
+          </button>
+        ) : null}
         <button
           className={`openclaw-logo-button ${gatewayConnected ? "connected" : "disconnected"}`}
           type="button"
@@ -124,7 +154,7 @@ export function NavSidebar({
           aria-pressed={activeNav === "settings"}
           onClick={() => onNavChange("settings")}
         >
-          <span className="nav-symbol settings" />
+          <NavSidebarIconfont symbolId="icon-setting" />
         </button>
       </div>
     </aside>

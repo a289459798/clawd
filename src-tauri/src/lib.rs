@@ -1,4 +1,5 @@
 mod gateway_proxy;
+mod unsigned_update;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -301,7 +302,7 @@ fn default_clawkit_settings() -> Value {
         "general": {
             "defaultConversationMode": "focus",
             "language": "auto",
-            "sendShortcut": "modEnterToSend",
+            "sendShortcut": "enterToSend",
             "restoreLastConversation": false,
             "rememberConversationFilters": true,
             "autoCheckUpdates": true,
@@ -395,7 +396,7 @@ fn sanitize_clawkit_settings_value(settings: &mut Value) {
             general,
             "sendShortcut",
             &["enterToSend", "modEnterToSend"],
-            "modEnterToSend",
+            "enterToSend",
         );
         sanitize_bool(general, "restoreLastConversation", false);
         sanitize_bool(general, "rememberConversationFilters", true);
@@ -2749,6 +2750,9 @@ pub fn run() {
             set_pet_window_expanded,
             get_clawkit_settings,
             patch_clawkit_settings,
+            unsigned_update::clawkit_unsigned_update_probe,
+            unsigned_update::clawkit_unsigned_update_download,
+            unsigned_update::clawkit_unsigned_update_install,
             openclaw_gateway_start,
             openclaw_gateway_stop,
             subscribe_gateway_realtime,

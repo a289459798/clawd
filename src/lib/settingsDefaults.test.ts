@@ -61,7 +61,7 @@ describe("mergeClawKitSettings", () => {
     expect(settings.version).toBe(1);
     expect(settings.general.defaultConversationMode).toBe("focus");
     expect(settings.general.language).toBe("auto");
-    expect(settings.general.sendShortcut).toBe("modEnterToSend");
+    expect(settings.general.sendShortcut).toBe("enterToSend");
     expect(settings.general.restoreLastConversation).toBe(false);
     expect(settings.appearance.theme).toBe("system");
     expect(settings.appearance.fontSize).toBe(15);

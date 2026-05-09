@@ -3,12 +3,12 @@ import type { Conversation, ConversationStatus } from "../types/conversation";
 
 export function getLabelTypeFromKey(key?: string): { text: string; color: string } {
   const lower = key?.toLowerCase() || "";
-  if (lower.includes(":dashboard:")) return { text: "ClawKit", color: "#52f2c5" };
-  if (lower.includes(":main:")) return { text: "主对话", color: "#52f2c5" };
-  if (lower.includes(":cron:")) return { text: "定时任务", color: "#f3bf63" };
+  if (lower.includes(":dashboard:")) return { text: "ClawKit", color: "var(--green)" };
+  if (lower.includes(":main:")) return { text: "主对话", color: "var(--green)" };
+  if (lower.includes(":cron:")) return { text: "定时任务", color: "var(--yellow)" };
   if (lower.includes(":dreaming-")) return { text: "做梦", color: "#c08bff" };
-  if (lower.includes(":channel:")) return { text: "频道", color: "#7aa2ff" };
-  return { text: "对话", color: "#7aa2ff" };
+  if (lower.includes(":channel:")) return { text: "频道", color: "var(--blue)" };
+  return { text: "对话", color: "var(--blue)" };
 }
 
 type ConversationCardData = Conversation & {
@@ -69,7 +69,7 @@ export function ConversationCard({ conversation, statusLabel, onOpen, onHide }: 
             title="隐藏"
             type="button"
           >
-            <Icon name={IconNames.CLOSE} size={18} color="#ffffff" style={{ fill: '#ffffff', stroke: '#ffffff' }} />
+            <Icon name={IconNames.CLOSE} size={18} />
           </button>
         </div>
       </div>

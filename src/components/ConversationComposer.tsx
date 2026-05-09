@@ -159,7 +159,7 @@ export function ConversationComposer({
         ) : null}
         <div className="composer-bar">
           <button className="composer-file-btn" type="button" title="发送文件" onClick={() => fileInputRef.current?.click()}>
-            <Icon name={IconNames.UPLOAD} size={16} color="#ffffff" style={{ fill: '#ffffff', stroke: '#ffffff' }} />
+            <Icon name={IconNames.UPLOAD} size={16} />
           </button>
           <select className="composer-select" value={model} onChange={(e) => onModelChange(e.target.value)} title="模型" disabled={modelsLoading || modelOptions.length === 0}>
             {modelsLoading ? <option value={model}>加载模型…</option> : null}
