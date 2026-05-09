@@ -124,6 +124,7 @@ function buildBootstrapDebugStatus(step: "install" | "bind" | "connect_test"): C
   return base;
 }
 const PET_COMPLETED_VISIBLE_MS = 10 * 1000;
+const PET_REPLY_MAX_AGE_MS = 5 * 60 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -187,15 +188,60 @@ function resolvePetLastReply(conversation: Conversation | null): string | null {
   return assistant?.text.trim() || fallback || null;
 }
 
+const PET_ACTIVE_EVENT_TYPES = new Set([
+  "running",
+  "started",
+  "tool_stream",
+  "assistant_stream",
+  "delta",
+  "tool_call",
+  "tool_result",
+]);
+
+function resolvePetToolProgress(conversation: Conversation | null): string | null {
+  if (!conversation) return null;
+  const messages = conversation.previewMessages ?? [];
+  const latestAssistant = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && Array.isArray(message.parts) && message.parts.length > 0);
+  if (!latestAssistant?.parts?.length) return null;
+  const latestPart = [...latestAssistant.parts]
+    .reverse()
+    .find((part) => part.kind === "tool_call" || part.kind === "tool_result");
+  if (!latestPart) return null;
+  if (latestPart.kind === "tool_call") {
+    const toolName = latestPart.tool?.trim() || "tool";
+    return `调用工具：${toolName}`;
+  }
+  const output = latestPart.text?.replace(/\s+/g, " ").trim();
+  return output ? `工具结果：${output.slice(0, 88)}` : "工具调用已返回";
+}
+
 function resolvePetLastUserMessage(conversation: Conversation | null): string | null {
   if (!conversation) return null;
   const messages = conversation.previewMessages ?? [];
-  const user = [...messages].reverse().find((message) => message.role === "user" && message.text.trim());
-  return user?.text.trim() || null;
+  const runStartedAt = resolvePetRunStartedAt(conversation);
+  const terminalAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt);
+  const users = [...messages]
+    .reverse()
+    .filter((message) => message.role === "user" && message.text.trim());
+  if (users.length === 0) return null;
+  if (!runStartedAt) return users[0]?.text.trim() || null;
+  const currentRunUser = users.find((message) => {
+    const messageTime = normalizePetTimestamp(message.timestamp);
+    return typeof messageTime === "number"
+      && messageTime >= runStartedAt - 1000
+      && (!terminalAt || messageTime <= terminalAt + 1000);
+  });
+  return currentRunUser?.text.trim() || users[0]?.text.trim() || null;
 }
 
 function conversationHasActivePetReply(conversation: Conversation, now: number) {
-  if (conversation.runtime?.activeRunId || conversation.status === "working") return true;
+  if (
+    conversation.runtime?.activeRunId
+    || conversation.status === "working"
+    || PET_ACTIVE_EVENT_TYPES.has((conversation.latestEventType ?? "").toLowerCase())
+  ) return true;
   const completedAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt ?? conversation.updatedAt);
   return conversation.status === "completed"
     && typeof completedAt === "number"
@@ -208,18 +254,25 @@ function buildPetContext(agents: Agent[], conversation: Conversation | null, now
     .filter((item) => conversationHasActivePetReply(item, now))
     .map((item) => {
       const reply = resolvePetLastReply(item);
+      const eventType = (item.latestEventType ?? "").toLowerCase();
+      const activeByRuntime = Boolean(item.runtime?.activeRunId);
+      const activeByStatus = item.status === "working";
+      const activeByEventType = PET_ACTIVE_EVENT_TYPES.has(eventType);
+      const isActive = activeByRuntime || activeByStatus || activeByEventType;
+      const toolProgress = resolvePetToolProgress(item);
       return {
         conversationId: item.id,
         title: item.title,
         userMessage: resolvePetLastUserMessage(item),
         status: item.status,
         model: item.model,
-        reply: reply ?? "",
-        loading: !reply && (Boolean(item.runtime?.activeRunId) || item.status === "working"),
-        updatedAt: item.runtime?.lastEventAt ?? item.runtime?.lastTerminalAt ?? item.updatedAt ?? null,
+        reply: reply ?? toolProgress ?? "",
+        loading: isActive,
+        updatedAt: normalizePetTimestamp(item.runtime?.lastEventAt ?? item.runtime?.lastTerminalAt ?? item.updatedAt) ?? null,
       };
     })
     .filter((item) => item.loading || item.reply.trim())
+    .filter((item) => typeof item.updatedAt === "number" && now - item.updatedAt <= PET_REPLY_MAX_AGE_MS)
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 
   return {
@@ -429,6 +482,7 @@ function App() {
   const queuedMessagesByConversationRef = useRef<Record<string, QueuedComposerMessage[]>>({});
   const restoredLastConversationRef = useRef(false);
   const autoStartGatewayAttemptedRef = useRef(false);
+  const suppressSessionRefreshUntilRef = useRef(0);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
@@ -850,6 +904,9 @@ function App() {
             clearTimeout(refreshTimer);
           }
           refreshTimer = setTimeout(() => {
+            if (Date.now() < suppressSessionRefreshUntilRef.current) {
+              return;
+            }
             if (hasActiveAgentRun(agentsRef.current)) {
               void loadSnapshotLightMergeSessionsList();
             } else {
@@ -1591,6 +1648,10 @@ function App() {
     }
   }, [refreshGatewaySnapshot]);
 
+  const suppressSessionRefreshAfterTerminalChat = useCallback(() => {
+    suppressSessionRefreshUntilRef.current = Number.POSITIVE_INFINITY;
+  }, []);
+
   useGatewayChat({
     enabled: bootstrapStep === "ready",
     activeConversationId,
@@ -1603,6 +1664,7 @@ function App() {
     onGatewayStatusTextChange: setGatewayStatusText,
     onGatewayConnectedChange: setGatewayConnected,
     refreshGatewayStatus,
+    onTerminalChatEvent: suppressSessionRefreshAfterTerminalChat,
   });
 
   const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
@@ -2243,6 +2305,7 @@ function App() {
       return;
     }
 
+    suppressSessionRefreshUntilRef.current = 0;
     await sendMessageToConversation(activeConversationId, message, attachments, {
       restoreToComposerOnError: true,
       model: composerModel,
@@ -2265,6 +2328,7 @@ function App() {
     }));
     const queuedPayload = nextQueuedMessage;
     window.setTimeout(() => {
+      suppressSessionRefreshUntilRef.current = 0;
       void sendMessageToConversation(activeConversationId, queuedPayload.text, queuedPayload.attachments, {
         requeueOnError: queuedPayload,
         model: queuedPayload.model,

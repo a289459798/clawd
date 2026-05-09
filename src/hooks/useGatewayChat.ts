@@ -20,6 +20,7 @@ interface UseGatewayChatProps {
   onGatewayStatusTextChange: (text: string) => void;
   onGatewayConnectedChange: (connected: boolean) => void;
   refreshGatewayStatus: () => Promise<void>;
+  onTerminalChatEvent?: () => void;
 }
 
 export function useGatewayChat({
@@ -34,10 +35,12 @@ export function useGatewayChat({
   onGatewayStatusTextChange,
   onGatewayConnectedChange,
   refreshGatewayStatus,
+  onTerminalChatEvent,
 }: UseGatewayChatProps) {
   const activeConversationIdRef = useRef(activeConversationId);
   const activeRunIdRef = useRef(activeRunId);
   const gatewayEventUnlistenRef = useRef<null | (() => void)>(null);
+  const terminalRunKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -75,6 +78,20 @@ export function useGatewayChat({
     }
     return -1;
   };
+  const runKey = (sessionKey?: string, runId?: string | null) => sessionKey && runId ? `${sessionKey}:${runId}` : null;
+  const rememberTerminalRun = (sessionKey?: string, runId?: string | null) => {
+    const key = runKey(sessionKey, runId);
+    if (!key) return;
+    terminalRunKeysRef.current.add(key);
+    if (terminalRunKeysRef.current.size > 100) {
+      const [oldest] = terminalRunKeysRef.current;
+      if (oldest) terminalRunKeysRef.current.delete(oldest);
+    }
+  };
+  const isTerminalRunEvent = (sessionKey?: string, runId?: string | null) => {
+    const key = runKey(sessionKey, runId);
+    return Boolean(key && terminalRunKeysRef.current.has(key));
+  };
 
   useEffect(() => {
     if (!enabled) return;
@@ -99,9 +116,11 @@ export function useGatewayChat({
           const isCurrentRun = !chat.runId || !activeRunIdRef.current || chat.runId === activeRunIdRef.current;
           const eventTimestamp = chat.message?.timestamp ?? Date.now();
           const eventLastTime = new Date(eventTimestamp).toLocaleString("zh-CN");
+          const eventRunId = chat.runId ?? activeRunIdRef.current;
 
           // Tool stream handling
           if (chat.stream === "tool") {
+            if (isTerminalRunEvent(chat.sessionKey, eventRunId)) return;
             const toolPart = mapGatewayToolStreamToPart(chat.data);
             if (!toolPart) return;
             const toolName = toolPart.kind === "tool_call" ? toolPart.tool : toolPart.tool ?? "tool";
@@ -162,6 +181,7 @@ export function useGatewayChat({
 
           // Delta stream handling
           if (chat.state === "delta") {
+            if (isTerminalRunEvent(chat.sessionKey, eventRunId)) return;
             if (isInternalOpenClawMessage(chat.message)) return;
             const deltaText = extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
@@ -258,6 +278,8 @@ export function useGatewayChat({
             if (isInternalOpenClawMessage(chat.message)) {
               return;
             }
+            onTerminalChatEvent?.();
+            rememberTerminalRun(chat.sessionKey, eventRunId);
             const finalText = extractTextFromGatewayMessage(chat.message);
             const finalParts = mapGatewayContentToParts(chat.message);
             const terminalEventType = chat.state === "aborted" ? "aborted" : "turn_completed";
@@ -370,7 +392,6 @@ export function useGatewayChat({
               }),
             })));
             
-            void refreshGatewayStatus();
             return;
           }
 
@@ -422,7 +443,7 @@ export function useGatewayChat({
       mounted = false;
       dispose?.();
     };
-  }, [enabled, onAgentsChange, onActiveRunIdChange, onSendingChange, onGatewayError, onGatewayStatusTextChange, onGatewayConnectedChange, refreshGatewayStatus]);
+  }, [enabled, onAgentsChange, onActiveRunIdChange, onSendingChange, onGatewayError, onGatewayStatusTextChange, onGatewayConnectedChange, refreshGatewayStatus, onTerminalChatEvent]);
 
   return {
     gatewayEventUnlistenRef,

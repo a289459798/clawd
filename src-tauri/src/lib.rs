@@ -2528,7 +2528,7 @@ fn resize_pet_window(
 ) -> Result<(), String> {
     let (width, height) = if expanded {
         let count = reply_count.unwrap_or(1).clamp(1, 6) as f64;
-        (360.0, 156.0 + count * 66.0)
+        (420.0, 156.0 + count * 66.0)
     } else {
         (124.0, 138.0)
     };

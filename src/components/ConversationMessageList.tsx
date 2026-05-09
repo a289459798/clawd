@@ -381,6 +381,30 @@ function ConversationMessageListInternal({
       if (parts.length === 0) return true;
       return parts.every((part) => part.kind === "text");
     };
+    const compactText = (value: string) => value.replace(/\s+/g, " ").trim();
+    const messageRichnessScore = (msg: PreviewMessage) => {
+      const parts = msg.parts ?? [];
+      const nonTextParts = parts.filter((part) => part.kind !== "text").length;
+      const tokenFields = [msg.input_tokens, msg.output_tokens, msg.cache_read_tokens, msg.cache_write_tokens]
+        .filter((value) => typeof value === "number" && value > 0).length;
+      return nonTextParts * 10 + tokenFields * 3 + (msg.model ? 2 : 0) + parts.length;
+    };
+    const mergeDuplicateAssistantMessage = (previous: PreviewMessage, next: PreviewMessage) => {
+      const preferred = messageRichnessScore(next) >= messageRichnessScore(previous) ? next : previous;
+      const fallback = preferred === next ? previous : next;
+      return {
+        ...preferred,
+        model: preferred.model ?? fallback.model,
+        provider: preferred.provider ?? fallback.provider,
+        api: preferred.api ?? fallback.api,
+        input_tokens: preferred.input_tokens ?? fallback.input_tokens,
+        output_tokens: preferred.output_tokens ?? fallback.output_tokens,
+        cache_read_tokens: preferred.cache_read_tokens ?? fallback.cache_read_tokens,
+        cache_write_tokens: preferred.cache_write_tokens ?? fallback.cache_write_tokens,
+        timestamp: Math.max(preferred.timestamp ?? 0, fallback.timestamp ?? 0) || preferred.timestamp || fallback.timestamp,
+        displayRepeatCount: undefined,
+      };
+    };
     const collapsedMessages = normalizedMessages.reduce<PreviewMessage[]>((acc, message) => {
       const previous = acc[acc.length - 1];
       const role = message.role?.toLowerCase();
@@ -404,6 +428,10 @@ function ConversationMessageListInternal({
         const nextText = cleanText(message.text);
         const previousHasTools = (previous.parts ?? []).some((part) => part.kind === "tool_call");
         const nextHasTools = (message.parts ?? []).some((part) => part.kind === "tool_call");
+        if (previousText && nextText && compactText(previousText) === compactText(nextText)) {
+          acc[acc.length - 1] = mergeDuplicateAssistantMessage(previous, message);
+          return acc;
+        }
         if (!previousHasTools && !nextHasTools && previousText && nextText) {
           if (previousText === nextText) {
             acc[acc.length - 1] = {

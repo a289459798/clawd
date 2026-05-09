@@ -1,5 +1,6 @@
 import { formatTokenCount } from "./appFormatters";
 import { isInternalOpenClawMessage } from "./gatewayMessages";
+import { mergeSnapshotMessagesPreservingCurrentOrder } from "./toolStream";
 import type { Conversation, ConversationAgentRuntime, ConversationRuntime, PreviewMessage } from "../types/conversation";
 import type { GatewaySessionRow, OpenClawSnapshot } from "../types/gateway";
 import type { Agent, BuildAgentsOptions, ModelOption } from "../types/app";
@@ -159,8 +160,10 @@ export function buildAgentsFromSnapshot(
 
         const existingConversation = existing?.conversations.find((item) => item.id === session.key);
         const runtime = runtimeFromGatewaySession(session, existingConversation?.runtime, latestRole);
-        const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message));
-        const mergedPreviewMessages = sessionMessages as PreviewMessage[];
+        const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message)) as PreviewMessage[];
+        const mergedPreviewMessages = existingConversation?.previewMessages?.length
+          ? mergeSnapshotMessagesPreservingCurrentOrder(existingConversation.previewMessages, sessionMessages)
+          : sessionMessages;
         const displayTitle = session.label || session.title;
         const alternateSessionKeys = session.id !== session.key ? [session.id] : undefined;
         const thinkingOptions = session.thinking_levels?.map((level) => ({

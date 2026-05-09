@@ -34,6 +34,30 @@ function compactLine(value: string | null | undefined, fallback: string) {
   return normalized || fallback;
 }
 
+function stripMessageTimestamp(value: string) {
+  const stripBracketPrefix = (input: string) => input.replace(/^\s*\[(?<stamp>[^\]]{4,80})\]\s*/u, (full, _stamp, _offset, _source, groups) => {
+    const stamp = groups?.stamp ?? "";
+    const hasDigits = /\d/.test(stamp);
+    const hasTimeHint = /[:/\-.]|(?:GMT|UTC)|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)|(?:周|星期)/iu.test(stamp);
+    return hasDigits && hasTimeHint ? "" : full;
+  });
+
+  const normalized = stripBracketPrefix(value)
+    .replace(/^\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:GMT|UTC)?[+-]?\d*\s*/iu, "")
+    .replace(/^\s*(?:星期[一二三四五六日天]|周[一二三四五六日天])\s*\d{1,2}:\d{2}(?::\d{2})?\s*/u, "")
+    .replace(/^\s*\[(?:\d{1,2}:\d{2}(?::\d{2})?|(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)\]\s*/u, "")
+    .replace(/^\s*(?:\d{1,2}:\d{2}(?::\d{2})?|(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)\s*(?:[-|]\s*)?/u, "")
+    .replace(/^\s*(?:GMT|UTC)[+-]?\d{0,2}\s*/iu, "")
+    .replace(/^\s*[,，;；]\s*/, "")
+    .trim();
+  return normalized;
+}
+
+function formatBubbleCommand(userMessage: string | null | undefined, title: string | null | undefined) {
+  const cleaned = userMessage ? stripMessageTimestamp(userMessage) : "";
+  return compactLine(cleaned, title || "OpenClaw");
+}
+
 function compactTail(value: string | null | undefined, fallback: string) {
   const raw = value?.trim();
   if (!raw) return fallback;
@@ -222,8 +246,8 @@ export function PetWindow() {
                   </svg>
                 )}
               </div>
-              <div className="pet-bubble-command">{compactLine(reply.userMessage, reply.title || "OpenClaw")}</div>
-              {reply.loading ? (
+              <div className="pet-bubble-command">{formatBubbleCommand(reply.userMessage, reply.title)}</div>
+              {reply.loading && !reply.reply?.trim() ? (
                 <div className="pet-thinking-line" role="status" aria-live="polite">
                   <span>正在思考</span>
                   <i />
