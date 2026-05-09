@@ -262,6 +262,10 @@ fn clawkit_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".clawkit"))
 }
 
+fn clawkit_settings_path() -> Result<PathBuf, String> {
+    Ok(clawkit_dir()?.join("clawkit.json"))
+}
+
 fn clawkit_pets_dir() -> Result<PathBuf, String> {
     Ok(clawkit_dir()?.join("pets"))
 }
@@ -289,6 +293,184 @@ fn ensure_clawkit_home() -> Result<(), String> {
             .map_err(|error| format!("failed to create {}: {error}", config_path.display()))?;
     }
     Ok(())
+}
+
+fn default_clawkit_settings() -> Value {
+    serde_json::json!({
+        "version": 1,
+        "general": {
+            "defaultConversationMode": "focus",
+            "language": "auto",
+            "sendShortcut": "modEnterToSend",
+            "restoreLastConversation": false,
+            "rememberConversationFilters": true,
+            "autoCheckUpdates": true,
+            "confirmDestructiveActions": true
+        },
+        "appearance": {
+            "theme": "system",
+            "fontSize": 15,
+            "density": "comfortable",
+            "codeWrap": false,
+            "messageWidth": "normal"
+        },
+        "notifications": {
+            "conversationFinished": true,
+            "onlyWhenUnfocused": true,
+            "notifyOnSuccess": true,
+            "notifyOnFailure": true,
+            "includeReplySummary": true,
+            "privacyMode": false
+        },
+        "openclaw": {
+            "autoStartGateway": false
+        }
+    })
+}
+
+fn merge_value_with_defaults(raw: &Value, defaults: &Value) -> Value {
+    match (raw, defaults) {
+        (Value::Object(raw_object), Value::Object(default_object)) => {
+            let mut merged = raw_object.clone();
+            for (key, default_value) in default_object {
+                let next_value = raw_object
+                    .get(key)
+                    .map(|raw_value| merge_value_with_defaults(raw_value, default_value))
+                    .unwrap_or_else(|| default_value.clone());
+                merged.insert(key.clone(), next_value);
+            }
+            Value::Object(merged)
+        }
+        (Value::Null, default_value) => default_value.clone(),
+        (raw_value, _) => raw_value.clone(),
+    }
+}
+
+fn merge_clawkit_settings_value(raw: Value) -> Value {
+    let mut merged = merge_value_with_defaults(&raw, &default_clawkit_settings());
+    sanitize_clawkit_settings_value(&mut merged);
+    merged
+}
+
+fn sanitize_string_enum(
+    section: &mut serde_json::Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+    fallback: &str,
+) {
+    let valid = section
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|value| allowed.contains(&value))
+        .unwrap_or(false);
+    if !valid {
+        section.insert(key.to_string(), Value::String(fallback.to_string()));
+    }
+}
+
+fn sanitize_bool(section: &mut serde_json::Map<String, Value>, key: &str, fallback: bool) {
+    if !section.get(key).is_some_and(Value::is_boolean) {
+        section.insert(key.to_string(), Value::Bool(fallback));
+    }
+}
+
+fn sanitize_clawkit_settings_value(settings: &mut Value) {
+    if !settings.get("version").is_some_and(Value::is_number) {
+        settings["version"] = Value::from(1);
+    }
+    if let Some(general) = settings.get_mut("general").and_then(Value::as_object_mut) {
+        sanitize_string_enum(
+            general,
+            "defaultConversationMode",
+            &["focus", "conversation"],
+            "focus",
+        );
+        sanitize_string_enum(
+            general,
+            "language",
+            &["auto", "zh-CN", "zh-TW", "en-US", "ja-JP", "fr-FR", "ru-RU"],
+            "auto",
+        );
+        sanitize_string_enum(
+            general,
+            "sendShortcut",
+            &["enterToSend", "modEnterToSend"],
+            "modEnterToSend",
+        );
+        sanitize_bool(general, "restoreLastConversation", false);
+        sanitize_bool(general, "rememberConversationFilters", true);
+        sanitize_bool(general, "autoCheckUpdates", true);
+        sanitize_bool(general, "confirmDestructiveActions", true);
+    }
+    if let Some(appearance) = settings
+        .get_mut("appearance")
+        .and_then(Value::as_object_mut)
+    {
+        sanitize_string_enum(appearance, "theme", &["system", "dark", "light"], "system");
+        let font_size = appearance
+            .get("fontSize")
+            .and_then(Value::as_i64)
+            .map(|value| value.clamp(12, 20))
+            .unwrap_or(15);
+        appearance.insert("fontSize".to_string(), Value::from(font_size));
+        sanitize_string_enum(
+            appearance,
+            "density",
+            &["comfortable", "compact"],
+            "comfortable",
+        );
+        sanitize_bool(appearance, "codeWrap", false);
+        sanitize_string_enum(appearance, "messageWidth", &["normal", "wide"], "normal");
+    }
+    if let Some(notifications) = settings
+        .get_mut("notifications")
+        .and_then(Value::as_object_mut)
+    {
+        sanitize_bool(notifications, "conversationFinished", true);
+        sanitize_bool(notifications, "onlyWhenUnfocused", true);
+        sanitize_bool(notifications, "notifyOnSuccess", true);
+        sanitize_bool(notifications, "notifyOnFailure", true);
+        sanitize_bool(notifications, "includeReplySummary", true);
+        sanitize_bool(notifications, "privacyMode", false);
+    }
+    if let Some(openclaw) = settings.get_mut("openclaw").and_then(Value::as_object_mut) {
+        sanitize_bool(openclaw, "autoStartGateway", false);
+    }
+}
+
+fn merge_patch_value(target: &mut Value, patch: Value) {
+    match (target, patch) {
+        (Value::Object(target_object), Value::Object(patch_object)) => {
+            for (key, patch_value) in patch_object {
+                if let Some(target_value) = target_object.get_mut(&key) {
+                    merge_patch_value(target_value, patch_value);
+                } else {
+                    target_object.insert(key, patch_value);
+                }
+            }
+        }
+        (target_value, patch_value) => {
+            *target_value = patch_value;
+        }
+    }
+}
+
+fn read_clawkit_settings_file() -> Result<Value, String> {
+    ensure_clawkit_home()?;
+    let path = clawkit_settings_path()?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn write_clawkit_settings_file(settings: &Value) -> Result<(), String> {
+    ensure_clawkit_home()?;
+    let path = clawkit_settings_path()?;
+    let pretty = serde_json::to_string_pretty(settings)
+        .map_err(|error| format!("failed to serialize ClawKit settings: {error}"))?;
+    fs::write(&path, format!("{pretty}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
 fn sync_resource_pets_to_clawkit(app: &AppHandle) -> Result<(), String> {
@@ -2432,6 +2614,33 @@ async fn set_pet_window_expanded(app: AppHandle, expanded: bool) -> Result<(), S
 }
 
 #[tauri::command]
+async fn get_clawkit_settings() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let raw = read_clawkit_settings_file()?;
+        let merged = merge_clawkit_settings_value(raw.clone());
+        if merged != raw {
+            write_clawkit_settings_file(&merged)?;
+        }
+        Ok(merged)
+    })
+    .await
+    .map_err(|error| format!("failed to read ClawKit settings: {error}"))?
+}
+
+#[tauri::command]
+async fn patch_clawkit_settings(patch: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = merge_clawkit_settings_value(read_clawkit_settings_file()?);
+        merge_patch_value(&mut settings, patch);
+        settings = merge_clawkit_settings_value(settings);
+        write_clawkit_settings_file(&settings)?;
+        Ok(settings)
+    })
+    .await
+    .map_err(|error| format!("failed to patch ClawKit settings: {error}"))?
+}
+
+#[tauri::command]
 async fn openclaw_gateway_start() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| openclaw_gateway_service_command("start"))
         .await
@@ -2465,6 +2674,7 @@ pub fn run() {
         .manage(Arc::new(RealtimeState::default()))
         .manage(Arc::new(gateway_proxy::GatewayProxyState::default()))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             if let Err(error) = ensure_clawkit_home() {
                 eprintln!("failed to initialize .clawkit: {error}");
@@ -2537,6 +2747,8 @@ pub fn run() {
             import_codex_pet,
             open_pet_window,
             set_pet_window_expanded,
+            get_clawkit_settings,
+            patch_clawkit_settings,
             openclaw_gateway_start,
             openclaw_gateway_stop,
             subscribe_gateway_realtime,

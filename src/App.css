@@ -13,11 +13,19 @@
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.14);
   --text: #f4f0e6;
+  --text-soft: rgba(244, 240, 230, 0.72);
   --muted: #9b9588;
   --green: #52f2c5;
   --blue: #7aa2ff;
   --peach: #f08b7d;
   --yellow: #f3bf63;
+  --sidebar-bg: #141414;
+  --resource-bg: #161616;
+  --control-bg: rgba(255, 255, 255, 0.055);
+  --control-bg-hover: rgba(255, 255, 255, 0.09);
+  --settings-group-bg: #202020;
+  --settings-row-bg: #202020;
+  --settings-row-bg-strong: #2b2b2b;
 }
 
 .pets-page {
@@ -746,6 +754,68 @@ body {
   overflow: hidden;
 }
 
+.app-shell {
+  font-size: var(--app-font-size, 15px);
+}
+
+.app-shell[data-theme="dark"] {
+  --bg: #111315;
+  --panel: #181b1e;
+  --panel-soft: #202327;
+  --panel-strong: #121416;
+  --border: rgba(236, 241, 247, 0.08);
+  --border-strong: rgba(236, 241, 247, 0.16);
+  --text: #f3f6f8;
+  --text-soft: rgba(243, 246, 248, 0.72);
+  --muted: #9ca5ad;
+  --green: #43d6a9;
+  --blue: #4d9dff;
+  --peach: #ec8274;
+  --yellow: #e9b95c;
+  --sidebar-bg: #131517;
+  --resource-bg: #171a1d;
+  --control-bg: rgba(255, 255, 255, 0.055);
+  --control-bg-hover: rgba(255, 255, 255, 0.1);
+  --settings-group-bg: #1d2023;
+  --settings-row-bg: #1f2225;
+  --settings-row-bg-strong: #2b2f33;
+}
+
+.app-shell[data-theme="light"] {
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --panel-soft: #eef2f6;
+  --panel-strong: #e2e8ef;
+  --border: rgba(20, 31, 43, 0.12);
+  --border-strong: rgba(20, 31, 43, 0.22);
+  --text: #18212b;
+  --text-soft: rgba(24, 33, 43, 0.72);
+  --muted: #66717d;
+  --green: #0d9f73;
+  --blue: #1976d2;
+  --peach: #c85d50;
+  --yellow: #a66a00;
+  --sidebar-bg: #e8edf3;
+  --resource-bg: #f8fafc;
+  --control-bg: rgba(16, 31, 48, 0.055);
+  --control-bg-hover: rgba(16, 31, 48, 0.09);
+  --settings-group-bg: #ffffff;
+  --settings-row-bg: #ffffff;
+  --settings-row-bg-strong: #edf2f7;
+}
+
+.app-shell[data-density="compact"] .chat-workspace-area,
+.app-shell[data-density="compact"] .single-page {
+  padding: 10px 12px;
+}
+
+.app-shell[data-density="compact"] .settings-row,
+.app-shell[data-density="compact"] .info-card,
+.app-shell[data-density="compact"] .message-bubble {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
 html.pet-window-document,
 html.pet-window-document body,
 html.pet-window-document #root {
@@ -848,7 +918,8 @@ p {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #111111;
+  background: var(--bg);
+  color: var(--text);
   overflow: hidden;
 }
 
@@ -2144,8 +2215,8 @@ p {
 }
 
 .nav-sidebar {
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  background: #141414;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
   padding: 12px 6px;
   display: flex;
   flex-direction: column;
@@ -2168,6 +2239,37 @@ p {
 
 .sidebar-bottom-actions {
   align-items: center;
+}
+
+.nav-icon-button,
+.settings-nav-button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  background: var(--control-bg);
+}
+
+.nav-icon-button.active,
+.settings-nav-button.active {
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: var(--text);
+}
+
+.settings-nav-button {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-nav-button:hover {
+  color: var(--text);
+  background: var(--control-bg-hover);
 }
 
 .openclaw-logo-button {
@@ -2468,9 +2570,44 @@ p {
   opacity: 0.75;
 }
 
+.nav-symbol.settings {
+  border: 0;
+}
+
+.nav-symbol.settings::before,
+.nav-symbol.settings::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+}
+
+.nav-symbol.settings::before {
+  width: 7px;
+  height: 7px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: transparent;
+}
+
+.nav-symbol.settings::after {
+  width: 3px;
+  height: 22px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow:
+    0 0 0 0 currentColor,
+    8px 0 0 currentColor,
+    -8px 0 0 currentColor,
+    0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+  transform: translate(-50%, -50%) rotate(30deg);
+  opacity: 0.72;
+}
+
 .resource-sidebar {
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  background: #161616;
+  border-right: 1px solid var(--border);
+  background: var(--resource-bg);
   padding: 12px 12px 14px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -2480,7 +2617,7 @@ p {
 .resource-sidebar-collapsed {
   width: 18px;
   border-right: 1px solid var(--border);
-  background: #151515;
+  background: var(--resource-bg);
   position: relative;
 }
 
@@ -2494,7 +2631,7 @@ p {
   border-radius: 0 12px 12px 0;
   border: 1px solid var(--border);
   border-left: 0;
-  background: #1f1f1f;
+  background: var(--panel-soft);
   color: var(--muted);
   display: inline-flex;
   align-items: center;
@@ -2515,7 +2652,7 @@ p {
 
 .sidebar-handle:hover {
   color: var(--text);
-  background: #2a2a2a;
+  background: var(--control-bg-hover);
   border-color: var(--border-strong);
 }
 
@@ -2877,7 +3014,7 @@ p {
   padding: 16px;
   overflow-y: auto;
   overflow-x: hidden;
-  background: #121212;
+  background: var(--bg);
 }
 
 .conversation-list-toolbar {
@@ -3249,8 +3386,17 @@ p {
   max-width: min(72%, 760px);
 }
 
+.app-shell[data-message-width="wide"] .conversation-message-list.conversation-mode .message-bubble,
+.app-shell[data-message-width="wide"] .conversation-message-list.conversation-mode .tool-call-box {
+  max-width: min(86%, 980px);
+}
+
 .conversation-message-list.conversation-mode .message-bubble.user {
   max-width: min(64%, 620px);
+}
+
+.app-shell[data-message-width="wide"] .conversation-message-list.conversation-mode .message-bubble.user {
+  max-width: min(78%, 820px);
 }
 
 .conversation-message-list.conversation-mode .tool-call-box {
@@ -3733,6 +3879,13 @@ p {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.app-shell[data-code-wrap="false"] .code-block,
+.app-shell[data-code-wrap="false"] .terminal-block {
+  white-space: pre;
+  word-break: normal;
+  overflow-x: auto;
 }
 
 .code-block-shell {
@@ -4416,8 +4569,8 @@ p {
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--control-bg);
+  border: 1px solid var(--border);
   cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease;
 }
@@ -4430,18 +4583,248 @@ p {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--text-soft);
   transition: transform 0.16s ease, background 0.16s ease;
 }
 
 .switch-control input:checked + span {
-  background: rgba(82, 242, 197, 0.18);
-  border-color: rgba(82, 242, 197, 0.32);
+  background: color-mix(in srgb, var(--blue) 30%, transparent);
+  border-color: color-mix(in srgb, var(--blue) 42%, transparent);
 }
 
 .switch-control input:checked + span::after {
   transform: translateX(18px);
-  background: var(--green);
+  background: var(--blue);
+}
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.settings-layout {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 0;
+}
+
+.settings-section-list,
+.settings-panel {
+  min-height: 0;
+}
+
+.settings-section-list {
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+}
+
+.settings-section-list button {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-section-list button strong,
+.settings-section-list button span {
+  display: block;
+}
+
+.settings-section-list button strong {
+  margin-bottom: 2px;
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.settings-section-list button span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.settings-section-list button:hover,
+.settings-section-list button.active {
+  border-color: color-mix(in srgb, var(--blue) 24%, transparent);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+}
+
+.settings-panel {
+  padding: 22px 34px 34px;
+  overflow: auto;
+}
+
+.settings-section-heading {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.settings-section-heading h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.45rem;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.settings-row {
+  min-height: 74px;
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  background: var(--settings-row-bg);
+}
+
+.settings-section-heading + .settings-row {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.settings-row:last-child {
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+.settings-row strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 0.94rem;
+  font-weight: 680;
+}
+
+.settings-row p,
+.settings-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.segmented-control {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--control-bg);
+}
+
+.segmented-control button {
+  min-width: 72px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.segmented-control button.active {
+  background: var(--settings-row-bg-strong);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.segmented-control button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.settings-readonly-value {
+  max-width: 420px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--control-bg);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.settings-select,
+.settings-number-control input {
+  min-width: 178px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--control-bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-select {
+  padding: 0 34px 0 12px;
+}
+
+.settings-number-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.settings-number-control input {
+  min-width: 86px;
+  width: 86px;
+  padding: 0 12px;
+  text-align: right;
+}
+
+.settings-error {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--peach) 34%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--peach) 10%, transparent);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.settings-note {
+  margin: 14px 0 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--control-bg);
+}
+
+.settings-action-row,
+.settings-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-action-row {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-inline-actions {
+  margin-top: 10px;
 }
 
 .skill-missing {
@@ -5408,7 +5791,7 @@ p {
 .empty-panel {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
-  background: #191919;
+  background: transparent;
 }
 
 .usage-stat {
@@ -7306,6 +7689,411 @@ select:not([multiple]) option,
 
 .composer-bar .composer-select:focus {
   box-shadow: none;
+}
+
+.app-shell[data-theme="light"] .workspace-area,
+.app-shell[data-theme="light"] .chat-workspace-area,
+.app-shell[data-theme="light"] .single-page,
+.app-shell[data-theme="light"] .conversation-detail-shell {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app-shell[data-theme="light"] .nav-sidebar {
+  background: var(--sidebar-bg);
+  border-color: var(--border);
+}
+
+.app-shell[data-theme="light"] .resource-sidebar,
+.app-shell[data-theme="light"] .resource-sidebar-collapsed {
+  background: var(--resource-bg);
+  border-color: var(--border);
+}
+
+.app-shell[data-theme="light"] .nav-item,
+.app-shell[data-theme="light"] .nav-label {
+  color: #536170;
+}
+
+.app-shell[data-theme="light"] .nav-item.active {
+  background: #dce9ff;
+  color: #152232;
+  border-color: rgba(25, 118, 210, 0.22);
+}
+
+.app-shell[data-theme="light"] .back-icon-button {
+  color: #536170;
+}
+
+.app-shell[data-theme="light"] .back-icon-button:hover {
+  background: var(--control-bg-hover);
+  color: var(--text);
+}
+
+.app-shell[data-theme="light"] .workspace-action-announcement {
+  background: #eefaf5;
+  border-color: rgba(13, 159, 115, 0.2);
+  color: #164f3d;
+}
+
+.app-shell[data-theme="light"] .agent-group-head.flat {
+  border-bottom-color: var(--border);
+}
+
+.app-shell[data-theme="light"] .agent-collapse-icon {
+  color: #7d8996;
+}
+
+.app-shell[data-theme="light"] .conversation-tree-item {
+  background: #ffffff;
+  border-color: rgba(20, 31, 43, 0.08);
+  color: var(--text);
+}
+
+.app-shell[data-theme="light"] .conversation-tree-item:hover {
+  background: #f0f5fb;
+}
+
+.app-shell[data-theme="light"] .conversation-tree-item.active {
+  background: #e8f2ff;
+  border-color: rgba(25, 118, 210, 0.28);
+}
+
+.app-shell[data-theme="light"] .conversation-detail-statusbar,
+.app-shell[data-theme="light"] .conversation-composer,
+.app-shell[data-theme="light"] .composer-input-wrap,
+.app-shell[data-theme="light"] .composer-bar,
+.app-shell[data-theme="light"] .conversation-card,
+.app-shell[data-theme="light"] .conversation-card.expanded,
+.app-shell[data-theme="light"] .conversation-summary,
+.app-shell[data-theme="light"] .expanded-section,
+.app-shell[data-theme="light"] .expanded-meta-card,
+.app-shell[data-theme="light"] .list-item,
+.app-shell[data-theme="light"] .top-stat.large,
+.app-shell[data-theme="light"] .info-card,
+.app-shell[data-theme="light"] .skill-card,
+.app-shell[data-theme="light"] .connection-card,
+.app-shell[data-theme="light"] .usage-stat,
+.app-shell[data-theme="light"] .usage-columns section,
+.app-shell[data-theme="light"] .usage-table-panel,
+.app-shell[data-theme="light"] .daily-usage-panel,
+.app-shell[data-theme="light"] .model-provider-detail,
+.app-shell[data-theme="light"] .model-auth-profiles,
+.app-shell[data-theme="light"] .model-row,
+.app-shell[data-theme="light"] .cron-summary-stat,
+.app-shell[data-theme="light"] .cron-help-strip,
+.app-shell[data-theme="light"] .cron-job-card,
+.app-shell[data-theme="light"] .cron-runs-panel,
+.app-shell[data-theme="light"] .cron-edit-drawer,
+.app-shell[data-theme="light"] .pet-detail-panel,
+.app-shell[data-theme="light"] .pets-list-panel,
+.app-shell[data-theme="light"] .pet-row,
+.app-shell[data-theme="light"] .agent-create-dialog,
+.app-shell[data-theme="light"] .modal,
+.app-shell[data-theme="light"] .session-action-popover,
+.app-shell[data-theme="light"] .openclaw-info-drawer,
+.app-shell[data-theme="light"] .channel-config-dialog {
+  background: var(--panel);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.app-shell[data-theme="light"] .conversation-card:hover,
+.app-shell[data-theme="light"] .model-provider-tab:hover,
+.app-shell[data-theme="light"] .pet-row:hover,
+.app-shell[data-theme="light"] .ghost-link-button:hover {
+  background: var(--panel-soft);
+}
+
+.app-shell[data-theme="light"] .conversation-detail-maintenance {
+  background: #fff7e6;
+  border-color: rgba(166, 106, 0, 0.18);
+}
+
+.app-shell[data-theme="light"] .conversation-detail-maintenance-item {
+  color: #72501c;
+}
+
+.app-shell[data-theme="light"] .conversation-detail-maintenance-item.transcript-issue {
+  color: #8a5600;
+}
+
+.app-shell[data-theme="light"] .conversation-detail-maintenance-item.compaction-info {
+  color: #265ea8;
+}
+
+.app-shell[data-theme="light"] .detail-mode-toggle,
+.app-shell[data-theme="light"] .composer-box,
+.app-shell[data-theme="light"] .composer-queue,
+.app-shell[data-theme="light"] .composer-queue-item,
+.app-shell[data-theme="light"] .composer-attachment-card,
+.app-shell[data-theme="light"] .composer-file-preview,
+.app-shell[data-theme="light"] .model-provider-tab,
+.app-shell[data-theme="light"] .model-auth-profile-list li,
+.app-shell[data-theme="light"] .connection-account-readiness,
+.app-shell[data-theme="light"] .connection-account-pill,
+.app-shell[data-theme="light"] .plugin-repair-card,
+.app-shell[data-theme="light"] .plugin-repair-cli,
+.app-shell[data-theme="light"] .skill-policy-hint,
+.app-shell[data-theme="light"] .qr-login-panel,
+.app-shell[data-theme="light"] .empty-panel {
+  background: var(--panel-soft);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.app-shell[data-theme="light"] .model-provider-tab.active,
+.app-shell[data-theme="light"] .conversation-card.working,
+.app-shell[data-theme="light"] .conversation-card.selected,
+.app-shell[data-theme="light"] .model-row.default {
+  background: #e8f2ff;
+  border-color: rgba(25, 118, 210, 0.28);
+}
+
+.app-shell[data-theme="light"] .model-row.configured,
+.app-shell[data-theme="light"] .connection-card.is-checking {
+  background: #eefaf5;
+  border-color: rgba(13, 159, 115, 0.24);
+}
+
+.app-shell[data-theme="light"] .message-bubble.assistant,
+.app-shell[data-theme="light"] .history-message-bubble.assistant,
+.app-shell[data-theme="light"] .conversation-message-list.conversation-mode .tool-call-box {
+  background: #eef5ff;
+  border-color: rgba(25, 118, 210, 0.22);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.app-shell[data-theme="light"] .message-bubble.user,
+.app-shell[data-theme="light"] .history-message-bubble.user {
+  background: #e9faf3;
+  border-color: rgba(13, 159, 115, 0.22);
+  color: var(--text);
+}
+
+.app-shell[data-theme="light"] .message-copy-button,
+.app-shell[data-theme="light"] .conversation-open-button,
+.app-shell[data-theme="light"] .ghost-link-button,
+.app-shell[data-theme="light"] .cron-edit-head button {
+  background: var(--control-bg);
+  border-color: var(--border);
+  color: var(--text-soft);
+}
+
+.app-shell[data-theme="light"] :is(
+  .conversation-card-title,
+  .conversation-card-head strong,
+  .conversation-summary p,
+  .expanded-meta-card p,
+  .page-head-row h1,
+  .info-card h2,
+  .card-row strong,
+  .skill-title,
+  .connection-title-block strong,
+  .usage-stat strong,
+  .model-provider-tab strong,
+  .model-provider-head strong,
+  .model-auth-profiles-title,
+  .model-row-main strong,
+  .cron-job-head strong,
+  .cron-edit-head strong,
+  .pet-row-main strong,
+  .statusbar-agent,
+  .statusbar-title,
+  .composer-input,
+  .composer-textarea,
+  .history-message-author
+) {
+  color: var(--text);
+}
+
+.app-shell[data-theme="light"] :is(
+  .conversation-card-subline,
+  .compact-time-row,
+  .summary-meta,
+  .connection-meta,
+  .page-head-row p,
+  .skill-card p,
+  .connection-card p,
+  .connection-meta-line,
+  .usage-stat span,
+  .usage-row span,
+  .usage-session-row span,
+  .usage-empty-row,
+  .model-provider-tab span,
+  .model-provider-head span,
+  .model-auth-profiles-source,
+  .model-auth-profiles-empty,
+  .model-auth-usage-hint,
+  .auth-profile-type,
+  .auth-profile-expiry,
+  .model-row-tags span,
+  .composer-session-hint,
+  .composer-hint,
+  .composer-queue-head,
+  .composer-queue-text,
+  .composer-attachment-meta span,
+  .composer-attachment-meta small,
+  .cron-job-schedule,
+  .cron-job-delivery-line,
+  .cron-job-session,
+  .cron-job-last-run,
+  .cron-edit-head span,
+  .cron-edit-drawer label > span,
+  .cron-edit-section > strong,
+  .path-text,
+  .pet-row-main span,
+  .pet-row-status,
+  .statusbar-tokens,
+  .statusbar-divider,
+  .statusbar-title-feedback.saving,
+  .agent-meta,
+  .agent-hint,
+  .agent-config-block,
+  .conversation-tree-item span,
+  .list-item p
+) {
+  color: var(--muted);
+}
+
+.app-shell[data-theme="light"] :is(
+  input,
+  textarea,
+  select,
+  .composer-select,
+  .model-search-input,
+  .conversation-list-toolbar input,
+  .search-input,
+  .cron-edit-drawer input,
+  .cron-edit-drawer select,
+  .channel-config-body input,
+  .channel-config-body select
+) {
+  background-color: var(--panel);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.app-shell[data-theme="light"] :is(input, textarea, .composer-input)::placeholder {
+  color: #8a96a3;
+}
+
+.app-shell[data-theme="light"] select:not([multiple]),
+.app-shell[data-theme="light"] .composer-select {
+  background:
+    url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='rgba(83,97,112,0.82)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center / 10px 6px,
+    #ffffff;
+}
+
+.app-shell[data-theme="light"] select:not([multiple]) option,
+.app-shell[data-theme="light"] .composer-select option {
+  background: #ffffff;
+  color: var(--text);
+}
+
+.app-shell[data-theme="light"] .model-provider-add-button,
+.app-shell[data-theme="light"] .ghost-link-button.primary-action {
+  background: #e9faf3;
+  border-color: rgba(13, 159, 115, 0.26);
+  color: #087052;
+}
+
+.app-shell[data-theme="light"] .ghost-link-button.danger-action,
+.app-shell[data-theme="light"] .auth-profile-status.auth-status-expired,
+.app-shell[data-theme="light"] .auth-profile-status.auth-status-missing {
+  background: #fff1ee;
+  border-color: rgba(200, 93, 80, 0.22);
+  color: #a84136;
+}
+
+.app-shell[data-theme="light"] .runtime-badge,
+.app-shell[data-theme="light"] .current-model-pill,
+.app-shell[data-theme="light"] .model-row-tags .model-default-tag,
+.app-shell[data-theme="light"] .auth-profile-id,
+.app-shell[data-theme="light"] .statusbar-runtime {
+  background: #e8f2ff;
+  border-color: rgba(25, 118, 210, 0.18);
+  color: #1a5faa;
+}
+
+.app-shell[data-theme="light"] .status-badge.working,
+.app-shell[data-theme="light"] .status-badge.completed,
+.app-shell[data-theme="light"] .statusbar-badge.working,
+.app-shell[data-theme="light"] .statusbar-badge.completed,
+.app-shell[data-theme="light"] .toggle-badge.connected,
+.app-shell[data-theme="light"] .toggle-badge.enabled,
+.app-shell[data-theme="light"] .auth-profile-status.auth-status-ok,
+.app-shell[data-theme="light"] .auth-profile-status.auth-status-static,
+.app-shell[data-theme="light"] .inline-page-status,
+.app-shell[data-theme="light"] .channel-checking-pill {
+  background: rgba(13, 159, 115, 0.12);
+  color: #087052;
+}
+
+.app-shell[data-theme="light"] .status-badge.failed {
+  background: rgba(200, 93, 80, 0.12);
+  color: #a84136;
+}
+
+.app-shell[data-theme="light"] .statusbar-badge.failed,
+.app-shell[data-theme="light"] .statusbar-title-feedback.error {
+  color: #a84136;
+}
+
+.app-shell[data-theme="light"] .status-badge.stopped,
+.app-shell[data-theme="light"] .statusbar-badge.stopped,
+.app-shell[data-theme="light"] .toggle-badge.warning,
+.app-shell[data-theme="light"] .toggle-badge.degraded,
+.app-shell[data-theme="light"] .auth-profile-status.auth-status-expiring {
+  background: rgba(166, 106, 0, 0.12);
+  color: #815100;
+}
+
+.app-shell[data-theme="light"] .toggle-badge.disabled,
+.app-shell[data-theme="light"] .status-badge.idle,
+.app-shell[data-theme="light"] .statusbar-badge.idle,
+.app-shell[data-theme="light"] .auth-profile-status {
+  background: rgba(83, 97, 112, 0.12);
+  color: #536170;
+}
+
+.app-shell[data-theme="light"] .statusbar-title-feedback.saved {
+  color: #087052;
+}
+
+.app-shell[data-theme="light"] .plugin-repair-card {
+  background: #fff7e6;
+  border-color: rgba(166, 106, 0, 0.2);
+}
+
+.app-shell[data-theme="light"] .plugin-repair-card-head strong,
+.app-shell[data-theme="light"] .plugin-repair-body,
+.app-shell[data-theme="light"] .plugin-repair-technical pre {
+  color: #4b3720;
+}
+
+.app-shell[data-theme="light"] .plugin-repair-id,
+.app-shell[data-theme="light"] .plugin-repair-technical,
+.app-shell[data-theme="light"] .plugin-repair-action-label {
+  color: #775f3d;
+}
+
+.app-shell[data-theme="light"] .skill-policy-hint.is-warning {
+  background: #fff7e6;
+  border-color: rgba(166, 106, 0, 0.22);
+  color: #5f4212;
+}
+
+.app-shell[data-theme="light"] .skill-policy-hint.is-info {
+  background: #eefaf5;
+  border-color: rgba(13, 159, 115, 0.2);
+  color: #164f3d;
+}
+
+.app-shell[data-theme="light"] .qr-login-panel p {
+  color: var(--muted);
 }
 
 @keyframes spin {

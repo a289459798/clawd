@@ -54,6 +54,7 @@ export function ImageLightbox({
 export function NavSidebar({
   activeNav,
   onNavChange,
+  t,
   gatewayConnected,
   gatewayVersion,
   updateAvailable,
@@ -62,20 +63,22 @@ export function NavSidebar({
 }: {
   activeNav: NavKey;
   onNavChange: (nav: NavKey) => void;
+  t?: (key: string) => string;
   gatewayConnected?: boolean;
   gatewayVersion?: string | null;
   updateAvailable?: boolean;
   sessionCount?: number;
   onOpenStatus?: () => void;
 }) {
+  const translate = t ?? ((key: string) => key);
   const navItems: Array<{ key: NavKey; label: string; icon: string }> = [
-    { key: "conversations", label: "对话", icon: "chat" },
-    { key: "models", label: "模型", icon: "model" },
-    { key: "skills", label: "技能", icon: "skill" },
-    { key: "connections", label: "连接", icon: "plug" },
-    { key: "cron", label: "定时", icon: "cron" },
-    { key: "usage", label: "用量", icon: "usage" },
-    { key: "pets", label: "宠物", icon: "pet" },
+    { key: "conversations", label: translate("nav.conversations"), icon: "chat" },
+    { key: "models", label: translate("nav.models"), icon: "model" },
+    { key: "skills", label: translate("nav.skills"), icon: "skill" },
+    { key: "connections", label: translate("nav.connections"), icon: "plug" },
+    { key: "cron", label: translate("nav.cron"), icon: "cron" },
+    { key: "usage", label: translate("nav.usage"), icon: "usage" },
+    { key: "pets", label: translate("nav.pets"), icon: "pet" },
   ];
   const openClawTitle = [
     gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接",
@@ -112,6 +115,16 @@ export function NavSidebar({
           {updateAvailable ? (
             <span className="openclaw-update-badge">有更新</span>
           ) : null}
+        </button>
+        <button
+          className={`settings-nav-button ${activeNav === "settings" ? "active" : ""}`}
+          type="button"
+          title={translate("nav.settings")}
+          aria-label={translate("nav.settings")}
+          aria-pressed={activeNav === "settings"}
+          onClick={() => onNavChange("settings")}
+        >
+          <span className="nav-symbol settings" />
         </button>
       </div>
     </aside>

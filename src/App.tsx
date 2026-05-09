@@ -2,7 +2,7 @@ import { startTransition, useEffect, useMemo, useState, useCallback, useRef } fr
 import { defaultWindowIcon } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
 import { AgentCreateDialog } from "./components/AgentCreateDialog";
@@ -15,10 +15,12 @@ import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
 import { ModelsPage } from "./components/ModelsPage";
 import { PetsPage } from "./components/PetsPage";
 import { ResourceSidebar } from "./components/ResourceSidebar";
+import { SettingsPage } from "./components/SettingsPage";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { conversationMatchesSessionKey, findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
 import { readComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
+import { useClawKitSettings } from "./hooks/useClawKitSettings";
 import { useGatewayChat } from "./hooks/useGatewayChat";
 import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
 import { useMessageSender } from "./hooks/useMessageSender";
@@ -39,6 +41,12 @@ import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import { describeUpdateRestartSentinel, extrapolateGatewayUptimeMs, formatApproxDurationMs } from "./lib/gatewayRuntimeInfo";
 import { resolveComposerThinkingOptions } from "./lib/thinkingOptions";
+import { buildAppearanceDataAttributes } from "./lib/appAppearance";
+import { buildConversationCompletionNotification } from "./lib/conversationNotifications";
+import { onNativeNotificationAction, sendNativeNotification } from "./lib/notifications";
+import { createTranslator, resolveLocale } from "./lib/i18n";
+import { shouldRunDestructiveAction } from "./lib/sessionConfirmations";
+import { parseConversationFilters, serializeConversationFilters } from "./lib/appUiPersistence";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
 import type { PetConversationContext } from "./types/pet";
 import type { Agent, ChannelConnection, ClawKitBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
@@ -52,6 +60,8 @@ const fallbackConnections: ChannelConnection[] = [];
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const BOOTSTRAP_DEBUG_STORAGE_KEY = "clawkit.debug.bootstrapStep";
+const CONVERSATION_FILTERS_STORAGE_KEY = "clawkit.conversationFilters";
+const LAST_CONVERSATION_STORAGE_KEY = "clawkit.lastConversationId";
 
 function readBootstrapDebugStep() {
   try {
@@ -61,6 +71,36 @@ function readBootstrapDebugStep() {
     return value === "install" || value === "bind" || value === "connect_test" ? value : null;
   } catch {
     return null;
+  }
+}
+
+function readStorageValue(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageValue(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Local storage can be unavailable in restricted webviews; settings still work without it.
+  }
+}
+
+async function bringMainWindowForward() {
+  const appWindow = getCurrentWindow();
+  try {
+    await appWindow.show();
+    const minimized = await appWindow.isMinimized().catch(() => false);
+    if (minimized) {
+      await appWindow.unminimize();
+    }
+    await appWindow.requestUserAttention(UserAttentionType.Informational).catch(() => undefined);
+  } catch (error) {
+    console.warn("Failed to bring ClawKit window forward", error);
   }
 }
 
@@ -322,9 +362,9 @@ function App() {
   const [bootstrapStep, setBootstrapStep] = useState<"detect" | "install" | "bind" | "connect_test" | "ready">("detect");
   const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
-  const [conversationSearch, setConversationSearch] = useState("");
-  const [conversationRuntimeFilter, setConversationRuntimeFilter] = useState("all");
-  const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">("updated");
+  const [conversationSearch, setConversationSearch] = useState(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).search);
+  const [conversationRuntimeFilter, setConversationRuntimeFilter] = useState(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).runtimeFilter);
+  const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).sort);
   const [openedConversationIds, setOpenedConversationIds] = useState<Record<string, true>>({});
   const [agents, setAgents] = useState(agentsSeed);
   const [expandedConversationId, setExpandedConversationId] = useState("");
@@ -358,6 +398,8 @@ function App() {
   const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
   const [openClawGatewayBusy, setOpenClawGatewayBusy] = useState(false);
   const [openClawGatewayMessage, setOpenClawGatewayMessage] = useState<string | null>(null);
+  const [settingsOpenClawActionBusy, setSettingsOpenClawActionBusy] = useState(false);
+  const [settingsOpenClawActionMessage, setSettingsOpenClawActionMessage] = useState<string | null>(null);
   const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const uiFrameDiagnostics = useUiFrameDiagnostics(bootstrapStep === "ready");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -378,13 +420,31 @@ function App() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoSendingQueuedMessageRef = useRef<string | null>(null);
   const agentsRef = useRef<Agent[]>(agentsSeed);
+  const previousConversationsRef = useRef<Map<string, Conversation>>(new Map());
+  const notifiedConversationRunKeysRef = useRef<Set<string>>(new Set());
   const activeConversationIdRef = useRef<string | null>(null);
   const queuedMessagesByConversationRef = useRef<Record<string, QueuedComposerMessage[]>>({});
+  const restoredLastConversationRef = useRef(false);
+  const autoStartGatewayAttemptedRef = useRef(false);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
   const [gatewayUptimeBasisMs, setGatewayUptimeBasisMs] = useState<number | null>(null);
   const [gatewayUptimeRecordedAtMs, setGatewayUptimeRecordedAtMs] = useState<number | null>(null);
+  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => (
+    typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark"
+  ));
+  const {
+    settings: clawKitSettings,
+    settingsLoading: clawKitSettingsLoading,
+    settingsError: clawKitSettingsError,
+    patchSettings,
+  } = useClawKitSettings({ enabled: !bootstrapLoading });
+  const locale = useMemo(
+    () => resolveLocale(clawKitSettings.general.language, typeof navigator !== "undefined" ? navigator.language : null),
+    [clawKitSettings.general.language],
+  );
+  const t = useMemo(() => createTranslator(locale), [locale]);
   const [gatewayUpdateRestartSentinel, setGatewayUpdateRestartSentinel] = useState<unknown>(null);
   const [gatewayRuntimeTick, setGatewayRuntimeTick] = useState(0);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
@@ -438,16 +498,89 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (clawKitSettingsError) {
+      console.warn("Failed to load ClawKit settings", clawKitSettingsError);
+    }
+  }, [clawKitSettingsError]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return undefined;
+    const query = window.matchMedia("(prefers-color-scheme: light)");
+    const updateTheme = () => setSystemTheme(query.matches ? "light" : "dark");
+    updateTheme();
+    query.addEventListener("change", updateTheme);
+    return () => query.removeEventListener("change", updateTheme);
+  }, []);
+
+  useEffect(() => {
     queuedMessagesByConversationRef.current = queuedMessagesByConversation;
   }, [queuedMessagesByConversation]);
 
   useEffect(() => {
+    const previousConversations = previousConversationsRef.current;
+    const nextConversations = new Map<string, Conversation>();
+    const windowFocused = typeof document !== "undefined" ? document.hasFocus() : false;
+
+    for (const agent of agents) {
+      for (const conversation of agent.conversations) {
+        nextConversations.set(conversation.id, conversation);
+        const notification = buildConversationCompletionNotification({
+          previous: previousConversations.get(conversation.id) ?? null,
+          current: conversation,
+          settings: clawKitSettings.notifications,
+          windowFocused,
+          seenKeys: notifiedConversationRunKeysRef.current,
+          copy: {
+            genericFinished: t("notification.genericFinished"),
+            completed: t("notification.completed"),
+            failed: t("notification.failed"),
+          },
+        });
+        if (notification) {
+          void sendNativeNotification({
+            key: notification.key,
+            title: notification.title,
+            body: notification.body,
+            conversationId: conversation.id,
+          });
+        }
+      }
+    }
+
+    previousConversationsRef.current = nextConversations;
     agentsRef.current = agents;
-  }, [agents]);
+  }, [agents, clawKitSettings.notifications, t]);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (clawKitSettingsLoading || !clawKitSettings.general.rememberConversationFilters) {
+      return;
+    }
+    writeStorageValue(
+      CONVERSATION_FILTERS_STORAGE_KEY,
+      serializeConversationFilters({
+        search: conversationSearch,
+        runtimeFilter: conversationRuntimeFilter,
+        sort: conversationSort,
+      }),
+    );
+  }, [
+    clawKitSettings.general.rememberConversationFilters,
+    clawKitSettingsLoading,
+    conversationRuntimeFilter,
+    conversationSearch,
+    conversationSort,
+  ]);
+
+  useEffect(() => {
+    if (clawKitSettingsLoading || !clawKitSettings.general.restoreLastConversation || !activeConversationId) {
+      return;
+    }
+    writeStorageValue(LAST_CONVERSATION_STORAGE_KEY, activeConversationId);
+  }, [activeConversationId, clawKitSettings.general.restoreLastConversation, clawKitSettingsLoading]);
 
   const loadBootstrapStatus = useCallback(async () => {
     setBootstrapLoading(true);
@@ -553,6 +686,34 @@ function App() {
   useEffect(() => {
     void loadBootstrapStatus();
   }, [loadBootstrapStatus]);
+
+  useEffect(() => {
+    if (
+      autoStartGatewayAttemptedRef.current ||
+      clawKitSettingsLoading ||
+      !clawKitSettings.openclaw.autoStartGateway ||
+      !bootstrapStatus?.openclawInstalled ||
+      !bootstrapStatus.bindingConfigured ||
+      (bootstrapStep !== "connect_test" && bootstrapStep !== "ready")
+    ) {
+      return;
+    }
+
+    autoStartGatewayAttemptedRef.current = true;
+    void (async () => {
+      try {
+        await invoke("openclaw_gateway_start");
+      } catch (error) {
+        console.warn("Failed to auto-start OpenClaw Gateway", error);
+      }
+    })();
+  }, [
+    bootstrapStatus?.bindingConfigured,
+    bootstrapStatus?.openclawInstalled,
+    bootstrapStep,
+    clawKitSettings.openclaw.autoStartGateway,
+    clawKitSettingsLoading,
+  ]);
 
   useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured) {
@@ -1174,6 +1335,53 @@ function App() {
     }
   };
 
+  const runSettingsOpenClawAction = useCallback(async (action: () => Promise<string | void>) => {
+    setSettingsOpenClawActionBusy(true);
+    setSettingsOpenClawActionMessage(null);
+    try {
+      const message = await action();
+      setSettingsOpenClawActionMessage(message || "操作已执行。");
+    } catch (error) {
+      setSettingsOpenClawActionMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSettingsOpenClawActionBusy(false);
+    }
+  }, []);
+
+  const refreshSettingsOpenClawStatus = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      await Promise.all([loadBootstrapStatus(), refreshOpenClawCliStatus(), refreshOpenClawStatus()]);
+      return "状态已刷新。";
+    });
+  }, [loadBootstrapStatus, refreshOpenClawCliStatus, refreshOpenClawStatus, runSettingsOpenClawAction]);
+
+  const reconnectSettingsGateway = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      await invoke("gateway_connect");
+      await refreshOpenClawStatus();
+      return "Gateway 已重新连接。";
+    });
+  }, [refreshOpenClawStatus, runSettingsOpenClawAction]);
+
+  const repairSettingsBinding = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      await bindOpenClaw();
+      await loadBootstrapStatus();
+      return "ClawKit 绑定已重新写入。";
+    });
+  }, [bindOpenClaw, loadBootstrapStatus, runSettingsOpenClawAction]);
+
+  const installOpenClawFromSettings = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      const message = await invoke<string>("open_openclaw_install_terminal");
+      window.setTimeout(() => {
+        void loadBootstrapStatus();
+        void refreshOpenClawCliStatus();
+      }, 1500);
+      return message;
+    });
+  }, [loadBootstrapStatus, refreshOpenClawCliStatus, runSettingsOpenClawAction]);
+
   const refreshUsage = useCallback(async () => {
     setUsageLoading(true);
     try {
@@ -1309,7 +1517,7 @@ function App() {
   }, [bootstrapStep, refreshOpenClawDefaultModel]);
 
   useEffect(() => {
-    if (bootstrapStep !== "ready") {
+    if (bootstrapStep !== "ready" || clawKitSettingsLoading || !clawKitSettings.general.autoCheckUpdates) {
       return undefined;
     }
     void refreshOpenClawCliStatus();
@@ -1317,7 +1525,7 @@ function App() {
       void refreshOpenClawCliStatus();
     }, OPENCLAW_VERSION_CHECK_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [bootstrapStep, refreshOpenClawCliStatus]);
+  }, [bootstrapStep, clawKitSettings.general.autoCheckUpdates, clawKitSettingsLoading, refreshOpenClawCliStatus]);
 
   const refreshGatewaySnapshot = useCallback(async (options?: { priorityAgentId?: string }) => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
@@ -1392,6 +1600,23 @@ function App() {
   });
 
   const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
+
+  useEffect(() => {
+    if (
+      restoredLastConversationRef.current ||
+      !clawKitSettings.general.restoreLastConversation ||
+      activeConversationId ||
+      visibleConversations.length === 0
+    ) {
+      return;
+    }
+
+    restoredLastConversationRef.current = true;
+    const lastConversationId = readStorageValue(LAST_CONVERSATION_STORAGE_KEY);
+    if (lastConversationId && visibleConversations.some((conversation) => conversation.id === lastConversationId)) {
+      setActiveConversationId(lastConversationId);
+    }
+  }, [activeConversationId, clawKitSettings.general.restoreLastConversation, visibleConversations]);
 
   const conversationRuntimeOptions = useMemo(() => {
     const runtimeById = new Map<string, { value: string; label: string; count: number }>();
@@ -1705,6 +1930,33 @@ function App() {
   }, [openConversationDetail]);
 
   useEffect(() => {
+    let cancelled = false;
+    let cleanup: (() => void | Promise<void>) | undefined;
+
+    void (async () => {
+      try {
+        const listener = await onNativeNotificationAction(async (conversationId) => {
+          await bringMainWindowForward();
+          if (cancelled) return;
+          setActiveNav("conversations");
+          await openConversationDetailRef.current(conversationId);
+        });
+        cleanup = () => listener.unregister();
+        if (cancelled) {
+          void cleanup();
+        }
+      } catch (error) {
+        console.warn("Failed to listen for notification actions", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      void cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!activeConversationId || activeConversationId.startsWith("draft-") || bootstrapStep !== "ready") {
       return;
     }
@@ -1889,7 +2141,10 @@ function App() {
   const handleResetSession = useCallback(async (conversationId: string) => {
     const target = findConversationById(agentsRef.current, conversationId);
     const label = target?.title ?? conversationId;
-    const confirmed = window.confirm(`要让「${label}」重新开始吗？\n\n这会清空这段会话的上下文和历史消息，但会保留会话入口。`);
+    const confirmed = shouldRunDestructiveAction(
+      clawKitSettings.general.confirmDestructiveActions,
+      () => window.confirm(`要让「${label}」重新开始吗？\n\n这会清空这段会话的上下文和历史消息，但会保留会话入口。`),
+    );
     if (!confirmed) return;
     setSessionActionBusy("reset");
     setSessionActionError(null);
@@ -1926,12 +2181,15 @@ function App() {
     } finally {
       setSessionActionBusy(null);
     }
-  }, [announceWorkspace]);
+  }, [announceWorkspace, clawKitSettings.general.confirmDestructiveActions]);
 
   const handleDeleteSession = useCallback(async (conversationId: string) => {
     const target = findConversationById(agentsRef.current, conversationId);
     const label = target?.title ?? conversationId;
-    const confirmed = window.confirm(`确定删除「${label}」吗？\n\n删除后它会从 OpenClaw 会话列表中移除。只是暂时不想看到的话，可以在左侧列表用“隐藏”。`);
+    const confirmed = shouldRunDestructiveAction(
+      clawKitSettings.general.confirmDestructiveActions,
+      () => window.confirm(`确定删除「${label}」吗？\n\n删除后它会从 OpenClaw 会话列表中移除。只是暂时不想看到的话，可以在左侧列表用“隐藏”。`),
+    );
     if (!confirmed) return;
     setSessionActionBusy("delete");
     setSessionActionError(null);
@@ -1962,7 +2220,7 @@ function App() {
     } finally {
       setSessionActionBusy(null);
     }
-  }, [announceWorkspace, expandedConversationId]);
+  }, [announceWorkspace, clawKitSettings.general.confirmDestructiveActions, expandedConversationId]);
 
   const handleSend = useCallback(async () => {
     if (!activeConversationId) return;
@@ -2041,8 +2299,10 @@ function App() {
     if (shouldShowBootstrap) return bootstrapScreen;
   }
 
+  const appearanceDataAttributes = buildAppearanceDataAttributes(clawKitSettings.appearance, systemTheme);
+
   return (
-    <main className="app-shell">
+    <main className="app-shell" {...appearanceDataAttributes}>
       <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} />
       <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} />
       <AgentCreateDialog
@@ -2074,6 +2334,7 @@ function App() {
         <NavSidebar
           activeNav={activeNav}
           onNavChange={handleNavChange}
+          t={t}
           gatewayConnected={gatewayConnected}
           gatewayVersion={openClawStatus?.runtimeVersion}
           updateAvailable={openClawCliStatus?.updateAvailable}
@@ -2098,6 +2359,8 @@ function App() {
             />
 
             <ConversationWorkspace
+              defaultDisplayMode={clawKitSettings.general.defaultConversationMode}
+              sendShortcut={clawKitSettings.general.sendShortcut}
               visibleConversationCount={visibleConversations.length}
               conversationFiltersActive={conversationFiltersActive}
               onClearConversationFilters={() => {
@@ -2241,6 +2504,29 @@ function App() {
 
         {activeNav === "pets" ? (
           <PetsPage context={petContext} />
+        ) : null}
+
+        {activeNav === "settings" ? (
+          <SettingsPage
+            settings={clawKitSettings}
+            loading={clawKitSettingsLoading}
+            error={clawKitSettingsError}
+            t={t}
+            patchSettings={patchSettings}
+            gatewayConnected={gatewayConnected}
+            gatewayStatusText={gatewayStatusText}
+            bootstrapStatus={bootstrapStatus}
+            openClawCliStatus={openClawCliStatus}
+            actionBusy={settingsOpenClawActionBusy || openClawGatewayBusy || openClawUpdateBusy || bindingInProgress}
+            actionMessage={settingsOpenClawActionMessage ?? openClawGatewayMessage ?? openClawUpdateMessage}
+            onRefreshOpenClaw={refreshSettingsOpenClawStatus}
+            onReconnectGateway={reconnectSettingsGateway}
+            onToggleGateway={() => void toggleOpenClawGateway()}
+            onRepairBinding={repairSettingsBinding}
+            onInstallOpenClaw={installOpenClawFromSettings}
+            onUpdateOpenClaw={() => void runOpenClawUpdate()}
+            onNavigate={handleNavChange}
+          />
         ) : null}
       </div>
 

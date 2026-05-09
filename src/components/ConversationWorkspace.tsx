@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationDetail } from "./ConversationDetail";
 import { ConversationList } from "./ConversationList";
@@ -7,6 +7,7 @@ import { getConversationDetailState } from "../lib/conversationDetailState";
 import { ensureSelectedModelOption } from "../lib/modelOptions";
 import type { ComposerAttachment, ModelOption, QueuedComposerMessage } from "../types/app";
 import type { Conversation } from "../types/conversation";
+import type { SendShortcut } from "../types/settings";
 
 type VisibleConversation = Conversation & {
   agentId: string;
@@ -16,6 +17,8 @@ type VisibleConversation = Conversation & {
 
 type ConversationWorkspaceProps = {
   activeConversation: Conversation | null;
+  defaultDisplayMode: "focus" | "conversation";
+  sendShortcut: SendShortcut;
   visibleConversationCount: number;
   conversationFiltersActive: boolean;
   onClearConversationFilters: () => void;
@@ -74,6 +77,8 @@ type ConversationWorkspaceProps = {
 
 export function ConversationWorkspace({
   activeConversation,
+  defaultDisplayMode,
+  sendShortcut,
   visibleConversationCount,
   conversationFiltersActive,
   onClearConversationFilters,
@@ -128,15 +133,20 @@ export function ConversationWorkspace({
   onDeleteSession,
   workspaceAnnouncement,
 }: ConversationWorkspaceProps) {
-  const [detailDisplayMode, setDetailDisplayMode] = useState<"focus" | "conversation">("focus");
+  const defaultDisplayModeRef = useRef(defaultDisplayMode);
+  const [detailDisplayMode, setDetailDisplayMode] = useState<"focus" | "conversation">(defaultDisplayMode);
   const [transcriptScrollCompact, setTranscriptScrollCompact] = useState(false);
+
+  useEffect(() => {
+    defaultDisplayModeRef.current = defaultDisplayMode;
+  }, [defaultDisplayMode]);
 
   useEffect(() => {
     setTranscriptScrollCompact(false);
   }, [activeConversation?.id]);
 
   useEffect(() => {
-    setDetailDisplayMode("focus");
+    setDetailDisplayMode(defaultDisplayModeRef.current);
   }, [activeConversation?.id]);
 
   const renderFocusModeContent = () => {
@@ -265,6 +275,7 @@ export function ConversationWorkspace({
             modelOptions={ensureSelectedModelOption(modelOptions, composerModel)}
             thinkingOptions={composerThinkingOptions ?? activeConversation.thinkingOptions}
             modelsLoading={modelsLoading}
+            sendShortcut={sendShortcut}
             onFocusChange={onFocusChange}
             onValueChange={onValueChange}
             onModelChange={onModelChange}

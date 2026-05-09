@@ -1,6 +1,8 @@
 import { useRef } from "react";
 import { Icon, IconNames } from "./Icon";
 import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
+import { shouldSubmitComposer } from "../lib/composerShortcut";
+import type { SendShortcut } from "../types/settings";
 
 type ComposerAttachment = {
   id: string;
@@ -43,6 +45,7 @@ type ConversationComposerProps = {
   modelOptions: ModelOption[];
   thinkingOptions?: ModelOption[];
   modelsLoading?: boolean;
+  sendShortcut: SendShortcut;
   onFocusChange: (focused: boolean) => void;
   onValueChange: (value: string) => void;
   onModelChange: (value: string) => void;
@@ -66,6 +69,7 @@ export function ConversationComposer({
   modelOptions,
   thinkingOptions,
   modelsLoading = false,
+  sendShortcut,
   onFocusChange,
   onValueChange,
   onModelChange,
@@ -126,7 +130,7 @@ export function ConversationComposer({
           placeholder="输入消息…"
           onChange={(e) => onValueChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (shouldSubmitComposer(sendShortcut, e)) {
               e.preventDefault();
               void onSend();
             }
