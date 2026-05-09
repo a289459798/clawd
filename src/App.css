@@ -430,12 +430,13 @@
   position: absolute;
   left: 36px;
   right: 34px;
-  top: auto;
+  top: 14px;
   bottom: 140px;
   display: grid;
   gap: 8px;
-  max-height: 190px;
-  overflow: hidden;
+  align-content: end;
+  background: transparent;
+  overflow: visible;
 }
 
 .pet-bubble {
@@ -574,8 +575,8 @@
 
 .pet-character-layer {
   position: absolute;
-  right: 38px;
-  bottom: 34px;
+  right: 6px;
+  bottom: 14px;
   width: 112px;
   height: 112px;
   pointer-events: none;
@@ -826,6 +827,7 @@ html.pet-window-document,
 html.pet-window-document body,
 html.pet-window-document #root {
   background: transparent !important;
+  color-scheme: dark;
 }
 
 .bootstrap-screen {
@@ -2474,7 +2476,7 @@ p {
   transform-origin: center;
 }
 
-/* Left nav: iconfont Symbol (`//at.alicdn.com/t/c/font_5169341_2j46lf0fvym.js`) */
+/* Left nav: iconfont Symbol (bundled at `/public/nav-iconfont.js`) */
 svg.nav-iconfont {
   width: 22px;
   height: 22px;
@@ -6046,8 +6048,15 @@ svg.nav-iconfont {
   background: linear-gradient(180deg, rgba(82, 242, 197, 0.95), rgba(122, 162, 255, 0.72));
 }
 
-.openclaw-info-drawer {
+.openclaw-info-backdrop {
   position: fixed;
+  inset: 0;
+  z-index: 69;
+  background: transparent;
+}
+
+.openclaw-info-drawer {
+  position: absolute;
   left: 58px;
   bottom: 14px;
   z-index: 70;

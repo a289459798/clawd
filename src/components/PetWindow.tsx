@@ -72,7 +72,8 @@ export function PetWindow() {
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [lastExpandedSignature, setLastExpandedSignature] = useState("");
   const [frameIndex, setFrameIndex] = useState(0);
-  const [hoveringPet, setHoveringPet] = useState(false);
+  const [waveOnce, setWaveOnce] = useState(false);
+  const [waveToken, setWaveToken] = useState(0);
 
   useEffect(() => {
     document.documentElement.classList.add("pet-window-document");
@@ -107,14 +108,15 @@ export function PetWindow() {
   const replies = context.replies ?? [];
   const busy = replies.some((reply) => reply.loading) || context.status === "working";
   const petState = resolvePetState(replies, context.status);
-  const effectivePetState = hoveringPet && (petState === "idle" || petState === "waiting") ? "waving" : petState;
+  const canWaveOnHover = petState === "idle" || petState === "waiting";
+  const effectivePetState = waveOnce && canWaveOnHover ? "waving" : petState;
   const animation = resolveAnimation(pet, effectivePetState);
   const atlas = pet?.atlas ?? null;
   const spritesheetSrc = pet?.spritesheetDataUrl ?? (pet?.spritesheet ? convertFileSrc(pet.spritesheet) : null);
   const imageSrc = !spritesheetSrc && pet?.image ? convertFileSrc(pet.image) : null;
   const hasReplies = replies.length > 0;
-  const visibleReplies = replies.slice(0, 4);
-  const hiddenCount = visibleReplies.length;
+  const visibleReplies = replies.slice(0, 6);
+  const hiddenCount = replies.length;
   const replySignature = replies.map((reply) => `${reply.conversationId}:${reply.updatedAt ?? ""}:${reply.loading ? "loading" : "done"}`).join("|");
 
   useEffect(() => {
@@ -130,22 +132,40 @@ export function PetWindow() {
   }, [replySignature, hasReplies, lastExpandedSignature]);
 
   useEffect(() => {
-    void invoke("set_pet_window_expanded", { expanded: hasReplies && !collapsed }).catch(() => undefined);
-  }, [hasReplies, collapsed]);
+    void invoke("set_pet_window_expanded", {
+      expanded: hasReplies && !collapsed,
+      replyCount: visibleReplies.length,
+    }).catch(() => undefined);
+  }, [hasReplies, collapsed, visibleReplies.length]);
 
   useEffect(() => {
     setFrameIndex(0);
-  }, [pet?.id, effectivePetState]);
+  }, [pet?.id, effectivePetState, waveToken]);
 
   useEffect(() => {
-    if (!animation || animation.frames <= 1) return;
+    if (!canWaveOnHover) {
+      setWaveOnce(false);
+    }
+  }, [canWaveOnHover]);
+
+  useEffect(() => {
+    if (!animation || animation.frames <= 1) {
+      if (waveOnce) {
+        setWaveOnce(false);
+      }
+      return;
+    }
     const currentFrame = frameIndex % animation.frames;
     const frameMs = animation.frameMs[currentFrame % animation.frameMs.length] ?? 140;
     const timer = window.setTimeout(() => {
-      setFrameIndex((value) => (value + 1) % animation.frames);
+      const nextFrame = (currentFrame + 1) % animation.frames;
+      setFrameIndex(nextFrame);
+      if (waveOnce && effectivePetState === "waving" && nextFrame === 0) {
+        setWaveOnce(false);
+      }
     }, frameMs);
     return () => window.clearTimeout(timer);
-  }, [animation, frameIndex]);
+  }, [animation, effectivePetState, frameIndex, waveOnce]);
 
   const currentFrame = animation ? frameIndex % animation.frames : 0;
   const spriteStyle = spritesheetSrc && atlas && animation ? {
@@ -165,6 +185,26 @@ export function PetWindow() {
     setMenuPosition({ x: event.clientX, y: event.clientY });
   };
 
+  const handlePetMouseEnter = () => {
+    if (canWaveOnHover) {
+      setFrameIndex(0);
+      setWaveOnce(true);
+      setWaveToken((value) => value + 1);
+    }
+  };
+
+  const handlePetMouseLeave = () => {
+    // Waving is intentionally one-shot; let the current cycle finish.
+  };
+
+  const handlePetClick = () => {
+    if (canWaveOnHover) {
+      setFrameIndex(0);
+      setWaveOnce(true);
+      setWaveToken((value) => value + 1);
+    }
+  };
+
   return (
     <main
       className={`pet-window-shell ${hasReplies && !collapsed ? "is-expanded" : "is-compact"}`}
@@ -182,7 +222,7 @@ export function PetWindow() {
                   </svg>
                 )}
               </div>
-              <div className="pet-bubble-command">{compactLine(reply.title, "OpenClaw")}</div>
+              <div className="pet-bubble-command">{compactLine(reply.userMessage, reply.title || "OpenClaw")}</div>
               {reply.loading ? (
                 <div className="pet-thinking-line" role="status" aria-live="polite">
                   <span>正在思考</span>
@@ -225,8 +265,9 @@ export function PetWindow() {
           aria-hidden="true"
           onMouseDown={handleStartDrag}
           onContextMenu={handleContextMenu}
-          onMouseEnter={() => setHoveringPet(true)}
-          onMouseLeave={() => setHoveringPet(false)}
+          onClick={handlePetClick}
+          onMouseEnter={handlePetMouseEnter}
+          onMouseLeave={handlePetMouseLeave}
         >
           {spriteStyle && spritesheetSrc ? (
             <div className="pet-sprite-frame">

@@ -474,35 +474,62 @@ fn write_clawkit_settings_file(settings: &Value) -> Result<(), String> {
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
-fn sync_resource_pets_to_clawkit(app: &AppHandle) -> Result<(), String> {
-    let resource_pets_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("failed to resolve resource directory: {error}"))?
-        .join("pets");
-    if !resource_pets_dir.is_dir() {
-        return Ok(());
+fn push_existing_pet_resource_dir(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !path.is_dir() {
+        return;
     }
+    let duplicate = candidates.iter().any(|candidate| {
+        candidate == &path
+            || (candidate.canonicalize().ok().is_some()
+                && candidate.canonicalize().ok() == path.canonicalize().ok())
+    });
+    if !duplicate {
+        candidates.push(path);
+    }
+}
 
+fn resource_pet_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push_existing_pet_resource_dir(&mut candidates, resource_dir.join("pets"));
+        push_existing_pet_resource_dir(
+            &mut candidates,
+            resource_dir.join("resources").join("pets"),
+        );
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        push_existing_pet_resource_dir(
+            &mut candidates,
+            current_dir.join("src-tauri").join("resources").join("pets"),
+        );
+        push_existing_pet_resource_dir(&mut candidates, current_dir.join("resources").join("pets"));
+    }
+    candidates
+}
+
+fn sync_resource_pets_to_clawkit(app: &AppHandle) -> Result<(), String> {
     let target_pets_dir = clawkit_pets_dir()?;
     fs::create_dir_all(&target_pets_dir)
         .map_err(|error| format!("failed to create {}: {error}", target_pets_dir.display()))?;
 
-    for entry in fs::read_dir(&resource_pets_dir)
-        .map_err(|error| format!("failed to read {}: {error}", resource_pets_dir.display()))?
-    {
-        let entry = entry.map_err(|error| format!("failed to read resource pet entry: {error}"))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("failed to inspect resource pet entry: {error}"))?;
-        if !file_type.is_dir() {
-            continue;
+    for resource_pets_dir in resource_pet_dirs(app) {
+        for entry in fs::read_dir(&resource_pets_dir)
+            .map_err(|error| format!("failed to read {}: {error}", resource_pets_dir.display()))?
+        {
+            let entry =
+                entry.map_err(|error| format!("failed to read resource pet entry: {error}"))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("failed to inspect resource pet entry: {error}"))?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let target = target_pets_dir.join(entry.file_name());
+            if target.exists() {
+                continue;
+            }
+            copy_dir_all(&entry.path(), &target)?;
         }
-        let target = target_pets_dir.join(entry.file_name());
-        if target.exists() {
-            continue;
-        }
-        copy_dir_all(&entry.path(), &target)?;
     }
 
     Ok(())
@@ -2494,33 +2521,55 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn resize_pet_window(window: &WebviewWindow, expanded: bool) -> Result<(), String> {
-    let old_position = window.outer_position().ok();
-    let old_size = window.outer_size().ok();
+fn resize_pet_window(
+    window: &WebviewWindow,
+    expanded: bool,
+    reply_count: Option<usize>,
+) -> Result<(), String> {
     let (width, height) = if expanded {
-        (360.0, 260.0)
+        let count = reply_count.unwrap_or(1).clamp(1, 6) as f64;
+        (360.0, 156.0 + count * 66.0)
     } else {
         (124.0, 138.0)
     };
+
+    let anchor = window
+        .outer_position()
+        .ok()
+        .zip(window.outer_size().ok())
+        .map(|(position, size)| (position.x + size.width as i32, position.y + size.height as i32));
 
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| format!("failed to resize pet window: {error}"))?;
 
-    if let (Some(position), Some(size), Ok(new_size)) =
-        (old_position, old_size, window.outer_size())
-    {
-        let x = position.x + size.width as i32 - new_size.width as i32;
-        let y = position.y + size.height as i32 - new_size.height as i32;
-        let _ = window.set_position(PhysicalPosition::new(x, y));
+    if let Some((anchor_x, anchor_y)) = anchor {
+        if let Ok(new_size) = window.outer_size() {
+            let _ = window.set_position(PhysicalPosition::new(
+                anchor_x - new_size.width as i32,
+                anchor_y - new_size.height as i32,
+            ));
+        }
+        let delayed_window = window.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            if let Ok(new_size) = delayed_window.outer_size() {
+                let _ = delayed_window.set_position(PhysicalPosition::new(
+                    anchor_x - new_size.width as i32,
+                    anchor_y - new_size.height as i32,
+                ));
+            }
+        });
     }
 
     Ok(())
 }
 
 #[tauri::command]
-async fn list_codex_pets() -> Result<Vec<PetSummary>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn list_codex_pets(app: AppHandle) -> Result<Vec<PetSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_clawkit_home()?;
+        sync_resource_pets_to_clawkit(&app)?;
         let mut pets = Vec::new();
         for (source, pets_dir) in [
             ("codex", codex_pets_dir()?),
@@ -2581,8 +2630,9 @@ async fn import_codex_pet() -> Result<PetSummary, String> {
 async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
     let label = "pet";
     if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
         let _ = window.show();
-        show_main_window(&app);
+        let _ = window.set_always_on_top(true);
         let _ = window.emit("clawkit://pet-selected", pet_id);
         return Ok(());
     }
@@ -2603,13 +2653,19 @@ async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
         .build()
         .map_err(|error| format!("failed to open pet window: {error}"))?;
     position_pet_window_bottom_right(&window);
+    let _ = window.set_always_on_top(true);
+    let _ = window.show();
     Ok(())
 }
 
 #[tauri::command]
-async fn set_pet_window_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
+async fn set_pet_window_expanded(
+    app: AppHandle,
+    expanded: bool,
+    reply_count: Option<usize>,
+) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("pet") {
-        resize_pet_window(&window, expanded)?;
+        resize_pet_window(&window, expanded, reply_count)?;
     }
     Ok(())
 }

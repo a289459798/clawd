@@ -211,6 +211,7 @@ function buildPetContext(agents: Agent[], conversation: Conversation | null, now
       return {
         conversationId: item.id,
         title: item.title,
+        userMessage: resolvePetLastUserMessage(item),
         status: item.status,
         model: item.model,
         reply: reply ?? "",
@@ -2546,7 +2547,13 @@ function App() {
       </div>
 
       {openClawInfoOpen ? (
-        <aside className="openclaw-info-drawer" role="dialog" aria-modal="true">
+        <div className="openclaw-info-backdrop" onMouseDown={() => setOpenClawInfoOpen(false)}>
+        <aside
+          className="openclaw-info-drawer"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
           <div className="openclaw-info-head">
             <div className="openclaw-info-status">
               <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
@@ -2616,6 +2623,7 @@ function App() {
             </button>
           </div>
         </aside>
+        </div>
       ) : null}
     </main>
   );

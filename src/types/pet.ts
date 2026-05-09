@@ -43,6 +43,7 @@ export type PetConversationContext = {
 export type PetReplyItem = {
   conversationId: string;
   title: string;
+  userMessage?: string | null;
   status: string;
   model?: string | null;
   reply: string;
