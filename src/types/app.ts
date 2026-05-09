@@ -102,7 +102,7 @@ export type UsageTotals = {
   errors?: number;
 };
 
-export type ClawxBootstrapStatus = {
+export type ClawKitBootstrapStatus = {
   openclawInstalled: boolean;
   openclawPath?: string | null;
   configExists: boolean;

@@ -9,13 +9,20 @@ import "../App.css";
 const emptyContext: PetConversationContext = {
   status: "idle",
   lastUserMessage: "/pet",
-  lastReply: "等待 clawx 对话更新。",
+  lastReply: "等待 ClawKit 对话更新。",
   replies: [],
 };
 
 function readStoredContext() {
   try {
-    const raw = localStorage.getItem("clawx.petContext");
+    let raw = localStorage.getItem("clawkit.petContext");
+    if (!raw) {
+      raw = localStorage.getItem("clawx.petContext");
+      if (raw) {
+        localStorage.setItem("clawkit.petContext", raw);
+        localStorage.removeItem("clawx.petContext");
+      }
+    }
     return raw ? { ...emptyContext, ...JSON.parse(raw) } as PetConversationContext : emptyContext;
   } catch {
     return emptyContext;
@@ -71,10 +78,10 @@ export function PetWindow() {
     document.documentElement.classList.add("pet-window-document");
     document.body.classList.add("pet-window-body");
     void invoke<PetSummary[]>("list_codex_pets").then(setPets).catch(() => setPets([]));
-    const unlistenContext = listen<PetConversationContext>("clawx://pet-context", (event) => {
+    const unlistenContext = listen<PetConversationContext>("clawkit://pet-context", (event) => {
       setContext({ ...emptyContext, ...event.payload });
     });
-    const unlistenSelected = listen<string>("clawx://pet-selected", (event) => {
+    const unlistenSelected = listen<string>("clawkit://pet-selected", (event) => {
       setPetId(event.payload);
     });
     const handleGlobalClick = () => setMenuPosition(null);
@@ -123,6 +130,10 @@ export function PetWindow() {
   }, [replySignature, hasReplies, lastExpandedSignature]);
 
   useEffect(() => {
+    void invoke("set_pet_window_expanded", { expanded: hasReplies && !collapsed }).catch(() => undefined);
+  }, [hasReplies, collapsed]);
+
+  useEffect(() => {
     setFrameIndex(0);
   }, [pet?.id, effectivePetState]);
 
@@ -156,9 +167,7 @@ export function PetWindow() {
 
   return (
     <main
-      className="pet-window-shell"
-      onMouseDown={handleStartDrag}
-      onContextMenu={handleContextMenu}
+      className={`pet-window-shell ${hasReplies && !collapsed ? "is-expanded" : "is-compact"}`}
     >
       {hasReplies && !collapsed ? (
         <section className="pet-bubble-list" data-tauri-drag-region>
@@ -191,8 +200,6 @@ export function PetWindow() {
 
       <section
         className={`pet-character-layer ${busy ? "busy" : ""} state-${effectivePetState}`}
-        onMouseEnter={() => setHoveringPet(true)}
-        onMouseLeave={() => setHoveringPet(false)}
       >
         {hasReplies ? (
           <button
@@ -213,7 +220,14 @@ export function PetWindow() {
             )}
           </button>
         ) : null}
-        <div className={`pet-avatar-large ${spritesheetSrc ? "has-sprite" : ""} ${imageSrc ? "has-image" : ""}`} aria-hidden="true">
+        <div
+          className={`pet-avatar-large ${spritesheetSrc ? "has-sprite" : ""} ${imageSrc ? "has-image" : ""}`}
+          aria-hidden="true"
+          onMouseDown={handleStartDrag}
+          onContextMenu={handleContextMenu}
+          onMouseEnter={() => setHoveringPet(true)}
+          onMouseLeave={() => setHoveringPet(false)}
+        >
           {spriteStyle && spritesheetSrc ? (
             <div className="pet-sprite-frame">
               <img className="pet-sprite-atlas" src={spritesheetSrc} alt="" style={spriteStyle} />

@@ -152,10 +152,10 @@ block = '''  useEffect(() => {
               maxProtocol: 3,
               client: {
                 id: "openclaw-control-ui",
-                version: "clawx",
+                version: "clawkit",
                 platform: navigator.platform ?? "desktop",
                 mode: "webchat",
-                instanceId: `clawx-${Date.now()}`,
+                instanceId: `clawkit-${Date.now()}`,
               },
               role: "webchat",
               scopes: ["chat.read", "chat.write", "sessions.read", "operator.read"],
@@ -347,7 +347,7 @@ handle_send = '''  const handleSend = useCallback(async () => {
         sessionKey: activeConversationId,
         message,
         deliver: false,
-        idempotencyKey: `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyKey: `clawkit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       });
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);

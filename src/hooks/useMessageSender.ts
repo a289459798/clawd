@@ -219,7 +219,7 @@ export function useMessageSender({
         })));
       }
 
-      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const runId = `clawkit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       onActiveRunIdChange(runId);
       optimisticStarted = true;
 

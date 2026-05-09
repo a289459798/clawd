@@ -1,6 +1,6 @@
-# clawx
+# ClawKit
 
-clawx 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，目标不是再做一个泛化的 AI 面板，而是**把 OpenClaw 变成一个更顺手、更像常规桌面软件的工作台**。
+ClawKit 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，目标不是再做一个泛化的 AI 面板，而是**把 OpenClaw 变成一个更顺手、更像常规桌面软件的工作台**。
 
 当前项目仍处于原型阶段，但方向已经明确：
 
@@ -30,13 +30,13 @@ clawx 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，�
    - skill 列表、channel 连接配置、统计信息分散在不同地方
    - 不利于集中管理和快速查看
 
-所以 clawx 的目标不是替代 OpenClaw，而是做一个 **OpenClaw 的本地桌面工作台**。
+所以 ClawKit 的目标不是替代 OpenClaw，而是做一个 **OpenClaw 的本地桌面工作台**。
 
 ---
 
 ## 2. 产品目标
 
-clawx 想解决的是以下几类需求：
+ClawKit 想解决的是以下几类需求：
 
 - 把 OpenClaw 的日常操作组织成更清晰的桌面工作流
 - 在一个界面里管理多个 agent 与多个对话
@@ -50,7 +50,7 @@ clawx 想解决的是以下几类需求：
 
 核心定位：
 
-> **clawx = OpenClaw 的桌面工作台 / 管理壳，而不是另一个聊天机器人 UI。**
+> **ClawKit = OpenClaw 的桌面工作台 / 管理壳，而不是另一个聊天机器人 UI。**
 
 ---
 
@@ -167,7 +167,7 @@ clawx 想解决的是以下几类需求：
 - `models.authStatus`：读取 OAuth 授权状态。
 - `config.get` + `config.patch`：保存 provider 配置、模型列表和默认模型。
 
-默认模型写入 OpenClaw 配置，不只保存在 clawx 前端状态。
+默认模型写入 OpenClaw 配置，不只保存在 ClawKit 前端状态。
 
 ### 连接页
 
@@ -231,7 +231,7 @@ clawx 想解决的是以下几类需求：
 - “立即安装”会按当前平台打开系统终端并执行 OpenClaw 官方安装入口：
   - macOS / Linux: 先运行 `curl -fsSL https://openclaw.ai/install.sh | bash`，失败时自动回退到 `curl -fsSL https://openclaw.ai/install-cli.sh | bash`
   - Windows: `iwr -useb https://openclaw.ai/install.ps1 | iex`
-- 若已安装但 clawx 尚未绑定，会先征得用户同意，再把所需的 `gateway.controlUi.allowedOrigins` 配置写入 `~/.openclaw/openclaw.json`
+- 若已安装但 ClawKit 尚未绑定，会先征得用户同意，再把所需的 `gateway.controlUi.allowedOrigins` 配置写入 `~/.openclaw/openclaw.json`
 - 绑定完成后才进入主界面，避免出现“看得到 UI 但 Gateway 一直不可用”的假可用状态
 - 真实 agent 列表读取
 - 真实 channel / connection 列表读取
@@ -246,7 +246,7 @@ clawx 想解决的是以下几类需求：
 - 详情页通过 Tauri Rust 后端代理调用 Gateway `chat.abort` 停止生成
 - 左侧 agent 区已接入真实 `sessions.create`，支持新建对话
 - 发送时会下发 `sessionKey / message / idempotencyKey / model / thinking / attachments / deliver=false / inputProvenance.kind=external_user`
-- clawx 作为桌面端来源标识通过代理层请求头透传
+- ClawKit 作为桌面端来源标识通过代理层请求头透传
 - 详情页会读取 assistant 消息中的 `model / provider / api` 并在消息级展示
 - 模型默认值逻辑已接入：已有对话优先取上一次 assistant 使用的模型，新建对话优先取 agent 默认模型，再回退全局默认模型
 - 每次发送都会显式携带当前选中的模型参数
@@ -386,7 +386,7 @@ clawx 想解决的是以下几类需求：
 
 ## 7. 和 OpenClaw 的关系
 
-clawx 的长期目标是做 OpenClaw 的本地桌面前端，而不是重新发明一套独立系统。
+ClawKit 的长期目标是做 OpenClaw 的本地桌面前端，而不是重新发明一套独立系统。
 
 未来对接方向包括：
 
@@ -418,7 +418,7 @@ clawx 的长期目标是做 OpenClaw 的本地桌面前端，而不是重新发�
    - 后续可继续接入 schema-driven config、SecretRef、per-agent 默认模型与 fallback chain
 
 7. **打开本地 Web UI**
-   - clawx 提供桌面端工作流
+   - ClawKit 提供桌面端工作流
    - 本地 OpenClaw 网页保留为辅助入口
 
 ---
@@ -438,7 +438,7 @@ Rust 端负责 Tauri 命令桥接、OpenClaw Gateway 代理、文件/目录选�
 
 ### 平台兼容开发规范
 
-clawx 的桌面能力必须兼容：
+ClawKit 的桌面能力必须兼容：
 
 - macOS
 - Windows
@@ -517,9 +517,9 @@ Windows：
 
 OpenClaw：
 
-- clawx 运行时依赖本机 OpenClaw Gateway
+- ClawKit 运行时依赖本机 OpenClaw Gateway
 - 推荐先按官方文档完成 OpenClaw 安装与 onboarding
-- 开发环境中也可以使用 OpenClaw 源码仓库，但当前 clawx 的安装检测仍以 `openclaw` 命令是否可用为准
+- 开发环境中也可以使用 OpenClaw 源码仓库，但当前 ClawKit 的安装检测仍以 `openclaw` 命令是否可用为准
 
 安装依赖：
 
@@ -555,12 +555,12 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ### OpenClaw 安装引导
 
-如果启动时未检测到 OpenClaw，clawx 会停在引导页：
+如果启动时未检测到 OpenClaw，ClawKit 会停在引导页：
 
 - 点击“立即安装”：打开系统终端并运行对应平台的官方安装脚本
 - macOS / Linux 的标准安装器如果遇到全局 npm 权限问题，会自动回退到 local-prefix 安装器
-- local-prefix 安装后，`openclaw` 可能位于 `~/.openclaw/bin/openclaw`。clawx 会自动识别这个路径；如果希望在普通终端直接输入 `openclaw`，需要把 `~/.openclaw/bin` 加入 PATH
-- 安装完成后：回到 clawx 点击“我已安装，重新检测”
+- local-prefix 安装后，`openclaw` 可能位于 `~/.openclaw/bin/openclaw`。ClawKit 会自动识别这个路径；如果希望在普通终端直接输入 `openclaw`，需要把 `~/.openclaw/bin` 加入 PATH
+- 安装完成后：回到 ClawKit 点击“我已安装，重新检测”
 - 检测通过后：继续进行 Gateway 绑定和连接测试
 
 当前安装入口只是启动官方安装流程，不会静默安装，也不会在后台隐藏安装输出。这样用户可以看到 OpenClaw onboarding 的提示、授权和错误信息。
@@ -605,13 +605,13 @@ cargo check --manifest-path src-tauri/Cargo.toml
    - 隐藏只影响工作区显示
    - 左侧仍然要能重新打开
 
-4. **clawx 是 OpenClaw 的工作台，不是独立聊天工具**
+4. **ClawKit 是 OpenClaw 的工作台，不是独立聊天工具**
    - UI 设计应围绕 OpenClaw 的真实对象和配置组织
    - 不要把它做成单纯的大模型聊天壳
 
 5. **Gateway 是第一来源，snapshot 是 fallback**
    - 改造时请优先把数据层和视图层分开
-   - 不要把 OpenClaw 配置、session、skill、channel、model 解析逻辑复制成 clawx 的第二套实现
+   - 不要把 OpenClaw 配置、session、skill、channel、model 解析逻辑复制成 ClawKit 的第二套实现
 
 6. **慢操作必须异步**
    - 页面先打开，再加载数据
@@ -622,7 +622,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## 13. 当前一句话总结
 
-> clawx 是一个面向 OpenClaw 的本地桌面工作台原型，重点解决多 agent / 多对话切换、模型配置、skill/channel 管理和 usage 查看等日常工作流问题。
+> ClawKit 是一个面向 OpenClaw 的本地桌面工作台原型，重点解决多 agent / 多对话切换、模型配置、skill/channel 管理和 usage 查看等日常工作流问题。
 
 ## 14. 最近开发日志（2026-04-21）
 

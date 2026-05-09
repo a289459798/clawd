@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ClawxBootstrapStatus } from "../types/app";
+import type { ClawKitBootstrapStatus } from "../types/app";
 
 type BootstrapScreensProps = {
   bootstrapLoading: boolean;
   bootstrapError: string | null;
-  bootstrapStatus: ClawxBootstrapStatus | null;
+  bootstrapStatus: ClawKitBootstrapStatus | null;
   bootstrapStep: "detect" | "install" | "bind" | "connect_test" | "ready";
   bootstrapConnectError: string | null;
   bindingInProgress: boolean;
@@ -47,8 +47,8 @@ export function BootstrapScreens({
     return (
       <main className="bootstrap-screen">
         <div className="bootstrap-card">
-          <strong>欢迎使用 Clawx</strong>
-          <p>首次启动会先检查本机 OpenClaw 环境，并确认是否允许 Clawx 访问本地 Gateway。</p>
+          <strong>欢迎使用 ClawKit</strong>
+          <p>首次启动会先检查本机 OpenClaw 环境，并确认是否允许 ClawKit 访问本地 Gateway。</p>
           <div className="bootstrap-meta">
             <span>步骤 1/3，检测本机 OpenClaw</span>
             <span>当前阶段: {bootstrapStep === "detect" ? "环境检测" : bootstrapStep}</span>
@@ -78,8 +78,8 @@ export function BootstrapScreens({
     return (
       <main className="bootstrap-screen">
         <div className="bootstrap-card">
-          <strong>先安装 OpenClaw，才能继续使用 Clawx</strong>
-          <p>Clawx 本身不托管模型会话，它依赖本机 OpenClaw 提供 Gateway、配置和会话数据。所以第一次使用前，需要先完成 OpenClaw 安装。</p>
+          <strong>先安装 OpenClaw，才能继续使用 ClawKit</strong>
+          <p>ClawKit 本身不托管模型会话，它依赖本机 OpenClaw 提供 Gateway、配置和会话数据。所以第一次使用前，需要先完成 OpenClaw 安装。</p>
           <div className="bootstrap-meta">
             <span>步骤 2/3，等待安装 OpenClaw</span>
             <span>期望配置路径: {bootstrapStatus?.configPath ?? "~/.openclaw/openclaw.json"}</span>
@@ -104,7 +104,7 @@ export function BootstrapScreens({
       <main className="bootstrap-screen">
         <div className="bootstrap-card">
           <strong>连接 OpenClaw</strong>
-          <p>为了让 Clawx 正常读取会话、发消息并接收流式回复，需要先授权它接入本机 OpenClaw Gateway。你确认后，Clawx 会把下面这些配置写入你的 openclaw.json。</p>
+          <p>为了让 ClawKit 正常读取会话、发消息并接收流式回复，需要先授权它接入本机 OpenClaw Gateway。你确认后，ClawKit 会把下面这些配置写入你的 openclaw.json。</p>
           <div className="bootstrap-meta">
             <span>步骤 3/3，绑定本机 OpenClaw</span>
             <span>OpenClaw: {bootstrapStatus.openclawPath ?? "已安装"}</span>
@@ -137,8 +137,8 @@ export function BootstrapScreens({
           <strong>{bootstrapConnectError ? "OpenClaw 连接测试失败" : "正在验证 OpenClaw 连接"}</strong>
           <p>
             {bootstrapConnectError
-              ? "配置已经写入，但 Clawx 还没能成功连上本机 Gateway。你可以重试，或者先检查 OpenClaw Gateway 是否正在运行。"
-              : "Clawx 正在测试 Gateway 连接与流式能力，确认通过后才会进入主界面。"}
+              ? "配置已经写入，但 ClawKit 还没能成功连上本机 Gateway。你可以重试，或者先检查 OpenClaw Gateway 是否正在运行。"
+              : "ClawKit 正在测试 Gateway 连接与流式能力，确认通过后才会进入主界面。"}
           </p>
           <div className="bootstrap-meta">
             <span>当前阶段: 连接测试</span>

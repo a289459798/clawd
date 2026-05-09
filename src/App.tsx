@@ -41,7 +41,7 @@ import { describeUpdateRestartSentinel, extrapolateGatewayUptimeMs, formatApprox
 import { resolveComposerThinkingOptions } from "./lib/thinkingOptions";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
 import type { PetConversationContext } from "./types/pet";
-import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
+import type { Agent, ChannelConnection, ClawKitBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, GatewayUpdateStatusResult, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
@@ -51,19 +51,21 @@ const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
-const BOOTSTRAP_DEBUG_STORAGE_KEY = "clawx.debug.bootstrapStep";
+const BOOTSTRAP_DEBUG_STORAGE_KEY = "clawkit.debug.bootstrapStep";
 
 function readBootstrapDebugStep() {
   try {
-    const value = window.localStorage.getItem(BOOTSTRAP_DEBUG_STORAGE_KEY);
+    const value =
+      window.localStorage.getItem(BOOTSTRAP_DEBUG_STORAGE_KEY) ??
+      window.localStorage.getItem("clawx.debug.bootstrapStep");
     return value === "install" || value === "bind" || value === "connect_test" ? value : null;
   } catch {
     return null;
   }
 }
 
-function buildBootstrapDebugStatus(step: "install" | "bind" | "connect_test"): ClawxBootstrapStatus {
-  const base: ClawxBootstrapStatus = {
+function buildBootstrapDebugStatus(step: "install" | "bind" | "connect_test"): ClawKitBootstrapStatus {
+  const base: ClawKitBootstrapStatus = {
     openclawInstalled: step !== "install",
     openclawPath: step === "install" ? null : "/debug/openclaw",
     configExists: step !== "install",
@@ -73,8 +75,8 @@ function buildBootstrapDebugStatus(step: "install" | "bind" | "connect_test"): C
     recommendedOrigin: "http://localhost:1420",
     gatewayPort: 18789,
     bindingWrites: [
-      "gateway.clients.clawx.enabled = true",
-      "gateway.clients.clawx.origins += http://localhost:1420",
+      "gateway.clients.clawkit.enabled = true",
+      "gateway.clients.clawkit.origins += http://localhost:1420",
     ],
   };
   return base;
@@ -309,7 +311,7 @@ function mapGatewayChannels(result: GatewayChannelsStatusResult): {
 }
 
 function App() {
-  const [bootstrapStatus, setBootstrapStatus] = useState<ClawxBootstrapStatus | null>(null);
+  const [bootstrapStatus, setBootstrapStatus] = useState<ClawKitBootstrapStatus | null>(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bindingInProgress, setBindingInProgress] = useState(false);
@@ -424,7 +426,7 @@ function App() {
           await getCurrentWindow().setIcon(icon);
         }
       } catch (error) {
-        console.warn("Failed to apply Clawx window icon", error);
+        console.warn("Failed to apply ClawKit window icon", error);
       }
     }
 
@@ -457,11 +459,11 @@ function App() {
         setBootstrapStep(debugStep);
         return;
       }
-      const status = await invoke<ClawxBootstrapStatus>("get_clawx_bootstrap_status");
+      const status = await invoke<ClawKitBootstrapStatus>("get_clawkit_bootstrap_status");
       setBootstrapStatus(status);
       setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
     } catch (error) {
-      console.error("Failed to load clawx bootstrap status", error);
+      console.error("Failed to load clawkit bootstrap status", error);
       setBootstrapError(error instanceof Error ? error.message : "读取 OpenClaw 状态失败");
     } finally {
       setBootstrapLoading(false);
@@ -473,7 +475,7 @@ function App() {
     setBootstrapError(null);
     setBootstrapConnectError(null);
     try {
-      const status = await invoke<ClawxBootstrapStatus>("ensure_clawx_binding");
+      const status = await invoke<ClawKitBootstrapStatus>("ensure_clawkit_binding");
       setBootstrapStatus(status);
       setBootstrapStep(status.bindingConfigured ? "connect_test" : "bind");
     } catch (error) {
@@ -676,7 +678,7 @@ function App() {
       try {
         await invoke("gateway_sessions_subscribe");
         const { listen } = await import("@tauri-apps/api/event");
-        const unlisten = await listen("clawx://sessions-changed", () => {
+        const unlisten = await listen("clawkit://sessions-changed", () => {
           if (refreshTimer) {
             clearTimeout(refreshTimer);
           }
@@ -1484,8 +1486,8 @@ function App() {
   }, [activeConversation]);
 
   useEffect(() => {
-    localStorage.setItem("clawx.petContext", JSON.stringify(petContext));
-    void emit("clawx://pet-context", petContext);
+    localStorage.setItem("clawkit.petContext", JSON.stringify(petContext));
+    void emit("clawkit://pet-context", petContext);
   }, [petContext]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
@@ -1715,7 +1717,7 @@ function App() {
       try {
         await invoke("gateway_session_messages_subscribe", { sessionKey: activeConversationId });
         const { listen } = await import("@tauri-apps/api/event");
-        const unlisten = await listen<RealtimeSessionMessageEvent>("clawx://session-message", (event) => {
+        const unlisten = await listen<RealtimeSessionMessageEvent>("clawkit://session-message", (event) => {
           const active = activeConversationRef.current;
           const eventKey = event.payload?.sessionKey;
           if (!active || !eventKey || !conversationMatchesSessionKey(active, eventKey)) {

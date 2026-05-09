@@ -86,7 +86,7 @@ export function useGatewayChat({
       await refreshGatewayStatus();
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        const unlisten = await listen<GatewayChatEvent>("clawx://gateway-chat", (event) => {
+        const unlisten = await listen<GatewayChatEvent>("clawkit://gateway-chat", (event) => {
           const chat = event.payload;
           if (!mounted || !chat?.sessionKey) return;
 

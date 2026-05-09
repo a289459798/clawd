@@ -90,7 +90,6 @@ export function PetsPage({
   const [summonedPetId, setSummonedPetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
 
   const selectedPet = useMemo(
     () => pets.find((pet) => pet.id === selectedPetId) ?? pets[0] ?? null,
@@ -99,13 +98,12 @@ export function PetsPage({
 
   const refreshPets = async () => {
     setLoading(true);
-    setMessage(null);
     try {
       const result = await invoke<PetSummary[]>("list_codex_pets");
       setPets(result);
       setSelectedPetId((current) => result.some((pet) => pet.id === current) ? current : result[0]?.id ?? "");
     } catch (error) {
-      setMessage(`读取宠物失败：${String(error)}`);
+      console.warn("读取宠物失败", error);
     } finally {
       setLoading(false);
     }
@@ -117,14 +115,12 @@ export function PetsPage({
 
   const importPet = async () => {
     setBusy(true);
-    setMessage(null);
     try {
       const imported = await invoke<PetSummary>("import_codex_pet");
       await refreshPets();
       setSelectedPetId(imported.id);
-      setMessage(`已导入 ${imported.name}`);
     } catch (error) {
-      setMessage(String(error));
+      console.warn("导入宠物失败或已取消", error);
     } finally {
       setBusy(false);
     }
@@ -132,15 +128,13 @@ export function PetsPage({
 
   const summonPet = async (pet: PetSummary) => {
     setBusy(true);
-    setMessage(null);
     try {
-      localStorage.setItem("clawx.petContext", JSON.stringify(context));
+      localStorage.setItem("clawkit.petContext", JSON.stringify(context));
       await invoke("open_pet_window", { petId: pet.id });
       setSummonedPetId(pet.id);
       setSelectedPetId(pet.id);
-      setMessage(null);
     } catch (error) {
-      setMessage(`召唤失败：${String(error)}`);
+      console.warn("召唤宠物失败", error);
     } finally {
       setBusy(false);
     }
@@ -181,11 +175,11 @@ export function PetsPage({
                 </div>
                 <div>
                   <dt>兼容</dt>
-                  <dd>{selectedPet.compatibleWith.join(", ") || "clawx"}</dd>
+                  <dd>{selectedPet.compatibleWith.join(", ") || "ClawKit"}</dd>
                 </div>
                 <div>
                   <dt>来源</dt>
-                  <dd>{selectedPet.source === "clawkit" ? "Clawkit" : "Codex"}</dd>
+                  <dd>{selectedPet.source === "clawkit" ? "ClawKit" : "Codex"}</dd>
                 </div>
               </dl>
             </>
@@ -199,7 +193,7 @@ export function PetsPage({
 
         <aside className="pets-list-panel">
           <div className="pets-list" aria-label="宠物列表">
-          {loading ? <p className="empty-state">正在扫描 Codex 与 Clawkit 宠物目录</p> : null}
+          {loading ? <p className="empty-state">正在扫描 Codex 与 ClawKit 宠物目录</p> : null}
           {!loading && pets.length === 0 ? <p className="empty-state">没有找到宠物。</p> : null}
           {pets.map((pet) => {
             const petSummoned = summonedPetId === pet.id;
@@ -222,7 +216,7 @@ export function PetsPage({
               </span>
               <span className="pet-row-main">
                 <strong>{pet.name}</strong>
-                <span>{pet.source === "clawkit" ? "Clawkit 目录" : "Codex 目录"} · {pet.species}</span>
+                <span>{pet.source === "clawkit" ? "ClawKit 目录" : "Codex 目录"} · {pet.species}</span>
               </span>
               <button
                 className={`pet-row-summon ${petSummoned ? "summoned" : ""}`}
@@ -249,7 +243,6 @@ export function PetsPage({
           </div>
         </aside>
       </div>
-      {message ? <div className="page-inline-message">{message}</div> : null}
     </section>
   );
 }

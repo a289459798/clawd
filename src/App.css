@@ -404,11 +404,12 @@
   color: var(--text);
   background: transparent;
   font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-  cursor: grab;
+  cursor: default;
+  pointer-events: none;
 }
 
 .pet-window-shell:active {
-  cursor: grabbing;
+  cursor: default;
 }
 
 .pet-bubble-list {
@@ -416,7 +417,7 @@
   left: 36px;
   right: 34px;
   top: auto;
-  bottom: 124px;
+  bottom: 140px;
   display: grid;
   gap: 8px;
   max-height: 190px;
@@ -560,9 +561,15 @@
 .pet-character-layer {
   position: absolute;
   right: 38px;
-  bottom: 18px;
+  bottom: 34px;
   width: 112px;
   height: 112px;
+  pointer-events: none;
+}
+
+.pet-window-shell.is-compact .pet-character-layer {
+  right: 6px;
+  bottom: 14px;
 }
 
 .pet-collapse-button {
@@ -582,6 +589,7 @@
   line-height: 1;
   box-shadow: 0 8px 14px rgba(0, 0, 0, 0.24);
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .pet-collapse-button:hover {
@@ -610,6 +618,12 @@
     inset 8px 8px 15px rgba(148, 195, 255, 0.22),
     0 12px 20px rgba(0, 0, 0, 0.3);
   transform-origin: center bottom;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.pet-avatar-large:active {
+  cursor: grabbing;
 }
 
 .pet-avatar-large::before {
@@ -681,6 +695,7 @@
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.38);
   filter: blur(7px);
+  pointer-events: none;
 }
 
 .pet-context-menu {
@@ -693,6 +708,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
   backdrop-filter: blur(16px);
+  pointer-events: auto;
 }
 
 .pet-context-menu button {

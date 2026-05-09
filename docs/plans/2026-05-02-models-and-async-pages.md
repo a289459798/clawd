@@ -7,7 +7,7 @@ This note records the current model-management and slow-page conventions so futu
 ## Goals
 
 - Make OpenClaw model configuration approachable for normal users.
-- Keep clawx aligned with OpenClaw Gateway/config semantics.
+- Keep clawkit aligned with OpenClaw Gateway/config semantics.
 - Avoid blocking the desktop UI while Gateway, OpenClaw CLI, npm, or catalog loading is slow.
 - Preserve macOS and Windows compatibility for terminal, auth, install, and update flows.
 
@@ -35,7 +35,7 @@ Use Gateway/OpenClaw in this order:
 3. `models.authStatus` for OAuth status.
 4. `config.get` + `baseHash` + `config.patch` for writes.
 
-Do not treat clawx UI state as the source of truth for default models or provider config. After a write, update the UI optimistically only as a short-lived interaction state, then reconcile from Gateway/config in the background.
+Do not treat clawkit UI state as the source of truth for default models or provider config. After a write, update the UI optimistically only as a short-lived interaction state, then reconcile from Gateway/config in the background.
 
 ## Config Write Rules
 

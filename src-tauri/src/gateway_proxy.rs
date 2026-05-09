@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -362,8 +362,31 @@ fn signing_key_from_pem(pem: &str) -> Result<SigningKey, String> {
     Ok(SigningKey::from_bytes(&key_bytes))
 }
 
+fn migrate_legacy_device_identity_if_needed(new_dir: &Path) -> Result<(), String> {
+    let dest = new_dir.join("device_identity.json");
+    if dest.exists() {
+        return Ok(());
+    }
+    let legacy = home_dir()?
+        .join(".openclaw")
+        .join("clawx")
+        .join("device_identity.json");
+    if legacy.exists() {
+        fs::create_dir_all(new_dir)
+            .map_err(|error| format!("failed to create {}: {error}", new_dir.display()))?;
+        fs::copy(&legacy, &dest).map_err(|error| {
+            format!(
+                "failed to migrate device identity from {}: {error}",
+                legacy.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn load_or_create_device_identity() -> Result<DeviceIdentity, String> {
-    let dir = home_dir()?.join(".openclaw").join("clawx");
+    let dir = home_dir()?.join(".openclaw").join("clawkit");
+    migrate_legacy_device_identity_if_needed(&dir)?;
     fs::create_dir_all(&dir)
         .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
     let identity_path = dir.join("device_identity.json");
@@ -663,7 +686,7 @@ fn gateway_event_loop(
                     if value.get("type").and_then(Value::as_str) == Some("res") {
                         let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
                         if id == "connect" {
-                            eprintln!("[clawx gateway] connect response: {}", value);
+                            eprintln!("[clawkit gateway] connect response: {}", value);
                             let ok = value.get("ok").and_then(Value::as_bool).unwrap_or(false);
                             if !ok {
                                 let msg = value
@@ -708,7 +731,7 @@ fn gateway_event_loop(
                         }
 
                         if let Some(p) = pending.remove(id) {
-                            eprintln!("[clawx gateway] rpc response id={} frame={}", id, value);
+                            eprintln!("[clawkit gateway] rpc response id={} frame={}", id, value);
                             let ok = value.get("ok").and_then(Value::as_bool).unwrap_or(false);
                             if ok {
                                 let result = value
@@ -735,7 +758,7 @@ fn gateway_event_loop(
             }
             Ok(Message::Binary(_)) => {}
             Ok(Message::Close(frame)) => {
-                eprintln!("[clawx gateway] websocket close: {:?}", frame);
+                eprintln!("[clawkit gateway] websocket close: {:?}", frame);
                 return Err(format!("gateway websocket closed: {:?}", frame));
             }
             Ok(Message::Ping(payload)) => {
@@ -757,7 +780,7 @@ fn handle_message(app: &AppHandle, value: Value) {
     if value.get("type").and_then(Value::as_str) == Some("event")
         && value.get("event").and_then(Value::as_str) == Some("chat")
     {
-        eprintln!("[clawx gateway] received chat event: {:?}", value);
+        eprintln!("[clawkit gateway] received chat event: {:?}", value);
         let payload = value.get("payload").cloned().unwrap_or(json!({}));
         let evt = GatewayChatEventPayload {
             event_type: payload
@@ -787,22 +810,22 @@ fn handle_message(app: &AppHandle, value: Value) {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
-        let _ = app.emit("clawx://gateway-chat", evt);
+        let _ = app.emit("clawkit://gateway-chat", evt);
     }
     if value.get("type").and_then(Value::as_str) == Some("event")
         && value.get("event").and_then(Value::as_str) == Some("sessions.changed")
     {
-        let _ = app.emit("clawx://sessions-changed", ());
+        let _ = app.emit("clawkit://sessions-changed", ());
     }
     if value.get("type").and_then(Value::as_str) == Some("event")
         && value.get("event").and_then(Value::as_str) == Some("session.message")
     {
         let payload = value.get("payload").cloned().unwrap_or(json!({}));
-        let _ = app.emit("clawx://session-message", payload);
+        let _ = app.emit("clawkit://session-message", payload);
     }
     // Log all other events too for debugging
     else if value.get("type").and_then(Value::as_str) == Some("event") {
-        eprintln!("[clawx gateway] received other event: {:?}", value);
+        eprintln!("[clawkit gateway] received other event: {:?}", value);
     }
 }
 
@@ -884,21 +907,21 @@ pub async fn gateway_connect(
         let mut delay = Duration::from_secs(2);
         for attempt in 1..=10 {
             *st.status_text.lock().unwrap() = format!("Gateway 正在重连... (第 {} 次)", attempt);
-            eprintln!("[clawx gateway] reconnect attempt {}", attempt);
+            eprintln!("[clawkit gateway] reconnect attempt {}", attempt);
             thread::sleep(delay);
             delay = std::cmp::min(delay * 2, Duration::from_secs(30));
 
             let config = match read_gateway_client_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[clawx gateway] reconnect: read config failed: {e}");
+                    eprintln!("[clawkit gateway] reconnect: read config failed: {e}");
                     continue;
                 }
             };
             let identity = match load_or_create_device_identity() {
                 Ok(i) => i,
                 Err(e) => {
-                    eprintln!("[clawx gateway] reconnect: device identity failed: {e}");
+                    eprintln!("[clawkit gateway] reconnect: device identity failed: {e}");
                     continue;
                 }
             };
@@ -918,17 +941,19 @@ pub async fn gateway_connect(
                     ) {
                         Ok(()) => {
                             // Reconnected and running until next drop.
-                            eprintln!("[clawx gateway] reconnected, running until next disconnect");
+                            eprintln!(
+                                "[clawkit gateway] reconnected, running until next disconnect"
+                            );
                             // After this inner event loop exits, try reconnect again.
                         }
                         Err(e2) => {
                             clear_connection_state(&st, "Gateway 连接已断开", Some(e2.clone()));
-                            eprintln!("[clawx gateway] reconnect loop exited: {e2}");
+                            eprintln!("[clawkit gateway] reconnect loop exited: {e2}");
                         }
                     }
                 }
                 Err(e2) => {
-                    eprintln!("[clawx gateway] reconnect connect failed: {e2}");
+                    eprintln!("[clawkit gateway] reconnect connect failed: {e2}");
                     continue;
                 }
             }
@@ -949,7 +974,7 @@ fn send_rpc(state: &GatewayProxyState, method: &str, params: Value) -> Result<Va
         }
     }
 
-    let id = format!("clawx-{}", state.next_id.fetch_add(1, Ordering::SeqCst));
+    let id = format!("clawkit-{}", state.next_id.fetch_add(1, Ordering::SeqCst));
     let pending = Arc::new(PendingRpc::new());
 
     {
@@ -1454,7 +1479,7 @@ pub fn gateway_chat_send(
     state: tauri::State<Arc<GatewayProxyState>>,
     params: GatewaySendParams,
 ) -> Result<Value, String> {
-    let req_id = format!("clawx-{}", state.next_id.fetch_add(1, Ordering::SeqCst));
+    let req_id = format!("clawkit-{}", state.next_id.fetch_add(1, Ordering::SeqCst));
 
     let attachments = params.attachments.unwrap_or_default();
     let attachment_payload: Vec<Value> = attachments
@@ -1476,7 +1501,7 @@ pub fn gateway_chat_send(
         .collect();
 
     eprintln!(
-        "[clawx gateway] sending chat message: session={}, message={:?}",
+        "[clawkit gateway] sending chat message: session={}, message={:?}",
         params.session_key, params.message
     );
     let mut chat_params = serde_json::Map::new();
@@ -1486,10 +1511,10 @@ pub fn gateway_chat_send(
     chat_params.insert("idempotencyKey".to_string(), json!(params.idempotency_key));
     chat_params.insert("attachments".to_string(), json!(attachment_payload));
     let result = send_rpc(&state, "chat.send", Value::Object(chat_params))?;
-    eprintln!("[clawx gateway] chat.send result: {:?}", result);
+    eprintln!("[clawkit gateway] chat.send result: {:?}", result);
 
     let _ = app.emit(
-        "clawx://gateway-send-ack",
+        "clawkit://gateway-send-ack",
         json!({
             "id": req_id,
             "result": result

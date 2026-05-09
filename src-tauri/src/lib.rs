@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::utils::config::Color;
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -126,7 +126,7 @@ struct GatewayAuthInfo {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ClawxBootstrapStatus {
+struct ClawKitBootstrapStatus {
     openclaw_installed: bool,
     openclaw_path: Option<String>,
     config_exists: bool,
@@ -291,7 +291,41 @@ fn ensure_clawkit_home() -> Result<(), String> {
     Ok(())
 }
 
-fn clawx_recommended_origin() -> String {
+fn sync_resource_pets_to_clawkit(app: &AppHandle) -> Result<(), String> {
+    let resource_pets_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("failed to resolve resource directory: {error}"))?
+        .join("pets");
+    if !resource_pets_dir.is_dir() {
+        return Ok(());
+    }
+
+    let target_pets_dir = clawkit_pets_dir()?;
+    fs::create_dir_all(&target_pets_dir)
+        .map_err(|error| format!("failed to create {}: {error}", target_pets_dir.display()))?;
+
+    for entry in fs::read_dir(&resource_pets_dir)
+        .map_err(|error| format!("failed to read {}: {error}", resource_pets_dir.display()))?
+    {
+        let entry = entry.map_err(|error| format!("failed to read resource pet entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to inspect resource pet entry: {error}"))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let target = target_pets_dir.join(entry.file_name());
+        if target.exists() {
+            continue;
+        }
+        copy_dir_all(&entry.path(), &target)?;
+    }
+
+    Ok(())
+}
+
+fn clawkit_recommended_origin() -> String {
     "tauri://localhost".to_string()
 }
 
@@ -1382,7 +1416,7 @@ fn load_session_record(session_key: String) -> Result<SessionRecordResult, Strin
 }
 
 #[tauri::command]
-fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
+fn get_clawkit_bootstrap_status() -> Result<ClawKitBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
     let openclaw_path = resolve_openclaw_command()
         .filter(|path| {
@@ -1419,7 +1453,7 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let recommended_origin = clawx_recommended_origin();
+        let recommended_origin = clawkit_recommended_origin();
         binding_configured = allowed_origins
             .iter()
             .any(|item| item == &recommended_origin);
@@ -1429,8 +1463,8 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
             .and_then(Value::as_u64);
     }
 
-    let recommended_origin = clawx_recommended_origin();
-    Ok(ClawxBootstrapStatus {
+    let recommended_origin = clawkit_recommended_origin();
+    Ok(ClawKitBootstrapStatus {
         openclaw_installed: openclaw_path.is_some(),
         openclaw_path,
         config_exists,
@@ -1446,7 +1480,7 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
 }
 
 #[tauri::command]
-fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
+fn ensure_clawkit_binding() -> Result<ClawKitBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
     let parent = config_path
         .parent()
@@ -1467,7 +1501,7 @@ fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
         json = serde_json::json!({});
     }
 
-    let recommended_origin = clawx_recommended_origin();
+    let recommended_origin = clawkit_recommended_origin();
     let root = json
         .as_object_mut()
         .ok_or_else(|| "invalid config root".to_string())?;
@@ -1510,7 +1544,7 @@ fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
     fs::write(&config_path, format!("{pretty}\n"))
         .map_err(|error| format!("failed to write {}: {error}", config_path.display()))?;
 
-    get_clawx_bootstrap_status()
+    get_clawkit_bootstrap_status()
 }
 
 #[tauri::command]
@@ -2012,9 +2046,9 @@ fn open_weixin_plugin_install_terminal() -> Result<String, String> {
     ])?;
     let restart = openclaw_terminal_command(&["gateway", "restart"])?;
     let command_line = if cfg!(windows) {
-        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {enable}; {restart}; Write-Host 'WeChat plugin installed. Return to clawx and refresh connections.' }}")
+        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {enable}; {restart}; Write-Host 'WeChat plugin installed. Return to ClawKit and refresh connections.' }}")
     } else {
-        format!("{install} && {enable} && {restart}; echo 'WeChat plugin install flow finished. Return to clawx and refresh connections.'")
+        format!("{install} && {enable} && {restart}; echo 'WeChat plugin install flow finished. Return to ClawKit and refresh connections.'")
     };
     open_terminal_command(&command_line, "openclaw-weixin install")?;
     Ok("已打开终端安装 WeChat 插件。安装完成后请回到连接页刷新状态。".to_string())
@@ -2026,9 +2060,9 @@ fn open_weixin_plugin_update_terminal() -> Result<String, String> {
         openclaw_terminal_command(&["plugins", "update", "@tencent-weixin/openclaw-weixin"])?;
     let restart = openclaw_terminal_command(&["gateway", "restart"])?;
     let command_line = if cfg!(windows) {
-        format!("{update}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'WeChat plugin updated. Return to clawx and refresh connections.' }}")
+        format!("{update}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'WeChat plugin updated. Return to ClawKit and refresh connections.' }}")
     } else {
-        format!("{update} && {restart}; echo 'WeChat plugin update flow finished. Return to clawx and refresh connections.'")
+        format!("{update} && {restart}; echo 'WeChat plugin update flow finished. Return to ClawKit and refresh connections.'")
     };
     open_terminal_command(&command_line, "openclaw-weixin update")?;
     Ok("已打开终端更新 WeChat 插件。更新完成后请回到连接页刷新状态。".to_string())
@@ -2039,24 +2073,24 @@ fn open_openclaw_install_terminal() -> Result<String, String> {
     let install_command = if cfg!(windows) {
         "iwr -useb https://openclaw.ai/install.ps1 | iex"
     } else {
-        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw install finished. Return to clawx and click re-detect.'; else echo 'Standard installer failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
+        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw install finished. Return to ClawKit and click re-detect.'; else echo 'Standard installer failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
     };
     open_terminal_command(install_command, "OpenClaw install")?;
-    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 Clawx 重新检测。".to_string())
+    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 ClawKit 重新检测。".to_string())
 }
 
 #[tauri::command]
 fn open_openclaw_update_terminal() -> Result<String, String> {
     let update = openclaw_terminal_command(&["update"])?;
     let command_line = if cfg!(windows) {
-        format!("{update}; Write-Host 'OpenClaw update flow finished. Return to clawx and refresh status.'")
+        format!("{update}; Write-Host 'OpenClaw update flow finished. Return to ClawKit and refresh status.'")
     } else {
         format!(
-            "{update}; echo 'OpenClaw update flow finished. Return to clawx and refresh status.'"
+            "{update}; echo 'OpenClaw update flow finished. Return to ClawKit and refresh status.'"
         )
     };
     open_terminal_command(&command_line, "OpenClaw update")?;
-    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 Clawx 刷新状态。".to_string())
+    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 ClawKit 刷新状态。".to_string())
 }
 
 fn openclaw_gateway_service_command(action: &'static str) -> Result<String, String> {
@@ -2222,7 +2256,7 @@ fn read_pet_summary(path: &Path, source: &str) -> Option<PetSummary> {
             .or_else(|| has_spritesheet.then(codex_pet_atlas)),
         animations,
         compatible_with: if draft.compatible_with.is_empty() {
-            vec!["codex".to_string(), "clawx".to_string()]
+            vec!["codex".to_string(), "clawkit".to_string()]
         } else {
             draft.compatible_with
         },
@@ -2259,13 +2293,46 @@ fn position_pet_window_bottom_right(window: &WebviewWindow) {
     let Ok(window_size) = window.outer_size() else {
         return;
     };
-    let margin = 28_i32;
-    let x = monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - margin;
-    let y = monitor_position.y + monitor_size.height as i32 - window_size.height as i32 - margin;
+    let margin_x = 114_i32;
+    let margin_y = 176_i32;
+    let x = monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - margin_x;
+    let y = monitor_position.y + monitor_size.height as i32 - window_size.height as i32 - margin_y;
     let _ = window.set_position(PhysicalPosition::new(
         x.max(monitor_position.x),
         y.max(monitor_position.y),
     ));
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn resize_pet_window(window: &WebviewWindow, expanded: bool) -> Result<(), String> {
+    let old_position = window.outer_position().ok();
+    let old_size = window.outer_size().ok();
+    let (width, height) = if expanded {
+        (360.0, 260.0)
+    } else {
+        (124.0, 138.0)
+    };
+
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| format!("failed to resize pet window: {error}"))?;
+
+    if let (Some(position), Some(size), Ok(new_size)) =
+        (old_position, old_size, window.outer_size())
+    {
+        let x = position.x + size.width as i32 - new_size.width as i32;
+        let y = position.y + size.height as i32 - new_size.height as i32;
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2332,19 +2399,19 @@ async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
     let label = "pet";
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.show();
-        position_pet_window_bottom_right(&window);
-        let _ = window.set_focus();
-        let _ = window.emit("clawx://pet-selected", pet_id);
+        show_main_window(&app);
+        let _ = window.emit("clawkit://pet-selected", pet_id);
         return Ok(());
     }
     let url =
         WebviewUrl::App(format!("index.html?window=pet&petId={}", slugify_pet_id(&pet_id)).into());
     let window = WebviewWindowBuilder::new(&app, label, url)
-        .title("Clawx Pet")
-        .inner_size(420.0, 300.0)
-        .min_inner_size(360.0, 260.0)
+        .title("ClawKit Pet")
+        .inner_size(124.0, 138.0)
+        .min_inner_size(112.0, 120.0)
         .resizable(true)
         .decorations(false)
+        .focusable(false)
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -2353,6 +2420,14 @@ async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
         .build()
         .map_err(|error| format!("failed to open pet window: {error}"))?;
     position_pet_window_bottom_right(&window);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_pet_window_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("pet") {
+        resize_pet_window(&window, expanded)?;
+    }
     Ok(())
 }
 
@@ -2386,13 +2461,16 @@ async fn openclaw_gateway_stop() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(Arc::new(RealtimeState::default()))
         .manage(Arc::new(gateway_proxy::GatewayProxyState::default()))
         .plugin(tauri_plugin_opener::init())
-        .setup(|_| {
+        .setup(|app| {
             if let Err(error) = ensure_clawkit_home() {
                 eprintln!("failed to initialize .clawkit: {error}");
+            }
+            if let Err(error) = sync_resource_pets_to_clawkit(app.handle()) {
+                eprintln!("failed to sync resource pets: {error}");
             }
             Ok(())
         })
@@ -2400,8 +2478,8 @@ pub fn run() {
             resolve_dashboard_url,
             load_openclaw_snapshot,
             load_session_record,
-            get_clawx_bootstrap_status,
-            ensure_clawx_binding,
+            get_clawkit_bootstrap_status,
+            ensure_clawkit_binding,
             resolve_gateway_auth,
             gateway_proxy::gateway_status,
             gateway_proxy::gateway_connect,
@@ -2458,11 +2536,19 @@ pub fn run() {
             list_codex_pets,
             import_codex_pet,
             open_pet_window,
+            set_pet_window_expanded,
             openclaw_gateway_start,
             openclaw_gateway_stop,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(event, tauri::RunEvent::Reopen { .. }) {
+            show_main_window(app_handle);
+        }
+    });
 }

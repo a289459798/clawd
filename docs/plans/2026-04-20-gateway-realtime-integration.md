@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Turn clawx from a local snapshot viewer into a full OpenClaw realtime desktop workbench with live session status, streaming output, real send/stop controls, realtime usage updates, and robust fallback behavior.
+**Goal:** Turn clawkit from a local snapshot viewer into a full OpenClaw realtime desktop workbench with live session status, streaming output, real send/stop controls, realtime usage updates, and robust fallback behavior.
 
 **Architecture:** Keep the current local snapshot loader as a fallback baseline, then add a dedicated Gateway realtime layer on top. The first-class runtime source should become Gateway WebSocket events for session activity, chat streaming, and usage updates, while file-based snapshot loading remains the cold-start and reconnect recovery path.
 
@@ -12,7 +12,7 @@
 
 ## Phase 0: Confirm protocol and state model
 
-### Task 1: Document the exact Gateway surfaces clawx will consume
+### Task 1: Document the exact Gateway surfaces clawkit will consume
 
 **Files:**
 - Create: `docs/plans/notes-gateway-events.md`
@@ -20,7 +20,7 @@
 - Read: `/Users/zhangzy/Workspace/nodejs/clawdbot/src/tui/tui-event-handlers.ts`
 - Read: `/Users/zhangzy/Workspace/nodejs/clawdbot/src/tui/tui.ts`
 
-**Step 1:** Capture the exact RPC methods and event families clawx needs:
+**Step 1:** Capture the exact RPC methods and event families clawkit needs:
 - `chat.history`
 - `chat.send`
 - `chat.abort`
@@ -30,7 +30,7 @@
 - `usage_update`
 - chat streaming/final/error events
 
-**Step 2:** Write down the runtime state vocabulary clawx should use:
+**Step 2:** Write down the runtime state vocabulary clawkit should use:
 - `idle`
 - `sending`
 - `waiting`
@@ -254,7 +254,7 @@
 - Modify: `README.md`
 - Modify: `PROJECT_STATUS.md`
 
-**Step 1:** Document that clawx now has Gateway realtime integration.
+**Step 1:** Document that clawkit now has Gateway realtime integration.
 
 **Step 2:** Explain fallback behavior when Gateway is unavailable.
 

@@ -513,7 +513,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "clawx"
+name = "clawkit"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",

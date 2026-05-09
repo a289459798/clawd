@@ -1,10 +1,10 @@
-# clawx 开发规范
+# ClawKit 开发规范
 
 本文档是后续 AI / 开发者接手本仓库时必须优先遵守的工程约束。改动代码前先读本文件，再按需阅读 `README.md`、`PROJECT_STATUS.md` 和 `docs/plans/`。
 
 ## 项目定位
 
-clawx 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，也不是 OpenClaw 的平行实现。
+ClawKit 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，也不是 OpenClaw 的平行实现。
 
 开发时保持这个方向：
 
@@ -15,7 +15,7 @@ clawx 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，�
 
 ## 平台兼容
 
-clawx 是桌面应用，核心交付平台必须同时兼容：
+ClawKit 是桌面应用，核心交付平台必须同时兼容：
 
 - macOS
 - Windows
@@ -72,9 +72,9 @@ OpenClaw Gateway RPC/events 是运行态和规范数据的第一来源。
   - Provider 配置承载 `baseUrl`、`apiKey`、OAuth 状态等连接信息。
   - Model 配置只承载模型名称、别名、是否默认等使用层信息。
 - 未配置 provider 时，右侧模型列表应禁用并提示“请先配置 Provider”，不要让用户误以为模型可直接使用。
-- 默认模型通过配置 patch 保存到 OpenClaw 配置，例如 `agents.defaults.model.primary`，并维护对应 allowlist；不要把默认模型只存在 clawx 前端状态里。
+- 默认模型通过配置 patch 保存到 OpenClaw 配置，例如 `agents.defaults.model.primary`，并维护对应 allowlist；不要把默认模型只存在 ClawKit 前端状态里。
 - 写 OpenClaw 配置时必须走 `config.get` + `baseHash` + `config.patch`，避免覆盖用户或 Gateway 同时写入的配置。
-- 支持 OAuth 的 provider 应打开外部浏览器或可见系统终端执行授权流程，例如 `openclaw models auth login --provider <providerId>`；不要在 clawx 内嵌不透明授权 WebView。
+- 支持 OAuth 的 provider 应打开外部浏览器或可见系统终端执行授权流程，例如 `openclaw models auth login --provider <providerId>`；不要在 ClawKit 内嵌不透明授权 WebView。
 - API Key 不要在界面里回显真实值。后续接入 SecretRef 时，应优先使用 OpenClaw 的 secret/schema 能力，而不是自建一套密钥存储。
 - 发送消息时不要往 `chat.send` 追加 OpenClaw schema 不接受的模型字段；模型切换如果需要落到会话配置，应先通过 Gateway 的 session/config 方法保存。
 
@@ -102,7 +102,7 @@ OpenClaw Gateway RPC/events 是运行态和规范数据的第一来源。
 - macOS / Linux fallback: `curl -fsSL https://openclaw.ai/install-cli.sh | bash`
 - Windows: `iwr -useb https://openclaw.ai/install.ps1 | iex`
 
-安装过程不应静默隐藏。应让用户看到终端输出、onboarding 提示和错误信息。安装完成后由用户回到 clawx 点击重新检测。
+安装过程不应静默隐藏。应让用户看到终端输出、onboarding 提示和错误信息。安装完成后由用户回到 ClawKit 点击重新检测。
 
 macOS 上常见失败场景是 npm 全局目录指向 root-owned `/usr/local`，导致 `npm install -g openclaw@latest` 失败。安装逻辑必须为这种情况保留 local-prefix fallback，不要只依赖全局 npm 安装。
 
@@ -110,13 +110,15 @@ local-prefix 安装后，OpenClaw CLI 通常位于 `~/.openclaw/bin/openclaw`。
 
 ## Gateway 设备身份
 
-clawx 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw 要求：
+ClawKit 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw 要求：
 
 - `device.id` 必须等于 Ed25519 raw public key 的 SHA-256 hex 指纹。
 - `device.publicKey` 是 Ed25519 raw public key 的 base64url-no-padding 表示。
 - `device.signature` 必须按 OpenClaw v3 connect payload 规则签名。
 
 不要生成随机 `deviceId`。如果旧版本已保存随机 `deviceId`，应在读取 identity 时自动迁移为 public key 指纹，否则 Gateway 会返回 `device identity mismatch` / `device-id-mismatch`。
+
+Gateway 设备密钥与 `device_identity.json` 默认存放在 `~/.openclaw/clawkit/`；若仅有旧版 `~/.openclaw/clawx/device_identity.json`，首次连接前应自动复制到新目录，避免用户升级后身份漂移。
 
 ## OpenClaw 文档与源码
 
@@ -192,7 +194,7 @@ pnpm test
 
 ## 禁止事项
 
-- 不要把 clawx 做成 OpenClaw 的平行 session/agent/skill/channel 实现。
+- 不要把 ClawKit 做成 OpenClaw 的平行 session/agent/skill/channel 实现。
 - 不要移除本地 snapshot fallback，除非 Gateway RPC parity 已经验证并有明确迁移计划。
 - 不要把开发者机器路径写入 runtime 代码。
 - 不要直接扫描 OpenClaw 源码目录作为产品数据来源。

@@ -1,10 +1,10 @@
-# Clawx Product Completion Implementation Plan
+# ClawKit Product Completion Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Finish the core Clawx desktop experience so it is release-ready: no developer-machine assumptions, richer session browsing, Gateway-backed agent creation, and a better conversation detail workflow.
+**Goal:** Finish the core ClawKit desktop experience so it is release-ready: no developer-machine assumptions, richer session browsing, Gateway-backed agent creation, and a better conversation detail workflow.
 
-**Architecture:** Clawx remains a Tauri/React client and should not mutate OpenClaw files directly when a Gateway method exists. Gateway RPCs are the source of truth for agents, sessions, models, and session events; local snapshot reads stay as fallback only. UI state should preserve local interaction state while refreshing canonical Gateway data.
+**Architecture:** ClawKit remains a Tauri/React client and should not mutate OpenClaw files directly when a Gateway method exists. Gateway RPCs are the source of truth for agents, sessions, models, and session events; local snapshot reads stay as fallback only. UI state should preserve local interaction state while refreshing canonical Gateway data.
 
 **Tech Stack:** Tauri 2, Rust command bridge, React 19, TypeScript, Vitest, OpenClaw Gateway WebSocket RPC.
 
@@ -46,7 +46,7 @@ areas and removes the last development-machine skill path fallback.
 - Use Gateway `agents.create` as the only writer for agent config and bootstrap
   files.
 - Do not send `model` in the create payload. Models are selected per
-  conversation in Clawx.
+  conversation in ClawKit.
 - Add a native workspace directory picker. The default suggestion still follows
   OpenClaw's convention: `~/.openclaw/workspace-<agentId>`.
 - Follow-up: expose `agents.files.list/get/set` so the agent identity files
@@ -179,14 +179,14 @@ Manual checks:
   `USER.md`, and later writes identity/preferences into `IDENTITY.md`,
   `USER.md`, and `SOUL.md`.
 - Workspace files live on the Gateway host. This matters for future remote
-  Gateway support: Clawx should use Gateway methods for workspace creation and
+  Gateway support: ClawKit should use Gateway methods for workspace creation and
   file access rather than assuming local filesystem access.
 - Official architecture docs say control-plane clients connect to the Gateway
   over WebSocket; Gateway owns provider connections and typed request/event
   flow. Events are not replayed, so clients must refresh on gaps.
-- Before implementing the final create flow, confirm whether Clawx should:
+- Before implementing the final create flow, confirm whether ClawKit should:
   1. use `agents.create` as-is and add a Gateway-side directory picker/file API,
-  2. add a Clawx-specific Gateway helper for suggested workspace roots, or
+  2. add a ClawKit-specific Gateway helper for suggested workspace roots, or
   3. shell out to `openclaw agents add` only as a temporary fallback.
 
 **Behavior:**
@@ -194,7 +194,7 @@ Manual checks:
 - Create through Gateway only.
 - After creation, refresh `agents.list`/session snapshot.
 - Show Gateway validation errors inline.
-- Do not write `openclaw.json` directly from Clawx.
+- Do not write `openclaw.json` directly from ClawKit.
 - Do not expose model binding in the Agent create form.
 
 **Verification:**
@@ -247,7 +247,7 @@ Manual checks:
 
 ## Task 5: Session Operations
 
-Status: Done in clawx. The detail header now has a beginner-friendly
+Status: Done in clawkit. The detail header now has a beginner-friendly
 `操作` menu for copying the session ID, stopping the current run, organizing
 long-conversation context, restarting a session, and deleting a session.
 `整理上下文` maps to `sessions.compact`; `重新开始` maps to
@@ -288,7 +288,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## Task 6: Tool Timeline Improvements
 
-Status: Done in clawx. Tool calls and results now render as a collapsible
+Status: Done in clawkit. Tool calls and results now render as a collapsible
 timeline with a plain-language status, tool name, input summary, output
 summary, and raw details hidden behind `原始详情`.
 
@@ -313,7 +313,7 @@ pnpm build
 
 ## Task 7: Long Conversation Performance
 
-Status: Done in clawx. Conversation mode now renders a recent-message window
+Status: Done in clawkit. Conversation mode now renders a recent-message window
 for long sessions and shows a simple `加载更早消息` control at the top when
 older rows are hidden. Focus mode remains unchanged.
 

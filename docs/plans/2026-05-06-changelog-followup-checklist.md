@@ -1,6 +1,6 @@
 # Changelog Follow-Up Checklist
 
-> Last updated: 2026-05-06 — statuses synced with clawx implementation (batch + 「重复操作反馈」).
+> Last updated: 2026-05-06 — statuses synced with clawkit implementation (batch + 「重复操作反馈」).
 
 This checklist is based on OpenClaw changelog items after 2026.4.24 from:
 
@@ -8,7 +8,7 @@ This checklist is based on OpenClaw changelog items after 2026.4.24 from:
 - `/Users/zhangzy/Workspace/nodejs/clawdbot/apps/ios/CHANGELOG.md`
 - `/Users/zhangzy/Workspace/nodejs/clawdbot/extensions/matrix/CHANGELOG.md`
 
-Scope: only track items that make sense for clawx as a local desktop workbench. Channel-runtime internals, plugin SDK internals, iOS-only build hygiene, and provider-specific backend fixes stay out unless they change clawx user-facing behavior.
+Scope: only track items that make sense for clawkit as a local desktop workbench. Channel-runtime internals, plugin SDK internals, iOS-only build hygiene, and provider-specific backend fixes stay out unless they change clawkit user-facing behavior.
 
 ## Already Landed In This Pass
 
@@ -16,8 +16,8 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
 - [x] Render file attachments as clickable attachment cards in chat history and the focused user-message summary.
 - [x] Allow opening OpenClaw media files through Tauri opener with scoped `$HOME/.openclaw/media/**` permission.
 - [x] Send non-image attachments through the Gateway attachment payload instead of treating every file as an image.
-- [x] Display selected agent runtime on sessions and support runtime filtering in clawx session list.
-- [x] Map Gateway session runtime states (`running`, `done`, `failed`, `timeout`, `killed`) to distinct clawx UI statuses.
+- [x] Display selected agent runtime on sessions and support runtime filtering in clawkit session list.
+- [x] Map Gateway session runtime states (`running`, `done`, `failed`, `timeout`, `killed`) to distinct clawkit UI statuses.
 - [x] Persist model and thinking changes through `sessions.patch` before `chat.send`.
 - [x] Stop passing schema-extra thinking fields through `chat.send`.
 - [x] Reconcile Gateway ack `runId` back into local conversation runtime so stop/realtime matching stays aligned.
@@ -46,7 +46,7 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
 
 - [x] Hide or compact the chat controls row while scrolling down long transcripts.
   Source: `Control UI/chat: hide that row while scrolling down the transcript`.
-  Notes: only if it improves clawx's desktop workbench feel; keep composer discoverable.
+  Notes: only if it improves clawkit's desktop workbench feel; keep composer discoverable.
 
 ## P0: Gateway Reconciliation And Robustness
 
@@ -56,7 +56,7 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
 
 - [x] Handle queued same-session follow-up turns without false `ReplyRunAlreadyActiveError` UI states.
   Source: `Gateway/chat: clear the active reply-run guard before draining queued same-session follow-up turns`.
-  Notes: clawx already queues while active; verify Gateway ack/final ordering and auto-send next queued item.
+  Notes: clawkit already queues while active; verify Gateway ack/final ordering and auto-send next queued item.
 
 - [x] Refresh exact active session rows instead of hydrating stale large stores.
   Source: `TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session`.
@@ -110,7 +110,7 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
 
 - [x] Make the new cron job form collapsible beside the jobs list.
   Source: `Control UI/cron: make the New Job sidebar collapsible`.
-  Notes: 右侧可折叠「新建与说明」侧栏，引导至 Control UI / CLI；不在 clawx 内嵌完整表单以免与 Gateway 校验分叉。
+  Notes: 右侧可折叠「新建与说明」侧栏，引导至 Control UI / CLI；不在 clawkit 内嵌完整表单以免与 Gateway 校验分叉。
 
 - [x] Link cron run history back to session chat.
   Source: older post-4.24 cron history deep-link work.
@@ -124,7 +124,7 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
 
 - [x] Add Gateway process uptime to status surfaces.
   Source: `Status: show compact Gateway process uptime and host system uptime`.
-  Notes: OpenClaw 抽屉展示「Gateway 运行时长」，基于 WS `hello-ok.snapshot.uptimeMs`（见 `clawdbot/docs/gateway/index.md`）与本机时间推算。**主机系统 uptime** 仅在完整 `openclaw status` CLI 路径中汇总，当前 Gateway WS 未暴露给 clawx，故未在 UI 显示。
+  Notes: OpenClaw 抽屉展示「Gateway 运行时长」，基于 WS `hello-ok.snapshot.uptimeMs`（见 `clawdbot/docs/gateway/index.md`）与本机时间推算。**主机系统 uptime** 仅在完整 `openclaw status` CLI 路径中汇总，当前 Gateway WS 未暴露给 clawkit，故未在 UI 显示。
 
 - [x] Add recent restart handoffs to Gateway status.
   Source: `Gateway/status: show recent supervisor restart handoffs`.
@@ -135,7 +135,7 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
   Notes: OpenClaw 抽屉内可折叠「渲染诊断」：`PerformanceObserver` 采集 LoAF / Long Task（就绪后即订阅，面板用于查看与清空）；不支持时在文案中标明。
 
 - [x] Keep slow Gateway/page calls async with local loading states.
-  Source: Gateway/performance/startup and existing clawx async page rules.
+  Source: Gateway/performance/startup and existing clawkit async page rules.
   Notes: keep using page shell first, then load metadata.
 
 ## P2: Talk, Pairing, And Voice
@@ -146,27 +146,27 @@ Scope: only track items that make sense for clawx as a local desktop workbench. 
 
 - [ ] Add copied setup-code parsing for Gateway pairing/binding.
   Source: iOS changelog: full copied setup-code messages and private LAN `ws://` handling.
-  Notes: clawx currently binds local desktop; useful if adding remote Gateway pairing.
+  Notes: clawkit currently binds local desktop; useful if adding remote Gateway pairing.
 
 - [ ] Keep non-loopback `ws://` blocked unless explicitly private/LAN-safe.
   Source: iOS pairing security note.
-  Notes: relevant if clawx adds remote Gateway pairing.
+  Notes: relevant if clawkit adds remote Gateway pairing.
 
 - [ ] Consider voice/TTS indicators only after text/session workflow is stable.
   Source: Talk/voice, telephony TTS override, realtime voice changes.
-  Notes: lower priority for clawx desktop unless user asks for Talk Mode.
+  Notes: lower priority for clawkit desktop unless user asks for Talk Mode.
 
 ## P2: Matrix
 
-- [ ] Show Matrix encryption setup status if Matrix channel management lands in clawx.
+- [ ] Show Matrix encryption setup status if Matrix channel management lands in clawkit.
   Source: Matrix/E2EE setup and verification changelog.
   Notes: currently channel-specific; keep as future connection-page enhancement.
 
 - [ ] Add Matrix verification action affordances only through Gateway/plugin commands.
   Source: Matrix SAS verification fixes.
-  Notes: do not implement Matrix crypto locally in clawx.
+  Notes: do not implement Matrix crypto locally in clawkit.
 
-## Not Planned For Clawx Unless Requested
+## Not Planned For ClawKit Unless Requested
 
 - Plugin SDK internal migrations, runtime state helpers, fs-safe package APIs.
 - QA/Mantis/Crabbox live test harness commands.

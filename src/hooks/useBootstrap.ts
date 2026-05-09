@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ClawxBootstrapStatus } from "../types/app";
+import type { ClawKitBootstrapStatus } from "../types/app";
 
 export type BootstrapStep = "detect" | "install" | "bind" | "connect_test" | "ready";
 
 interface UseBootstrapReturn {
-  bootstrapStatus: ClawxBootstrapStatus | null;
+  bootstrapStatus: ClawKitBootstrapStatus | null;
   bootstrapLoading: boolean;
   bootstrapError: string | null;
   bindingInProgress: boolean;
@@ -19,7 +19,7 @@ interface UseBootstrapReturn {
 }
 
 export function useBootstrap(): UseBootstrapReturn {
-  const [bootstrapStatus, setBootstrapStatus] = useState<ClawxBootstrapStatus | null>(null);
+  const [bootstrapStatus, setBootstrapStatus] = useState<ClawKitBootstrapStatus | null>(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bindingInProgress, setBindingInProgress] = useState(false);
@@ -30,11 +30,11 @@ export function useBootstrap(): UseBootstrapReturn {
     setBootstrapLoading(true);
     setBootstrapError(null);
     try {
-      const status = await invoke<ClawxBootstrapStatus>("get_clawx_bootstrap_status");
+      const status = await invoke<ClawKitBootstrapStatus>("get_clawkit_bootstrap_status");
       setBootstrapStatus(status);
       setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
     } catch (error) {
-      console.error("Failed to load clawx bootstrap status", error);
+      console.error("Failed to load clawkit bootstrap status", error);
       setBootstrapError(error instanceof Error ? error.message : "读取 OpenClaw 状态失败");
     } finally {
       setBootstrapLoading(false);
@@ -46,7 +46,7 @@ export function useBootstrap(): UseBootstrapReturn {
     setBootstrapError(null);
     setBootstrapConnectError(null);
     try {
-      const status = await invoke<ClawxBootstrapStatus>("ensure_clawx_binding");
+      const status = await invoke<ClawKitBootstrapStatus>("ensure_clawkit_binding");
       setBootstrapStatus(status);
       setBootstrapStep(status.bindingConfigured ? "connect_test" : "bind");
     } catch (error) {

@@ -1,4 +1,4 @@
-# clawx 项目状态文档
+# ClawKit 项目状态文档
 
 > 最后更新：2026-05-02 GMT+8
 > 本文档只记录当前真实实现状态，方便后续继续开发。
@@ -70,7 +70,7 @@
 #### 前端结构拆分
 - `App.tsx` 已从 1234 行降到约 761 行。
 - 已接入并实际使用拆分后的 hooks：
-  - `src/hooks/useGatewayChat.ts`：负责订阅和处理 `clawx://gateway-chat` 事件，包括 tool stream、delta、final、error 状态。
+  - `src/hooks/useGatewayChat.ts`：负责订阅和处理 `clawkit://gateway-chat` 事件，包括 tool stream、delta、final、error 状态。
   - `src/hooks/useMessageSender.ts`：负责发送消息、草稿会话转真实 session、乐观插入 user 消息、错误时恢复 composer、排队消息重试。
   - `src/hooks/useModels.ts`：负责加载 Gateway 模型列表。
 - 继续保留 `App.tsx` 作为页面状态编排层，具体事件处理和发送链路下沉到 hooks。
@@ -127,7 +127,7 @@
 - **根因**：旧代码使用 HTTP POST 到 `/gateway/rpc`，但该端点返回 404。Gateway 的 RPC 方法走 WebSocket 协议
 - 新实现：通过 `tungstenite` crate 建立 WebSocket 连接
 - 握手流程：连接 → 接收 `connect.challenge` → 发送 `auth` → 接收 `connect.auth_ok`
-- 事件监听：后台线程持续读取 WS 消息，分发 `clawx://gateway-chat`、`clawx://sessions-changed` 事件
+- 事件监听：后台线程持续读取 WS 消息，分发 `clawkit://gateway-chat`、`clawkit://sessions-changed` 事件
 - RPC 请求：通过 WebSocket 发送 JSON-RPC 帧，同步等待响应
 - 连接管理：`gateway_connect` 命令初始化连接，`send_rpc` 复用连接
 - ping/pong：自动响应 Gateway 的 ping 消息
@@ -182,17 +182,17 @@
 - 通过 Tauri Rust 后端代理 Gateway `chat.history` / `chat.send`
 - 不再依赖前端直连 Control UI websocket（规避 device identity / secure context 限制）
 - 发送参数：`sessionKey / message / idempotencyKey / model / thinking / deliver=false / inputProvenance.kind=external_user`
-- clawx 来源标识通过代理层请求头透传
+- ClawKit 来源标识通过代理层请求头透传
 
 ---
 
 ## 一、项目定位
 
-**clawx** 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目,目标是把 **OpenClaw 变成更顺手的桌面工作台**。
+**ClawKit** 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目,目标是把 **OpenClaw 变成更顺手的桌面工作台**。
 
 核心定位:
 
-> **clawx = OpenClaw 的桌面工作台 / 管理壳,不是另一个聊天 UI。**
+> **ClawKit = OpenClaw 的桌面工作台 / 管理壳,不是另一个聊天 UI。**
 
 当前重点是:
 
@@ -434,7 +434,7 @@ Provider 配置与 Model 配置分开处理。未配置 provider 的模型列表
 - ✅ 列表页已接入基于本地 OpenClaw session transcript 的准实时增量刷新(状态、摘要、usage)
 - ✅ 对话详情页已接入真实发送能力,底层改为 Tauri Rust 后端代理 Gateway `chat.history` + `chat.send`
 - ✅ 发送参数已接入 `sessionKey / message / idempotencyKey / model / thinking / deliver=false / inputProvenance.kind=external_user`
-- ✅ clawx 来源标识已通过代理层请求头透传
+- ✅ ClawKit 来源标识已通过代理层请求头透传
 - ✅ assistant 消息级已接入 `model / provider / api` 展示
 - ✅ 模型默认值逻辑已接入,优先使用会话上次回复模型,否则回退到 OpenClaw 默认模型
 - ✅ 每次发送都会显式携带当前选中的模型
