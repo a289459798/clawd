@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { NavKey } from "../types/app";
 
 /** Alibaba iconfont Symbol JS injects `#icon-*` defs into the document body. */
@@ -6,6 +7,59 @@ function NavSidebarIconfont({ symbolId }: { symbolId: string }) {
     <svg className="nav-iconfont svgfont" aria-hidden width={22} height={22}>
       <use href={`#${symbolId}`} />
     </svg>
+  );
+}
+
+function FeedbackNavIcon() {
+  return (
+    <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.5-8.5h0a8.5 8.5 0 0 1 8.5 8.5z" />
+    </svg>
+  );
+}
+
+import feedbackQrSrc from "../assets/qrcode.png";
+
+export function FeedbackQrDialog({
+  open,
+  onClose,
+  title,
+  qrAlt,
+  closeLabel,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  qrAlt: string;
+  closeLabel: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="feedback-qr-dialog-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="feedback-qr-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feedback-qr-dialog-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button className="feedback-qr-dialog-close" type="button" onClick={onClose} aria-label={closeLabel}>
+          ×
+        </button>
+        <h2 id="feedback-qr-dialog-title" className="feedback-qr-dialog-title">
+          {title}
+        </h2>
+        <img className="feedback-qr-dialog-img" src={feedbackQrSrc} alt={qrAlt} loading="lazy" />
+      </div>
+    </div>
   );
 }
 
@@ -86,6 +140,7 @@ export function NavSidebar({
   onApplyClawKitUpdate?: () => void;
 }) {
   const translate = t ?? ((key: string) => key);
+  const [feedbackQrOpen, setFeedbackQrOpen] = useState(false);
   const navItems: Array<{ key: NavKey; label: string; icon: string }> = [
     { key: "conversations", label: translate("nav.conversations"), icon: "chat" },
     { key: "models", label: translate("nav.models"), icon: "model" },
@@ -132,7 +187,7 @@ export function NavSidebar({
             disabled={clawKitUpdateInstalling}
             onClick={() => onApplyClawKitUpdate?.()}
           >
-            {clawKitUpdateInstalling ? translate("appUpdate.installing") : translate("appUpdate.sidebarButton")}
+            {translate("appUpdate.sidebarButton")}
           </button>
         ) : null}
         <button
@@ -147,6 +202,17 @@ export function NavSidebar({
           ) : null}
         </button>
         <button
+          className="feedback-nav-button"
+          type="button"
+          title={translate("nav.feedback")}
+          aria-label={translate("nav.feedback")}
+          aria-haspopup="dialog"
+          aria-expanded={feedbackQrOpen}
+          onClick={() => setFeedbackQrOpen(true)}
+        >
+          <FeedbackNavIcon />
+        </button>
+        <button
           className={`settings-nav-button ${activeNav === "settings" ? "active" : ""}`}
           type="button"
           title={translate("nav.settings")}
@@ -157,6 +223,13 @@ export function NavSidebar({
           <NavSidebarIconfont symbolId="icon-setting" />
         </button>
       </div>
+      <FeedbackQrDialog
+        open={feedbackQrOpen}
+        onClose={() => setFeedbackQrOpen(false)}
+        title={translate("nav.feedback")}
+        qrAlt={translate("feedback.qrAlt")}
+        closeLabel={translate("feedback.closeDialog")}
+      />
     </aside>
   );
 }

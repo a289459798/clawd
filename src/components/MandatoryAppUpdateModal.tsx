@@ -38,7 +38,7 @@ export function MandatoryAppUpdateModal({
         ) : null}
         <p className="mandatory-app-update-body">{t("appUpdate.mandatory.body")}</p>
         <button type="button" className="primary-button mandatory-app-update-cta" onClick={onApply} disabled={installing}>
-          {installing ? t("appUpdate.installing") : t("appUpdate.apply")}
+          {t("appUpdate.apply")}
         </button>
       </div>
     </div>

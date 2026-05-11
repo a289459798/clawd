@@ -324,7 +324,7 @@ fn default_clawkit_settings() -> Value {
             "privacyMode": false
         },
         "openclaw": {
-            "autoStartGateway": false
+            "autoStartGateway": true
         }
     })
 }
@@ -435,7 +435,7 @@ fn sanitize_clawkit_settings_value(settings: &mut Value) {
         sanitize_bool(notifications, "privacyMode", false);
     }
     if let Some(openclaw) = settings.get_mut("openclaw").and_then(Value::as_object_mut) {
-        sanitize_bool(openclaw, "autoStartGateway", false);
+        sanitize_bool(openclaw, "autoStartGateway", true);
     }
 }
 
@@ -2806,6 +2806,7 @@ pub fn run() {
             set_pet_window_expanded,
             get_clawkit_settings,
             patch_clawkit_settings,
+            unsigned_update::clawkit_cargo_pkg_version,
             unsigned_update::clawkit_unsigned_update_probe,
             unsigned_update::clawkit_unsigned_update_download,
             unsigned_update::clawkit_unsigned_update_install,
@@ -2818,6 +2819,10 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        #[cfg(desktop)]
+        if matches!(event, tauri::RunEvent::Ready) {
+            show_main_window(app_handle);
+        }
         #[cfg(target_os = "macos")]
         if matches!(event, tauri::RunEvent::Reopen { .. }) {
             show_main_window(app_handle);

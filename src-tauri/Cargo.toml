@@ -1,6 +1,6 @@
 [package]
 name = "clawkit"
-version = "0.1.0"
+version = "0.1.1"
 description = "ClawKit desktop workbench for OpenClaw"
 authors = ["ClawKit"]
 edition = "2021"
@@ -37,3 +37,4 @@ semver = "1"
 tempfile = "3"
 flate2 = "1"
 tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }

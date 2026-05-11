@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getClawKitSelfUpdateView, type ClawKitDownloadedUpdate, type ClawKitSelfUpdateState } from "../lib/clawKitSelfUpdateState";
 
 const CLAWKIT_SELF_UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -15,23 +16,21 @@ type UnsignedProbe = {
   version: string;
   mandatory: boolean;
   url: string;
+  /** Same as Tauri package version (`tauri.conf.json`); used for semver compare with manifest. */
+  currentVersion: string;
 };
 
 export function useClawKitSelfUpdate(enabled: boolean) {
-  const [ready, setReady] = useState<{ version: string; mandatory: boolean } | null>(null);
-  const [installing, setInstalling] = useState(false);
+  const [state, setState] = useState<ClawKitSelfUpdateState>({ status: "idle" });
 
   const busyRef = useRef(false);
   const downloadedKeyRef = useRef<string | null>(null);
-  const pendingPathRef = useRef<string | null>(null);
-  const pendingUrlRef = useRef<string | null>(null);
+  const downloadedUpdateRef = useRef<ClawKitDownloadedUpdate | null>(null);
 
   const reset = useCallback(() => {
     downloadedKeyRef.current = null;
-    pendingPathRef.current = null;
-    pendingUrlRef.current = null;
-    setReady(null);
-    setInstalling(false);
+    downloadedUpdateRef.current = null;
+    setState({ status: "idle" });
   }, []);
 
   const tick = useCallback(async () => {
@@ -39,6 +38,7 @@ export function useClawKitSelfUpdate(enabled: boolean) {
       return;
     }
     busyRef.current = true;
+    setState({ status: "checking" });
     try {
       let probe: UnsignedProbe | null = null;
       try {
@@ -55,12 +55,13 @@ export function useClawKitSelfUpdate(enabled: boolean) {
         return;
       }
 
-      const cacheKey = `${probe.version}:${probe.mandatory ? "m" : "o"}`;
-      if (downloadedKeyRef.current === cacheKey && pendingPathRef.current) {
-        setReady({ version: probe.version, mandatory: probe.mandatory });
+      const cacheKey = `${probe.version}:${probe.mandatory ? "m" : "o"}:${probe.url}`;
+      if (downloadedKeyRef.current === cacheKey && downloadedUpdateRef.current) {
+        setState({ status: "ready", update: downloadedUpdateRef.current });
         return;
       }
 
+      setState({ status: "downloading", version: probe.version, mandatory: probe.mandatory });
       let downloadPath: string;
       try {
         downloadPath = await invoke<string>("clawkit_unsigned_update_download", { url: probe.url });
@@ -70,9 +71,13 @@ export function useClawKitSelfUpdate(enabled: boolean) {
       }
 
       downloadedKeyRef.current = cacheKey;
-      pendingPathRef.current = downloadPath;
-      pendingUrlRef.current = probe.url;
-      setReady({ version: probe.version, mandatory: probe.mandatory });
+      downloadedUpdateRef.current = {
+        version: probe.version,
+        mandatory: probe.mandatory,
+        url: probe.url,
+        path: downloadPath,
+      };
+      setState({ status: "ready", update: downloadedUpdateRef.current });
     } finally {
       busyRef.current = false;
     }
@@ -92,23 +97,23 @@ export function useClawKitSelfUpdate(enabled: boolean) {
   }, [enabled, reset, tick]);
 
   const applyPendingUpdate = useCallback(async () => {
-    const path = pendingPathRef.current;
+    const update = downloadedUpdateRef.current;
+    const path = update?.path;
     if (!path) {
       return;
     }
-    setInstalling(true);
+    setState({ status: "installing", update });
     try {
       await invoke("clawkit_unsigned_update_install", { path });
     } catch {
-      setInstalling(false);
+      setState({ status: "ready", update });
     }
   }, []);
 
+  const view = getClawKitSelfUpdateView(state);
+
   return {
-    showOptionalUpdateChrome: Boolean(ready),
-    mandatoryUpdateOpen: Boolean(ready?.mandatory),
-    pendingVersion: ready?.version ?? null,
-    installingUpdate: installing,
+    ...view,
     applyPendingUpdate,
   };
 }

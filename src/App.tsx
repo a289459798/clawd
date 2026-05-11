@@ -100,6 +100,7 @@ async function bringMainWindowForward() {
     if (minimized) {
       await appWindow.unminimize();
     }
+    await appWindow.setFocus();
     await appWindow.requestUserAttention(UserAttentionType.Informational).catch(() => undefined);
   } catch (error) {
     console.warn("Failed to bring ClawKit window forward", error);
@@ -497,6 +498,17 @@ function App() {
     settingsError: clawKitSettingsError,
     patchSettings,
   } = useClawKitSettings({ enabled: !bootstrapLoading });
+  const maybeAutoStartOpenClawGateway = useCallback(async () => {
+    if (!clawKitSettings.openclaw.autoStartGateway || autoStartGatewayAttemptedRef.current) {
+      return;
+    }
+    autoStartGatewayAttemptedRef.current = true;
+    try {
+      await invoke("openclaw_gateway_start");
+    } catch (error) {
+      console.warn("Failed to auto-start OpenClaw Gateway", error);
+    }
+  }, [clawKitSettings.openclaw.autoStartGateway]);
   const locale = useMemo(
     () => resolveLocale(clawKitSettings.general.language, typeof navigator !== "undefined" ? navigator.language : null),
     [clawKitSettings.general.language],
@@ -555,6 +567,10 @@ function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    void bringMainWindowForward();
   }, []);
 
   useEffect(() => {
@@ -748,34 +764,6 @@ function App() {
   }, [loadBootstrapStatus]);
 
   useEffect(() => {
-    if (
-      autoStartGatewayAttemptedRef.current ||
-      clawKitSettingsLoading ||
-      !clawKitSettings.openclaw.autoStartGateway ||
-      !bootstrapStatus?.openclawInstalled ||
-      !bootstrapStatus.bindingConfigured ||
-      (bootstrapStep !== "connect_test" && bootstrapStep !== "ready")
-    ) {
-      return;
-    }
-
-    autoStartGatewayAttemptedRef.current = true;
-    void (async () => {
-      try {
-        await invoke("openclaw_gateway_start");
-      } catch (error) {
-        console.warn("Failed to auto-start OpenClaw Gateway", error);
-      }
-    })();
-  }, [
-    bootstrapStatus?.bindingConfigured,
-    bootstrapStatus?.openclawInstalled,
-    bootstrapStep,
-    clawKitSettings.openclaw.autoStartGateway,
-    clawKitSettingsLoading,
-  ]);
-
-  useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured) {
       return;
     }
@@ -785,6 +773,7 @@ function App() {
       void (async () => {
         setBootstrapConnectError(null);
         try {
+          await maybeAutoStartOpenClawGateway();
           await invoke("gateway_connect");
           if (!cancelled) {
             setBootstrapStep("ready");
@@ -813,6 +802,7 @@ function App() {
     // gateway_connect returns "already connected" if previously established, so this is safe.
     void (async () => {
       try {
+        await maybeAutoStartOpenClawGateway();
         await invoke("gateway_connect");
       } catch {
         // Ignore errors here; connection status will be reported by refreshGatewayStatus.
@@ -933,7 +923,13 @@ function App() {
       }
       eventCleanup?.();
     };
-  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot]);
+  }, [
+    bootstrapStatus?.bindingConfigured,
+    bootstrapStatus?.openclawInstalled,
+    bootstrapStep,
+    loadGatewaySnapshot,
+    maybeAutoStartOpenClawGateway,
+  ]);
 
   useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured || bootstrapStep !== "ready") {
