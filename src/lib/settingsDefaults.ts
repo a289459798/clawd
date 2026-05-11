@@ -39,7 +39,7 @@ export const DEFAULT_CLAWKIT_SETTINGS: ClawKitSettings = {
     privacyMode: false,
   },
   openclaw: {
-    autoStartGateway: true,
+    autoStartGateway: false,
   },
 };
 

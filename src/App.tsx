@@ -1,7 +1,6 @@
-import { startTransition, useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { defaultWindowIcon } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
@@ -10,15 +9,10 @@ import { AgentCreateDialog } from "./components/AgentCreateDialog";
 import { AgentFilesDialog } from "./components/AgentFilesDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
-import { CronPage } from "./components/CronPage";
-import { OpenClawUiDiagnostics } from "./components/OpenClawUiDiagnostics";
-import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
-import { ModelsPage } from "./components/ModelsPage";
-import { PetsPage } from "./components/PetsPage";
+import { OpenClawInfoDrawer } from "./components/OpenClawInfoDrawer";
 import { ResourceSidebar } from "./components/ResourceSidebar";
-import { SettingsPage } from "./components/SettingsPage";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
-import { conversationMatchesSessionKey, findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
+import { conversationMatchesSessionKey, findConversationById } from "./lib/conversationSelectors";
 import { readComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
 import { useClawKitSettings } from "./hooks/useClawKitSettings";
@@ -28,20 +22,22 @@ import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
 import { useMessageSender } from "./hooks/useMessageSender";
 import { useModels } from "./hooks/useModels";
 import { useUiFrameDiagnostics } from "./hooks/useUiFrameDiagnostics";
+import { useConversationWorkspaceState } from "./hooks/useConversationWorkspaceState";
+import { usePetContextSync } from "./hooks/usePetContextSync";
+import { useBootstrapFlow } from "./hooks/useBootstrapFlow";
+import { useOpenClawRuntime } from "./hooks/useOpenClawRuntime";
+import { useModelsPageData } from "./hooks/useModelsPageData";
+import { useModelManagementActions } from "./hooks/useModelManagementActions";
 import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
 import { connectionLabel, formatTokenCount } from "./lib/appFormatters";
-import { buildSkillPolicyHints } from "./lib/skillPolicyHints";
-import {
-  interpretPluginHealthError,
-  mergePluginRepairsIntoConnections,
-  parseHealthPluginErrors,
-} from "./lib/pluginPackagingDiagnostics";
-import { resolveChannelHealthHint, resolveChannelOperationalDegraded } from "./lib/channelHealth";
-import { resolveGatewayChannelStatusIds } from "./lib/gatewayChannelStatusIds";
 import { parseSenderMeta } from "./lib/messageMeta";
-import { buildModelOptions, canonicalizeModelRef } from "./lib/modelOptions";
+import { canonicalizeModelRef } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
+import {
+  applyPluginHealthToChannels,
+  mapGatewaySkills,
+} from "./lib/appDerivedData";
 import {
   buildQqbotSettingsPatch,
   readQqbotEditorFormFromConfig,
@@ -57,35 +53,28 @@ import { createTranslator, resolveLocale } from "./lib/i18n";
 import { shouldRunDestructiveAction } from "./lib/sessionConfirmations";
 import { parseConversationFilters, serializeConversationFilters } from "./lib/appUiPersistence";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
-import type { PetConversationContext } from "./types/pet";
-import type { Agent, ChannelConnection, ClawKitBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QqbotPluginStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
-import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, GatewayUpdateStatusResult, OpenClawSnapshot } from "./types/gateway";
+import type { Agent, ChannelConnection, ComposerAttachment, NavKey, PluginRepairCard, QqbotPluginStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
+import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
 
 const agentsSeed: Agent[] = [];
 const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
-const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+const ModelsPage = lazy(async () => import("./components/ModelsPage").then((module) => ({ default: module.ModelsPage })));
+const SkillsPage = lazy(async () => import("./components/InfoPages").then((module) => ({ default: module.SkillsPage })));
+const ConnectionsPage = lazy(async () => import("./components/InfoPages").then((module) => ({ default: module.ConnectionsPage })));
+const UsagePage = lazy(async () => import("./components/InfoPages").then((module) => ({ default: module.UsagePage })));
+const CronPage = lazy(async () => import("./components/CronPage").then((module) => ({ default: module.CronPage })));
+const PetsPage = lazy(async () => import("./components/PetsPage").then((module) => ({ default: module.PetsPage })));
+const SettingsPage = lazy(async () => import("./components/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
-const BOOTSTRAP_DEBUG_STORAGE_KEY = "clawkit.debug.bootstrapStep";
 const CONVERSATION_FILTERS_STORAGE_KEY = "clawkit.conversationFilters";
 const LAST_CONVERSATION_STORAGE_KEY = "clawkit.lastConversationId";
 const tr = (t: (key: string) => string, key: string, fallback: string) => {
   const value = t(key);
   return value === key ? fallback : value;
 };
-
-function readBootstrapDebugStep() {
-  try {
-    const value =
-      window.localStorage.getItem(BOOTSTRAP_DEBUG_STORAGE_KEY) ??
-      window.localStorage.getItem("clawx.debug.bootstrapStep");
-    return value === "install" || value === "bind" || value === "connect_test" ? value : null;
-  } catch {
-    return null;
-  }
-}
 
 function readStorageValue(key: string) {
   try {
@@ -118,322 +107,23 @@ async function bringMainWindowForward() {
   }
 }
 
-function buildBootstrapDebugStatus(step: "install" | "bind" | "connect_test"): ClawKitBootstrapStatus {
-  const base: ClawKitBootstrapStatus = {
-    openclawInstalled: step !== "install",
-    openclawPath: step === "install" ? null : "/debug/openclaw",
-    configExists: step !== "install",
-    configPath: "~/.openclaw/openclaw.json",
-    bindingConfigured: step === "connect_test",
-    allowedOrigins: [],
-    recommendedOrigin: "http://localhost:1420",
-    gatewayPort: 18789,
-    bindingWrites: [
-      "gateway.clients.clawkit.enabled = true",
-      "gateway.clients.clawkit.origins += http://localhost:1420",
-    ],
-  };
-  return base;
-}
-const PET_COMPLETED_VISIBLE_MS = 10 * 1000;
-const PET_REPLY_MAX_AGE_MS = 5 * 60 * 1000;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function readNestedRecord(root: unknown, path: string[]): Record<string, unknown> | null {
-  let current: unknown = root;
-  for (const key of path) {
-    const record = asRecord(current);
-    if (!record) return null;
-    current = record[key];
-  }
-  return asRecord(current);
-}
-
-function readNestedString(root: unknown, path: string[]): string | null {
-  let current: unknown = root;
-  for (const key of path) {
-    const record = asRecord(current);
-    if (!record) return null;
-    current = record[key];
-  }
-  return typeof current === "string" && current.trim() ? current.trim() : null;
-}
-
-function resolveConfigDefaultModel(config: unknown): string | null {
-  const modelPrimary = readNestedString(config, ["agents", "defaults", "model", "primary"]);
-  if (modelPrimary) return modelPrimary;
-  const model = readNestedString(config, ["agents", "defaults", "model"]);
-  if (model) return model;
-  const defaultModels = readNestedRecord(config, ["agents", "defaults", "models"]);
-  const firstConfiguredDefault = defaultModels ? Object.keys(defaultModels).find((key) => key.trim()) : null;
-  return firstConfiguredDefault ?? null;
-}
-
-function normalizePetTimestamp(value?: number) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return value < 10_000_000_000 ? value * 1000 : value;
-}
-
-function resolvePetRunStartedAt(conversation: Conversation | null) {
-  return normalizePetTimestamp(conversation?.runtime?.activeStartedAt ?? conversation?.runtime?.lastRunStartedAt);
-}
-
-function resolvePetLastReply(conversation: Conversation | null): string | null {
-  if (!conversation) return null;
-  const messages = conversation.previewMessages ?? [];
-  const runStartedAt = resolvePetRunStartedAt(conversation);
-  const terminalAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt);
-  const assistant = [...messages].reverse().find((message) => {
-    if (message.role !== "assistant" || !message.text.trim()) return false;
-    if (!runStartedAt) return true;
-    const messageTime = normalizePetTimestamp(message.timestamp);
-    return typeof messageTime === "number"
-      && messageTime >= runStartedAt - 1000
-      && (!terminalAt || messageTime <= terminalAt + 1000);
-  });
-  if (runStartedAt) return assistant?.text.trim() || (conversation.lastRole === "assistant" ? conversation.lastMessage : null) || null;
-  const fallback = conversation.lastRole === "assistant" ? conversation.lastMessage : null;
-  return assistant?.text.trim() || fallback || null;
-}
-
-const PET_ACTIVE_EVENT_TYPES = new Set([
-  "running",
-  "started",
-  "tool_stream",
-  "assistant_stream",
-  "delta",
-  "tool_call",
-  "tool_result",
-]);
-
-function resolvePetToolProgress(conversation: Conversation | null): string | null {
-  if (!conversation) return null;
-  const messages = conversation.previewMessages ?? [];
-  const latestAssistant = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant" && Array.isArray(message.parts) && message.parts.length > 0);
-  if (!latestAssistant?.parts?.length) return null;
-  const latestPart = [...latestAssistant.parts]
-    .reverse()
-    .find((part) => part.kind === "tool_call" || part.kind === "tool_result");
-  if (!latestPart) return null;
-  if (latestPart.kind === "tool_call") {
-    const toolName = latestPart.tool?.trim() || "tool";
-    return `Tool call: ${toolName}`;
-  }
-  const output = latestPart.text?.replace(/\s+/g, " ").trim();
-  return output ? `Tool result: ${output.slice(0, 88)}` : "Tool call returned";
-}
-
-function resolvePetLastUserMessage(conversation: Conversation | null): string | null {
-  if (!conversation) return null;
-  const messages = conversation.previewMessages ?? [];
-  const runStartedAt = resolvePetRunStartedAt(conversation);
-  const terminalAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt);
-  const users = [...messages]
-    .reverse()
-    .filter((message) => message.role === "user" && message.text.trim());
-  if (users.length === 0) return null;
-  if (!runStartedAt) return users[0]?.text.trim() || null;
-  const currentRunUser = users.find((message) => {
-    const messageTime = normalizePetTimestamp(message.timestamp);
-    return typeof messageTime === "number"
-      && messageTime >= runStartedAt - 1000
-      && (!terminalAt || messageTime <= terminalAt + 1000);
-  });
-  return currentRunUser?.text.trim() || users[0]?.text.trim() || null;
-}
-
-function conversationHasActivePetReply(conversation: Conversation, now: number) {
-  if (
-    conversation.runtime?.activeRunId
-    || conversation.status === "working"
-    || PET_ACTIVE_EVENT_TYPES.has((conversation.latestEventType ?? "").toLowerCase())
-  ) return true;
-  const completedAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt ?? conversation.updatedAt);
-  return conversation.status === "completed"
-    && typeof completedAt === "number"
-    && now - completedAt <= PET_COMPLETED_VISIBLE_MS;
-}
-
-function buildPetContext(agents: Agent[], conversation: Conversation | null, now: number): PetConversationContext {
-  const activeReplies = agents
-    .flatMap((agent) => agent.conversations)
-    .filter((item) => conversationHasActivePetReply(item, now))
-    .map((item) => {
-      const reply = resolvePetLastReply(item);
-      const eventType = (item.latestEventType ?? "").toLowerCase();
-      const activeByRuntime = Boolean(item.runtime?.activeRunId);
-      const activeByStatus = item.status === "working";
-      const activeByEventType = PET_ACTIVE_EVENT_TYPES.has(eventType);
-      const isActive = activeByRuntime || activeByStatus || activeByEventType;
-      const toolProgress = resolvePetToolProgress(item);
-      return {
-        conversationId: item.id,
-        title: item.title,
-        userMessage: resolvePetLastUserMessage(item),
-        status: item.status,
-        model: item.model,
-        reply: reply ?? toolProgress ?? "",
-        loading: isActive,
-        updatedAt: normalizePetTimestamp(item.runtime?.lastEventAt ?? item.runtime?.lastTerminalAt ?? item.updatedAt) ?? null,
-      };
-    })
-    .filter((item) => item.loading || item.reply.trim())
-    .filter((item) => typeof item.updatedAt === "number" && now - item.updatedAt <= PET_REPLY_MAX_AGE_MS)
-    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-
-  return {
-    conversationId: conversation?.id ?? null,
-    title: conversation?.title ?? null,
-    status: conversation?.status ?? "idle",
-    model: conversation?.model ?? null,
-    lastUserMessage: resolvePetLastUserMessage(conversation),
-    lastReply: resolvePetLastReply(conversation),
-    updatedAt: conversation?.updatedAt ?? null,
-    tokens: conversation?.tokens ?? null,
-    replies: activeReplies,
-  };
-}
-
-function normalizeSkillMissing(missing: unknown): string[] {
-  if (!missing) return [];
-  if (Array.isArray(missing)) return missing.map((item) => String(item)).filter(Boolean);
-  if (typeof missing === "object") {
-    return Object.entries(missing as Record<string, unknown>)
-      .filter(([, value]) => {
-        if (Array.isArray(value)) return value.length > 0;
-        if (value && typeof value === "object") return Object.keys(value).length > 0;
-        return Boolean(value);
-      })
-      .map(([key]) => key);
-  }
-  return [String(missing)];
-}
-
-function mapGatewaySkills(result: GatewaySkillsStatusResult): Skill[] {
-  return (result.skills ?? []).map((skill) => ({
-    id: skill.skillKey ?? skill.name,
-    name: [skill.emoji, skill.name].filter(Boolean).join(" "),
-    summary: skill.description ?? "No skill description yet.",
-    description: skill.description,
-    enabled: !skill.disabled,
-    eligible: skill.eligible,
-    missing: normalizeSkillMissing(skill.missing),
-    homepage: skill.homepage,
-    policyHints: buildSkillPolicyHints({
-      name: skill.name,
-      blockedByAllowlist: skill.blockedByAllowlist,
-      blockedByAgentFilter: skill.blockedByAgentFilter,
-      eligible: skill.eligible,
-      install: skill.install,
-    }),
-  }));
-}
-
-function applyPluginHealthToChannels(
-  channelsResult: GatewayChannelsStatusResult,
-  healthRaw: unknown,
-): {
-  connections: ChannelConnection[];
-  eventLoop?: GatewayChannelsEventLoopHealth;
-  repairs: PluginRepairCard[];
-  unmatched: PluginRepairCard[];
-} {
-  const pluginErrors = parseHealthPluginErrors(healthRaw);
-  const repairCards = pluginErrors.map(interpretPluginHealthError);
-  const channelPayload = mapGatewayChannels(channelsResult);
-  const merged = mergePluginRepairsIntoConnections(channelPayload.connections, repairCards);
-  return {
-    connections: merged.connections,
-    eventLoop: channelPayload.eventLoop,
-    repairs: repairCards,
-    unmatched: merged.unmatchedRepairs,
-  };
-}
-
-function mapGatewayChannels(result: GatewayChannelsStatusResult): {
-  connections: ChannelConnection[];
-  eventLoop?: GatewayChannelsEventLoopHealth;
-} {
-  const ids = resolveGatewayChannelStatusIds(result);
-  const connections = ids.map((id) => {
-    const accounts = result.channelAccounts?.[id] ?? [];
-    const connected = accounts.some((account) => account.connected || account.running);
-    const configured = accounts.some((account) => account.configured || account.enabled);
-    const error = accounts.find((account) => account.lastError)?.lastError;
-    const degradedOperational = resolveChannelOperationalDegraded(accounts);
-    const healthHint = resolveChannelHealthHint(accounts);
-
-    let status: ChannelConnection["status"];
-    if (connected) {
-      status = degradedOperational ? "degraded" : "connected";
-    } else if (error) {
-      status = "warning";
-    } else if (configured) {
-      status = "warning";
-    } else {
-      status = "disabled";
-    }
-
-    const label = result.channelLabels?.[id] ?? result.channelMeta?.find((item) => item.id === id)?.label ?? id;
-    const detail = result.channelDetailLabels?.[id] ?? result.channelMeta?.find((item) => item.id === id)?.detailLabel ?? "OpenClaw Gateway channel";
-    return {
-      id,
-      name: label,
-      status,
-      detail: error ? `${detail}：${error}` : detail,
-      config: `channels.${id}`,
-      activity: connected ? "Running" : configured ? "Configured, waiting for connection" : "Pending configuration",
-      healthHint,
-      packageName:
-        id === "openclaw-weixin"
-          ? "@tencent-weixin/openclaw-weixin"
-          : id === "qqbot"
-            ? "@openclaw/qqbot"
-            : undefined,
-      docsUrl: `https://docs.openclaw.ai/channels/${id}`,
-      accounts: accounts.map((account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-        linked: account.linked,
-        connected: account.connected,
-        running: account.running,
-        lastError: account.lastError,
-        healthState: account.healthState,
-        tokenSource: account.tokenSource,
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
-        signingSecretSource: account.signingSecretSource,
-        tokenStatus: account.tokenStatus,
-        botTokenStatus: account.botTokenStatus,
-        appTokenStatus: account.appTokenStatus,
-        signingSecretStatus: account.signingSecretStatus,
-        userTokenStatus: account.userTokenStatus,
-        statusState: account.statusState,
-      })),
-    };
-  });
-  return { connections, eventLoop: result.eventLoop };
-}
-
 function App() {
-  const [bootstrapStatus, setBootstrapStatus] = useState<ClawKitBootstrapStatus | null>(null);
-  const [bootstrapLoading, setBootstrapLoading] = useState(true);
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  const [bindingInProgress, setBindingInProgress] = useState(false);
+  const {
+    bootstrapStatus,
+    bootstrapLoading,
+    bootstrapError,
+    bindingInProgress,
+    bootstrapStep,
+    bootstrapConnectError,
+    setBootstrapStep,
+    setBootstrapConnectError,
+    loadBootstrapStatus,
+    bindOpenClaw,
+  } = useBootstrapFlow();
   const [agentCreateOpen, setAgentCreateOpen] = useState(false);
   const [agentCreating, setAgentCreating] = useState(false);
   const [agentCreateError, setAgentCreateError] = useState<string | null>(null);
   const [agentFilesAgentId, setAgentFilesAgentId] = useState<string | null>(null);
-  const [bootstrapStep, setBootstrapStep] = useState<"detect" | "install" | "bind" | "connect_test" | "ready">("detect");
-  const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
   const [conversationSearch, setConversationSearch] = useState(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).search);
   const [conversationRuntimeFilter, setConversationRuntimeFilter] = useState(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).runtimeFilter);
@@ -459,18 +149,7 @@ function App() {
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [usagePageReady, setUsagePageReady] = useState(true);
-  const [modelsPageLoading, setModelsPageLoading] = useState(false);
-  const [modelActionBusy, setModelActionBusy] = useState(false);
-  const [modelsActionMessage, setModelsActionMessage] = useState<string | null>(null);
-  const [configuredModels, setConfiguredModels] = useState<GatewayModelSummary[]>([]);
-  const [allModels, setAllModels] = useState<GatewayModelSummary[]>([]);
-  const [modelAuthStatus, setModelAuthStatus] = useState<GatewayModelAuthStatusResult | null>(null);
-  const [modelsPageReady, setModelsPageReady] = useState(false);
   const [gatewaySessionsDefaults, setGatewaySessionsDefaults] = useState<GatewaySessionsListResult["defaults"] | null>(null);
-  const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
-  const [openClawConfigDefaultModel, setOpenClawConfigDefaultModel] = useState<string | null>(null);
-  const [openClawConfigDefaultModelLoaded, setOpenClawConfigDefaultModelLoaded] = useState(false);
-  const [openClawCliStatus, setOpenClawCliStatus] = useState<OpenClawCliStatus | null>(null);
   const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
   const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
   const [openClawGatewayBusy, setOpenClawGatewayBusy] = useState(false);
@@ -482,11 +161,6 @@ function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  const currentDefaultModel = openClawStatus?.sessions?.defaults?.model ?? gatewaySessionsDefaults?.model ?? openClawConfigDefaultModel ?? null;
-  const { modelOptions, modelsLoading, setModelOptions } = useModels({
-    enabled: bootstrapStep === "ready" && openClawConfigDefaultModelLoaded,
-    defaultModel: currentDefaultModel,
-  });
   const { loadGatewaySnapshot } = useGatewaySnapshot();
   const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
@@ -534,6 +208,7 @@ function App() {
     [clawKitSettings.general.language],
   );
   const t = useMemo(() => createTranslator(locale), [locale]);
+  const lazyPageFallback = <section className="workspace-area"><p className="empty-state">{t("common.loading")}</p></section>;
   const localizedStatusLabel = useMemo(
     () => ({
       working: tr(t, "conversation.status.working", "Running"),
@@ -547,13 +222,13 @@ function App() {
   const clawKitSelfUpdate = useClawKitSelfUpdate(
     bootstrapStep === "ready" && !clawKitSettingsLoading && clawKitSettings.general.autoCheckUpdates,
   );
-  const [gatewayUpdateRestartSentinel, setGatewayUpdateRestartSentinel] = useState<unknown>(null);
   const [gatewayRuntimeTick, setGatewayRuntimeTick] = useState(0);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [userExpanded, setUserExpanded] = useState(false);
   const [workspaceAnnouncement, setWorkspaceAnnouncement] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null);
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+  const petContextSnapshotRef = useRef("");
   const workspaceAnnouncementTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const announceWorkspace = useCallback((message: string) => {
@@ -687,43 +362,6 @@ function App() {
     }
     writeStorageValue(LAST_CONVERSATION_STORAGE_KEY, activeConversationId);
   }, [activeConversationId, clawKitSettings.general.restoreLastConversation, clawKitSettingsLoading]);
-
-  const loadBootstrapStatus = useCallback(async () => {
-    setBootstrapLoading(true);
-    setBootstrapError(null);
-    try {
-      const debugStep = readBootstrapDebugStep();
-      if (debugStep) {
-        setBootstrapStatus(buildBootstrapDebugStatus(debugStep));
-        setBootstrapStep(debugStep);
-        return;
-      }
-      const status = await invoke<ClawKitBootstrapStatus>("get_clawkit_bootstrap_status");
-      setBootstrapStatus(status);
-      setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
-    } catch (error) {
-      console.error("Failed to load clawkit bootstrap status", error);
-      setBootstrapError(error instanceof Error ? error.message : t("app.readOpenClawStatusFailed"));
-    } finally {
-      setBootstrapLoading(false);
-    }
-  }, []);
-
-  const bindOpenClaw = useCallback(async () => {
-    setBindingInProgress(true);
-    setBootstrapError(null);
-    setBootstrapConnectError(null);
-    try {
-      const status = await invoke<ClawKitBootstrapStatus>("ensure_clawkit_binding");
-      setBootstrapStatus(status);
-      setBootstrapStep(status.bindingConfigured ? "connect_test" : "bind");
-    } catch (error) {
-      console.error("Failed to bind OpenClaw config", error);
-      setBootstrapError(error instanceof Error ? error.message : t("app.writeOpenClawConfigFailed"));
-    } finally {
-      setBindingInProgress(false);
-    }
-  }, []);
 
   const refreshWeixinPluginStatus = useCallback(async () => {
     setWeixinBusy(true);
@@ -1121,11 +759,6 @@ function App() {
     return ms == null ? null : formatApproxDurationMs(ms);
   }, [gatewayRuntimeTick, gatewayUptimeBasisMs, gatewayUptimeRecordedAtMs]);
 
-  const gatewayRestartSentinelLine = useMemo(
-    () => describeUpdateRestartSentinel(gatewayUpdateRestartSentinel),
-    [gatewayUpdateRestartSentinel],
-  );
-
   const refreshGatewayStatus = useCallback(async () => {
     try {
       const status = await invoke<GatewayStatus>("gateway_status");
@@ -1184,66 +817,47 @@ function App() {
     }
   }, []);
 
-  const refreshOpenClawDefaultModel = useCallback(async () => {
-    try {
-      await invoke("gateway_connect");
-      const configResult = await invoke<GatewayConfigGetResult>("gateway_config_get");
-      setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult.config));
-    } catch (error) {
-      console.warn("Failed to load OpenClaw default model", error);
-    } finally {
-      setOpenClawConfigDefaultModelLoaded(true);
-    }
-  }, []);
-
-  const refreshOpenClawStatus = useCallback(async () => {
-    try {
-      await invoke("gateway_connect");
-      const [status, updateStatus, configResult] = await Promise.all([
-        invoke<GatewayOpenClawStatusResult>("gateway_openclaw_status"),
-        invoke<GatewayUpdateStatusResult>("gateway_update_status").catch(() => null),
-        invoke<GatewayConfigGetResult>("gateway_config_get").catch(() => null),
-      ]);
-      setOpenClawStatus(status);
-      setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult?.config));
-      setOpenClawConfigDefaultModelLoaded(true);
-      setGatewayUpdateRestartSentinel(updateStatus?.sentinel ?? null);
-      await refreshGatewayStatus();
-    } catch (error) {
-      console.warn("Failed to load OpenClaw runtime status", error);
-      setGatewayUpdateRestartSentinel(null);
-      await refreshGatewayStatus();
-    }
-  }, [refreshGatewayStatus]);
-
-  const refreshModelsPage = useCallback(async (options?: { refreshAuth?: boolean }) => {
-    setModelsPageLoading(true);
-    try {
-      await invoke("gateway_connect");
-      const [configuredResult, authResult] = await Promise.all([
-        invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } }),
-        invoke<GatewayModelAuthStatusResult>("gateway_models_auth_status", { params: { refresh: Boolean(options?.refreshAuth) } }),
-      ]);
-      startTransition(() => {
-        setConfiguredModels(configuredResult.models ?? []);
-        setModelAuthStatus(authResult);
-        setModelOptions(buildModelOptions(configuredResult, currentDefaultModel));
-      });
-      setModelsPageLoading(false);
-      void (async () => {
-        try {
-          const allResult = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "all" } });
-          startTransition(() => setAllModels(allResult.models ?? []));
-        } catch (error) {
-          console.warn("Failed to refresh full model catalog", error);
-        }
-      })();
-    } catch (error) {
-      console.warn("Failed to refresh models page", error);
-      setModelsActionMessage(error instanceof Error ? error.message : t("app.modelStatusRefreshFailed"));
-      setModelsPageLoading(false);
-    }
-  }, [currentDefaultModel, setModelOptions]);
+  const {
+    openClawStatus,
+    openClawConfigDefaultModel,
+    openClawConfigDefaultModelLoaded,
+    openClawCliStatus,
+    gatewayUpdateRestartSentinel,
+    setOpenClawStatus,
+    setOpenClawConfigDefaultModel,
+    setOpenClawConfigDefaultModelLoaded,
+    setGatewayUpdateRestartSentinel,
+    refreshOpenClawDefaultModel,
+    refreshOpenClawStatus,
+    refreshOpenClawCliStatus,
+  } = useOpenClawRuntime({ refreshGatewayStatus });
+  const gatewayRestartSentinelLine = useMemo(
+    () => describeUpdateRestartSentinel(gatewayUpdateRestartSentinel),
+    [gatewayUpdateRestartSentinel],
+  );
+  const currentDefaultModel = openClawStatus?.sessions?.defaults?.model ?? gatewaySessionsDefaults?.model ?? openClawConfigDefaultModel ?? null;
+  const { modelOptions, modelsLoading, setModelOptions } = useModels({
+    enabled: bootstrapStep === "ready" && openClawConfigDefaultModelLoaded,
+    defaultModel: currentDefaultModel,
+  });
+  const {
+    modelsPageLoading,
+    modelActionBusy,
+    modelsActionMessage,
+    configuredModels,
+    allModels,
+    modelAuthStatus,
+    modelsPageReady,
+    setModelActionBusy,
+    setModelsActionMessage,
+    setModelsPageLoading,
+    setModelsPageReady,
+    refreshModelsPage,
+  } = useModelsPageData({
+    currentDefaultModel,
+    setModelOptions,
+    refreshFailedMessage: t("app.modelStatusRefreshFailed"),
+  });
 
   const patchOpenClawConfig = useCallback(async (patch: unknown) => {
     const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
@@ -1258,6 +872,24 @@ function App() {
       },
     });
   }, []);
+
+  const {
+    handleSetDefaultModel,
+    handleModelAuthProvider,
+    handleSaveProviderConfig,
+    handleSaveModelConfig,
+  } = useModelManagementActions({
+    t,
+    patchOpenClawConfig,
+    refreshModelsPage,
+    refreshOpenClawStatus,
+    setModelActionBusy,
+    setModelsActionMessage,
+    setComposerModel,
+    setOpenClawConfigDefaultModel,
+    setOpenClawConfigDefaultModelLoaded,
+    setOpenClawStatus,
+  });
 
   const loadQqbotEditorForm = useCallback(async (): Promise<QqbotEditorForm> => {
     await invoke("gateway_connect");
@@ -1368,134 +1000,6 @@ function App() {
       setSessionActionError(`${t("app.restoreFastDefaultFailed")}: ${messageText}`);
     }
   }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
-
-  const handleSetDefaultModel = useCallback(async (modelRef: string) => {
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      await patchOpenClawConfig({ agents: { defaults: { model: { primary: modelRef }, models: { [modelRef]: {} } } } });
-      setModelsActionMessage(`${t("app.setDefaultModelSuccess")}: ${modelRef}`);
-      setComposerModel(modelRef);
-      setOpenClawConfigDefaultModel(modelRef);
-      setOpenClawConfigDefaultModelLoaded(true);
-      setOpenClawStatus((current) => current ? {
-        ...current,
-        sessions: {
-          ...current.sessions,
-          defaults: {
-            ...current.sessions?.defaults,
-            model: modelRef,
-          },
-        },
-      } : current);
-      void refreshOpenClawStatus();
-      void refreshModelsPage({ refreshAuth: true });
-    } catch (error) {
-      console.error("Failed to set default model", error);
-      setModelsActionMessage(error instanceof Error ? error.message : t("app.setDefaultModelFailed"));
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [patchOpenClawConfig, refreshModelsPage, refreshOpenClawStatus]);
-
-  const handleModelAuthProvider = useCallback(async (provider: string, setDefault: boolean) => {
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      const message = await invoke<string>("open_model_auth_terminal", { provider, setDefault });
-      setModelsActionMessage(message);
-      window.setTimeout(() => void refreshModelsPage({ refreshAuth: true }), 1500);
-    } catch (error) {
-      console.error("Failed to open model auth terminal", error);
-      setModelsActionMessage(error instanceof Error ? error.message : t("app.openModelAuthFailed"));
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [refreshModelsPage]);
-
-  const handleSaveProviderConfig = useCallback(async (draft: { provider: string; apiKey: string; baseUrl: string }) => {
-    const provider = draft.provider.trim();
-    if (!provider) {
-      setModelsActionMessage(t("app.providerRequired"));
-      return;
-    }
-    const providerConfig: Record<string, unknown> = {};
-    if (draft.apiKey.trim()) providerConfig.apiKey = draft.apiKey.trim();
-    if (draft.baseUrl.trim()) providerConfig.baseUrl = draft.baseUrl.trim();
-    if (Object.keys(providerConfig).length === 0) {
-      setModelsActionMessage(t("app.apiKeyOrBaseUrlRequired"));
-      return;
-    }
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      await patchOpenClawConfig({ models: { providers: { [provider]: providerConfig } } });
-      setModelsActionMessage(`${t("app.providerSaved")}: ${provider}`);
-      void refreshModelsPage({ refreshAuth: true });
-    } catch (error) {
-      console.error("Failed to save provider config", error);
-      setModelsActionMessage(error instanceof Error ? error.message : t("app.saveProviderConfigFailed"));
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [patchOpenClawConfig, refreshModelsPage]);
-
-  const handleSaveModelConfig = useCallback(async (draft: { provider: string; modelId: string; alias: string; setDefault: boolean }) => {
-    const provider = draft.provider.trim();
-    const modelId = draft.modelId.trim();
-    if (!provider || !modelId) {
-      setModelsActionMessage(t("app.providerAndModelRequired"));
-      return;
-    }
-    const modelRef = `${provider}/${modelId}`;
-    const patch: Record<string, unknown> = {
-      models: { providers: { [provider]: { models: [{ id: modelId, ...(draft.alias.trim() ? { name: draft.alias.trim() } : {}) }] } } },
-      agents: {
-        defaults: {
-          models: { [modelRef]: draft.alias.trim() ? { alias: draft.alias.trim() } : {} },
-          ...(draft.setDefault ? { model: { primary: modelRef } } : {}),
-        },
-      },
-    };
-
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      await patchOpenClawConfig(patch);
-      if (draft.setDefault) {
-        setComposerModel(modelRef);
-        setOpenClawConfigDefaultModel(modelRef);
-        setOpenClawConfigDefaultModelLoaded(true);
-        setOpenClawStatus((current) => current ? {
-          ...current,
-          sessions: {
-            ...current.sessions,
-            defaults: {
-              ...current.sessions?.defaults,
-              model: modelRef,
-            },
-          },
-        } : current);
-      }
-      setModelsActionMessage(draft.setDefault ? `${t("app.modelSavedAndDefault")}: ${modelRef}` : `${t("app.modelSaved")}: ${modelRef}`);
-      void refreshOpenClawStatus();
-      void refreshModelsPage({ refreshAuth: true });
-    } catch (error) {
-      console.error("Failed to save provider model config", error);
-      setModelsActionMessage(error instanceof Error ? error.message : t("app.saveModelConfigFailed"));
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [patchOpenClawConfig, refreshModelsPage, refreshOpenClawStatus]);
-
-  const refreshOpenClawCliStatus = useCallback(async () => {
-    try {
-      const status = await invoke<OpenClawCliStatus>("openclaw_cli_status");
-      setOpenClawCliStatus(status);
-    } catch (error) {
-      console.warn("Failed to load OpenClaw CLI version status", error);
-    }
-  }, []);
 
   const runOpenClawUpdate = useCallback(async () => {
     setOpenClawUpdateBusy(true);
@@ -1820,7 +1324,21 @@ function App() {
     onTerminalChatEvent: suppressSessionRefreshAfterTerminalChat,
   });
 
-  const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
+  const {
+    visibleConversations,
+    conversationRuntimeOptions,
+    conversationFiltersActive,
+    filteredVisibleConversations,
+    activeConversation,
+  } = useConversationWorkspaceState({
+    agents,
+    activeConversationId,
+    expandedConversationId,
+    openedConversationIds,
+    conversationSearch,
+    conversationRuntimeFilter,
+    conversationSort,
+  });
 
   useEffect(() => {
     if (
@@ -1839,88 +1357,15 @@ function App() {
     }
   }, [activeConversationId, clawKitSettings.general.restoreLastConversation, visibleConversations]);
 
-  const conversationRuntimeOptions = useMemo(() => {
-    const runtimeById = new Map<string, { value: string; label: string; count: number }>();
-    for (const conversation of visibleConversations) {
-      const runtime = conversation.agentRuntime;
-      if (!runtime?.id) continue;
-      const existing = runtimeById.get(runtime.id);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        runtimeById.set(runtime.id, {
-          value: runtime.id,
-          label: runtime.label ?? runtime.id,
-          count: 1,
-        });
-      }
-    }
-    return [...runtimeById.values()].sort((left, right) => left.label.localeCompare(right.label));
-  }, [visibleConversations]);
-
-  const conversationFiltersActive = Boolean(conversationSearch.trim()) || conversationRuntimeFilter !== "all";
-
-  const filteredVisibleConversations = useMemo(() => {
-    const query = conversationSearch.trim().toLowerCase();
-    const now = Date.now();
-    const selectedConversationIds = new Set([activeConversationId, expandedConversationId].filter(Boolean));
-    const recentConversations = visibleConversations.filter((conversation) => {
-      if (selectedConversationIds.has(conversation.id) || openedConversationIds[conversation.id]) {
-        return true;
-      }
-      if (conversation.isDraft || conversation.status === "working") {
-        return true;
-      }
-      return typeof conversation.updatedAt === "number" && now - conversation.updatedAt <= RECENT_CONVERSATION_WINDOW_MS;
-    });
-    const runtimeFiltered = conversationRuntimeFilter === "all"
-      ? recentConversations
-      : recentConversations.filter((conversation) => conversation.agentRuntime?.id === conversationRuntimeFilter);
-    const filtered = query
-      ? runtimeFiltered.filter((conversation) =>
-          [
-            conversation.title,
-            conversation.id,
-            conversation.agentName,
-            conversation.channel,
-            conversation.lastMessage,
-            conversation.model,
-            conversation.agentRuntime?.id,
-            conversation.agentRuntime?.label,
-            conversation.agentRuntime?.source,
-          ]
-            .filter(Boolean)
-            .some((value) => String(value).toLowerCase().includes(query)),
-        )
-      : runtimeFiltered;
-
-    return [...filtered].sort((left, right) => {
-      if (conversationSort === "tokens") {
-        return (right.totalTokens ?? 0) - (left.totalTokens ?? 0);
-      }
-      if (conversationSort === "status") {
-        const statusRank = { working: 0, failed: 1, stopped: 2, completed: 3, idle: 4 };
-        const byStatus = statusRank[left.status] - statusRank[right.status];
-        if (byStatus !== 0) return byStatus;
-      }
-      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
-    });
-  }, [activeConversationId, conversationRuntimeFilter, conversationSearch, conversationSort, expandedConversationId, openedConversationIds, visibleConversations]);
-
-  // Always get activeConversation from agents to ensure we have the latest data
-  // (including previewMessages updated by gateway_chat_history)
-  const activeConversation = findConversationById(agents, activeConversationId);
-  const [petClock, setPetClock] = useState(() => Date.now());
-  const hasTimedPetReplies = useMemo(
-    () => agents.some((agent) => agent.conversations.some((conversation) => conversation.status === "completed" && typeof normalizePetTimestamp(conversation.runtime?.lastTerminalAt ?? conversation.updatedAt) === "number")),
-    [agents],
-  );
-  useEffect(() => {
-    if (!hasTimedPetReplies) return;
-    const interval = window.setInterval(() => setPetClock(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [hasTimedPetReplies]);
-  const petContext = useMemo(() => buildPetContext(agents, activeConversation, petClock), [activeConversation, agents, petClock]);
+  const { petContext } = usePetContextSync({
+    agents,
+    activeConversation,
+    activeConversationId,
+    activeNav,
+    agentsRef,
+    activeConversationIdRef,
+    petContextSnapshotRef,
+  });
   const composerThinkingOptions = useMemo(
     () => resolveComposerThinkingOptions(activeConversation ?? null, gatewaySessionsDefaults),
     [activeConversation, gatewaySessionsDefaults],
@@ -1930,11 +1375,6 @@ function App() {
   useEffect(() => {
     activeConversationRef.current = activeConversation;
   }, [activeConversation]);
-
-  useEffect(() => {
-    localStorage.setItem("clawkit.petContext", JSON.stringify(petContext));
-    void emit("clawkit://pet-context", petContext);
-  }, [petContext]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
     const lastAssistant = getLastAssistantMessage(conversation?.previewMessages ?? []);
@@ -2017,7 +1457,7 @@ function App() {
     setActiveConversationId(draftId);
   }, [agents, gatewaySessionsDefaults, modelOptions]);
 
-  const toggleConversationVisibility = (agentId: string, conversationId: string, visible: boolean) => {
+  const toggleConversationVisibility = useCallback((agentId: string, conversationId: string, visible: boolean) => {
     const conv = findConversationById(agentsRef.current, conversationId);
     const label = conv?.title ?? conversationId;
     if (visible) {
@@ -2041,23 +1481,17 @@ function App() {
     if (visible) {
       setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
       setExpandedConversationId(conversationId);
-    } else if (expandedConversationId === conversationId) {
-      setOpenedConversationIds((current) => {
-        const next = { ...current };
-        delete next[conversationId];
-        return next;
-      });
-      setExpandedConversationId("");
     } else {
       setOpenedConversationIds((current) => {
         const next = { ...current };
         delete next[conversationId];
         return next;
       });
+      setExpandedConversationId((current) => (current === conversationId ? "" : current));
     }
-  };
+  }, [announceWorkspace, t]);
 
-  const openConversationDetail = async (conversationId: string, preserveStatus = false) => {
+  const openConversationDetail = useCallback(async (conversationId: string, preserveStatus = false) => {
     setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
     setExpandedConversationId(conversationId);
     setActiveConversationId(conversationId);
@@ -2132,7 +1566,7 @@ function App() {
       await refreshGatewayStatus();
       console.error("Failed to load chat history", error);
     }
-  };
+  }, [refreshGatewayStatus]);
 
   const handleOpenCronSessionKey = useCallback(
     (sessionKey: string) => {
@@ -2247,6 +1681,47 @@ function App() {
     activeConversation?.status === "working" ||
     Boolean(activeConversation?.runtime?.activeRunId);
   const activeSendError = activeConversationId ? sendErrorsByConversation[activeConversationId] ?? null : null;
+  const sessionOverrideResetEnabled = useMemo(
+    () => Boolean(activeConversationId && !activeConversationId.startsWith("draft-") && !activeConversation?.isDraft),
+    [activeConversation?.isDraft, activeConversationId],
+  );
+  const handleClearConversationFilters = useCallback(() => {
+    setConversationSearch("");
+    setConversationRuntimeFilter("all");
+  }, []);
+  const handleBackToConversationList = useCallback(() => {
+    setActiveConversationId(null);
+  }, []);
+  const handleHideConversation = useCallback((agentId: string, conversationId: string) => {
+    toggleConversationVisibility(agentId, conversationId, false);
+  }, [toggleConversationVisibility]);
+  const handleUpdateConversationTitle = useCallback(async (conversationId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const target = findConversationById(agentsRef.current, conversationId);
+    const isDraftConversation = target?.isDraft ?? false;
+    if (isDraftConversation) {
+      setAgents((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) =>
+          conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
+        ),
+      })));
+      return;
+    }
+    await invoke("gateway_sessions_patch", {
+      params: {
+        sessionKey: conversationId,
+        label: trimmed,
+      },
+    });
+    setAgents((current) => current.map((agent) => ({
+      ...agent,
+      conversations: agent.conversations.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
+      ),
+    })));
+  }, []);
 
   const enqueueComposerMessage = useCallback((conversationId: string, text: string, attachments: ComposerAttachment[]) => {
     const item: QueuedComposerMessage = {
@@ -2601,10 +2076,7 @@ function App() {
               sendShortcut={clawKitSettings.general.sendShortcut}
               visibleConversationCount={visibleConversations.length}
               conversationFiltersActive={conversationFiltersActive}
-              onClearConversationFilters={() => {
-                setConversationSearch("");
-                setConversationRuntimeFilter("all");
-              }}
+              onClearConversationFilters={handleClearConversationFilters}
               workspaceAnnouncement={workspaceAnnouncement}
               activeConversation={activeConversation}
               visibleConversations={visibleConversations}
@@ -2629,40 +2101,15 @@ function App() {
               modelOptions={modelOptions}
               modelsLoading={modelsLoading}
               composerThinkingOptions={composerThinkingOptions}
-              onBack={() => setActiveConversationId(null)}
+              onBack={handleBackToConversationList}
               onUserExpandedChange={setUserExpanded}
               onJumpToBottomHidden={() => setShowJumpToBottom(false)}
-              onUpdateTitle={async (conversationId, newTitle) => {
-                const trimmed = newTitle.trim();
-                const target = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
-                const isDraftConversation = target?.isDraft ?? false;
-                if (isDraftConversation) {
-                  setAgents((current) => current.map((agent) => ({
-                    ...agent,
-                    conversations: agent.conversations.map((conversation) =>
-                      conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
-                    ),
-                  })));
-                  return;
-                }
-                await invoke("gateway_sessions_patch", {
-                  params: {
-                    sessionKey: conversationId,
-                    label: trimmed,
-                  },
-                });
-                setAgents((current) => current.map((agent) => ({
-                  ...agent,
-                  conversations: agent.conversations.map((conversation) =>
-                    conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
-                  ),
-                })));
-              }}
+              onUpdateTitle={handleUpdateConversationTitle}
               parseSenderMeta={parseSenderMeta}
               onOpenImage={setPreviewImageSrc}
               formatTokenCount={formatTokenCount}
               onOpenConversation={openConversationDetail}
-              onHideConversation={(agentId, conversationId) => toggleConversationVisibility(agentId, conversationId, false)}
+              onHideConversation={handleHideConversation}
               onConversationSearchChange={setConversationSearch}
               onConversationRuntimeFilterChange={setConversationRuntimeFilter}
               onConversationSortChange={setConversationSort}
@@ -2675,7 +2122,7 @@ function App() {
               onRemoveQueuedMessage={removeQueuedMessage}
               onSend={handleSend}
               onAbort={handleAbort}
-              sessionOverrideResetEnabled={Boolean(activeConversationId && !activeConversationId.startsWith("draft-") && !activeConversation?.isDraft)}
+              sessionOverrideResetEnabled={sessionOverrideResetEnabled}
               onResetThinkingDefault={handleResetComposerThinkingDefault}
               onResetFastDefault={handleResetComposerFastDefault}
               sessionActionBusy={sessionActionBusy}
@@ -2689,184 +2136,137 @@ function App() {
         ) : null}
 
         {activeNav === "models" ? (
-          <ModelsPage
-            t={t}
-            configuredModels={modelsPageReady ? configuredModels : []}
-            allModels={modelsPageReady ? allModels : []}
-            authStatus={modelsPageReady ? modelAuthStatus : null}
-            loading={modelsPageLoading || !modelsPageReady}
-            currentDefaultModel={currentDefaultModel}
-            actionBusy={modelActionBusy}
-            message={modelsActionMessage}
-            onRefresh={() => void refreshModelsPage({ refreshAuth: true })}
-            onSetDefault={(modelRef) => void handleSetDefaultModel(modelRef)}
-            onAuthProvider={(provider, setDefault) => void handleModelAuthProvider(provider, setDefault)}
-            onSaveProviderConfig={(draft) => void handleSaveProviderConfig(draft)}
-            onSaveModelConfig={(draft) => void handleSaveModelConfig(draft)}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <ModelsPage
+              t={t}
+              configuredModels={modelsPageReady ? configuredModels : []}
+              allModels={modelsPageReady ? allModels : []}
+              authStatus={modelsPageReady ? modelAuthStatus : null}
+              loading={modelsPageLoading || !modelsPageReady}
+              currentDefaultModel={currentDefaultModel}
+              actionBusy={modelActionBusy}
+              message={modelsActionMessage}
+              onRefresh={() => void refreshModelsPage({ refreshAuth: true })}
+              onSetDefault={(modelRef) => void handleSetDefaultModel(modelRef)}
+              onAuthProvider={(provider, setDefault) => void handleModelAuthProvider(provider, setDefault)}
+              onSaveProviderConfig={(draft) => void handleSaveProviderConfig(draft)}
+              onSaveModelConfig={(draft) => void handleSaveModelConfig(draft)}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "skills" ? (
-          <SkillsPage
-            skills={metadataPageReady ? skills : []}
-            pluginLoadRepairs={metadataPageReady ? pluginLoadRepairs : []}
-            loading={metadataLoading || !metadataPageReady}
-            t={t}
-            onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <SkillsPage
+              skills={metadataPageReady ? skills : []}
+              pluginLoadRepairs={metadataPageReady ? pluginLoadRepairs : []}
+              loading={metadataLoading || !metadataPageReady}
+              t={t}
+              onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "connections" ? (
-          <ConnectionsPage
-            connections={metadataPageReady ? connections : []}
-            connectionLabel={connectionLabel}
-            eventLoopHealth={metadataPageReady ? channelEventLoopHealth : null}
-            unmatchedPluginRepairs={metadataPageReady ? unmatchedPluginRepairs : []}
-            loading={metadataLoading || !metadataPageReady}
-            gatewayConnected={gatewayConnected}
-            weixinStatus={weixinStatus}
-            weixinBusy={weixinBusy}
-            weixinMessage={weixinMessage}
-            qqbotBusy={qqbotBusy}
-            qqbotStatusBusy={qqbotStatusBusy}
-            qqbotNotice={qqbotNotice}
-            qqbotPluginRegistered={Boolean(qqbotStatus?.installed)}
-            qqbotStatus={qqbotStatus}
-            t={t}
-            onRefreshWeixinStatus={() => void refreshWeixinPluginStatus()}
-            onEnableWeixin={() => void ensureWeixinPluginEnabled()}
-            onInstallWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_install_terminal")}
-            onUpdateWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_update_terminal")}
-            onLoginWeixin={() => void runWeixinTerminalAction("open_weixin_login_terminal")}
-            onInstallQqbotPlugin={() => void runQqbotPluginInstall()}
-            onRefreshQqbotStatus={() => void refreshQqbotPluginStatus()}
-            onLoadQqbotEditorForm={loadQqbotEditorForm}
-            onSaveQqbotSettings={(form) => void saveQqbotSettings(form)}
-            onDismissQqbotNotice={() => setQqbotNotice(null)}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <ConnectionsPage
+              connections={metadataPageReady ? connections : []}
+              connectionLabel={connectionLabel}
+              eventLoopHealth={metadataPageReady ? channelEventLoopHealth : null}
+              unmatchedPluginRepairs={metadataPageReady ? unmatchedPluginRepairs : []}
+              loading={metadataLoading || !metadataPageReady}
+              gatewayConnected={gatewayConnected}
+              weixinStatus={weixinStatus}
+              weixinBusy={weixinBusy}
+              weixinMessage={weixinMessage}
+              qqbotBusy={qqbotBusy}
+              qqbotStatusBusy={qqbotStatusBusy}
+              qqbotNotice={qqbotNotice}
+              qqbotPluginRegistered={Boolean(qqbotStatus?.installed)}
+              qqbotStatus={qqbotStatus}
+              t={t}
+              onRefreshWeixinStatus={() => void refreshWeixinPluginStatus()}
+              onEnableWeixin={() => void ensureWeixinPluginEnabled()}
+              onInstallWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_install_terminal")}
+              onUpdateWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_update_terminal")}
+              onLoginWeixin={() => void runWeixinTerminalAction("open_weixin_login_terminal")}
+              onInstallQqbotPlugin={() => void runQqbotPluginInstall()}
+              onRefreshQqbotStatus={() => void refreshQqbotPluginStatus()}
+              onLoadQqbotEditorForm={loadQqbotEditorForm}
+              onSaveQqbotSettings={(form) => void saveQqbotSettings(form)}
+              onDismissQqbotNotice={() => setQqbotNotice(null)}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "cron" ? (
-          <CronPage
-            gatewayConnected={gatewayConnected}
-            onOpenSessionKey={handleOpenCronSessionKey}
-            t={t}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <CronPage
+              gatewayConnected={gatewayConnected}
+              onOpenSessionKey={handleOpenCronSessionKey}
+              t={t}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "usage" ? (
-          <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} t={t} />
+          <Suspense fallback={lazyPageFallback}>
+            <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} t={t} />
+          </Suspense>
         ) : null}
 
         {activeNav === "pets" ? (
-          <PetsPage context={petContext} t={t} />
+          <Suspense fallback={lazyPageFallback}>
+            <PetsPage context={petContext} t={t} />
+          </Suspense>
         ) : null}
 
         {activeNav === "settings" ? (
-          <SettingsPage
-            settings={clawKitSettings}
-            loading={clawKitSettingsLoading}
-            error={clawKitSettingsError}
-            t={t}
-            patchSettings={patchSettings}
-            gatewayConnected={gatewayConnected}
-            gatewayStatusText={gatewayStatusText}
-            bootstrapStatus={bootstrapStatus}
-            openClawCliStatus={openClawCliStatus}
-            actionBusy={settingsOpenClawActionBusy || openClawGatewayBusy || openClawUpdateBusy || bindingInProgress}
-            actionMessage={settingsOpenClawActionMessage ?? openClawGatewayMessage ?? openClawUpdateMessage}
-            onRefreshOpenClaw={refreshSettingsOpenClawStatus}
-            onReconnectGateway={reconnectSettingsGateway}
-            onToggleGateway={() => void toggleOpenClawGateway()}
-            onRepairBinding={repairSettingsBinding}
-            onInstallOpenClaw={installOpenClawFromSettings}
-            onUpdateOpenClaw={() => void runOpenClawUpdate()}
-            onNavigate={handleNavChange}
-            patchOpenClawConfig={patchOpenClawConfig}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <SettingsPage
+              settings={clawKitSettings}
+              loading={clawKitSettingsLoading}
+              error={clawKitSettingsError}
+              t={t}
+              patchSettings={patchSettings}
+              gatewayConnected={gatewayConnected}
+              gatewayStatusText={gatewayStatusText}
+              bootstrapStatus={bootstrapStatus}
+              openClawCliStatus={openClawCliStatus}
+              actionBusy={settingsOpenClawActionBusy || openClawGatewayBusy || openClawUpdateBusy || bindingInProgress}
+              actionMessage={settingsOpenClawActionMessage ?? openClawGatewayMessage ?? openClawUpdateMessage}
+              onRefreshOpenClaw={refreshSettingsOpenClawStatus}
+              onReconnectGateway={reconnectSettingsGateway}
+              onToggleGateway={() => void toggleOpenClawGateway()}
+              onRepairBinding={repairSettingsBinding}
+              onInstallOpenClaw={installOpenClawFromSettings}
+              onUpdateOpenClaw={() => void runOpenClawUpdate()}
+              onNavigate={handleNavChange}
+              patchOpenClawConfig={patchOpenClawConfig}
+            />
+          </Suspense>
         ) : null}
       </div>
 
-      {openClawInfoOpen ? (
-        <div className="openclaw-info-backdrop" onMouseDown={() => setOpenClawInfoOpen(false)}>
-        <aside
-          className="openclaw-info-drawer"
-          role="dialog"
-          aria-modal="true"
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <div className="openclaw-info-head">
-            <div className="openclaw-info-status">
-              <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
-              <div>
-                <strong>{gatewayConnected ? t("app.openclawConnected") : t("app.openclawDisconnected")}</strong>
-                <span>{gatewayStatusText}</span>
-              </div>
-            </div>
-            <button
-              className={`openclaw-connect-switch ${openClawGatewayBusy ? "busy" : ""}`}
-              type="button"
-              title={gatewayConnected ? t("openclaw.stopGateway") : t("openclaw.startGateway")}
-              aria-label={gatewayConnected ? t("openclaw.stopGateway") : t("openclaw.startGateway")}
-              aria-pressed={gatewayConnected}
-              disabled={openClawGatewayBusy}
-              onClick={() => void toggleOpenClawGateway()}
-            >
-              <input
-                type="checkbox"
-                checked={gatewayConnected}
-                readOnly
-                tabIndex={-1}
-              />
-              <span />
-            </button>
-          </div>
-          <div className="openclaw-info-metrics">
-            <div><span>{t("openclaw.sessions")}</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
-            <div><span>{t("openclaw.defaultModel")}</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong></div>
-            <div><span>{t("openclaw.defaultAgent")}</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong></div>
-            {gatewayConnected && gatewayProcessUptimeLabel ? (
-              <div><span>{t("openclaw.gatewayUptime")}</span><strong title={t("openclaw.gatewayUptimeHint")}>{t("openclaw.approx")} {gatewayProcessUptimeLabel}</strong></div>
-            ) : null}
-          </div>
-          {gatewayConnected && gatewayRestartSentinelLine ? (
-            <p className="openclaw-restart-sentinel-hint">{gatewayRestartSentinelLine}</p>
-          ) : null}
-          <OpenClawUiDiagnostics
-            t={t}
-            entries={uiFrameDiagnostics.entries}
-            capabilities={uiFrameDiagnostics.capabilities}
-            onClear={uiFrameDiagnostics.clear}
-          />
-          <div className={`openclaw-update-panel ${openClawCliStatus?.updateAvailable ? "available" : ""}`}>
-            <div className="openclaw-update-row">
-              <span>{t("openclaw.currentVersion")}</span>
-              <strong>{openClawCliStatus?.installedVersion || openClawStatus?.runtimeVersion || "-"}</strong>
-            </div>
-            <div className="openclaw-update-row">
-              <span>{t("openclaw.latestVersion")}</span>
-              <strong>{openClawCliStatus?.latestVersion || (openClawCliStatus?.latestCheckError ? t("openclaw.checkFailed") : "-")}</strong>
-            </div>
-            {openClawCliStatus?.latestCheckError ? (
-              <p className="openclaw-update-note">{openClawCliStatus.latestCheckError}</p>
-            ) : null}
-            {openClawUpdateMessage ? <p className="openclaw-update-note">{openClawUpdateMessage}</p> : null}
-            {openClawGatewayMessage ? <p className="openclaw-update-note">{openClawGatewayMessage}</p> : null}
-            {openClawCliStatus?.updateAvailable ? (
-              <button className="openclaw-update-button" type="button" onClick={() => void runOpenClawUpdate()} disabled={openClawUpdateBusy}>
-                {openClawUpdateBusy ? t("openclaw.openingTerminal") : t("openclaw.update")}
-              </button>
-            ) : null}
-          </div>
-          <div className="openclaw-info-actions">
-            <button className="openclaw-home-button" type="button" onClick={() => void openLocalOpenClaw()} title={t("openclaw.openLocal")}>
-              <span>⌂</span>
-              {t("openclaw.openLocal")}
-            </button>
-          </div>
-        </aside>
-        </div>
-      ) : null}
+      <OpenClawInfoDrawer
+        open={openClawInfoOpen}
+        t={t}
+        gatewayConnected={gatewayConnected}
+        gatewayStatusText={gatewayStatusText}
+        openClawGatewayBusy={openClawGatewayBusy}
+        onClose={() => setOpenClawInfoOpen(false)}
+        onToggleGateway={() => void toggleOpenClawGateway()}
+        openClawStatus={openClawStatus}
+        gatewayProcessUptimeLabel={gatewayProcessUptimeLabel}
+        gatewayRestartSentinelLine={gatewayRestartSentinelLine}
+        uiFrameDiagnostics={uiFrameDiagnostics}
+        openClawCliStatus={openClawCliStatus}
+        openClawUpdateMessage={openClawUpdateMessage}
+        openClawGatewayMessage={openClawGatewayMessage}
+        openClawUpdateBusy={openClawUpdateBusy}
+        onRunOpenClawUpdate={() => void runOpenClawUpdate()}
+        onOpenLocalOpenClaw={() => void openLocalOpenClaw()}
+      />
     </main>
   );
 }
