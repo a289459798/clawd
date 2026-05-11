@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import type { ChannelConnection, PluginRepairCard, QqbotPluginStatus, Skill, SkillPolicyHint, WeixinPluginStatus } from "../types/app";
+import type { FeishuEditorForm } from "../lib/feishuChannelPatch";
 import type { QqbotEditorForm } from "../lib/qqbotChannelPatch";
+import { FeishuConfigDialog } from "./FeishuConfigDialog";
 import { QqbotConfigDialog } from "./QqbotConfigDialog";
 import type { GatewayChannelsEventLoopHealth, GatewaySessionsUsageResult, GatewayUsageTotals } from "../types/gateway";
 import {
@@ -265,6 +267,12 @@ export function ConnectionsPage({
   onLoadQqbotEditorForm,
   onSaveQqbotSettings,
   onDismissQqbotNotice,
+  feishuBusy,
+  feishuNotice,
+  onLoadFeishuEditorForm,
+  onSaveFeishuSettings,
+  onDismissFeishuNotice,
+  onRefreshFeishuStatus,
 }: {
   connections: ChannelConnection[];
   connectionLabel: Record<ChannelConnection["status"], string>;
@@ -291,8 +299,15 @@ export function ConnectionsPage({
   onLoadQqbotEditorForm: () => Promise<QqbotEditorForm>;
   onSaveQqbotSettings: (form: QqbotEditorForm) => void | Promise<void>;
   onDismissQqbotNotice?: () => void;
+  feishuBusy: boolean;
+  feishuNotice: { text: string; tone: "success" | "error" } | null;
+  onLoadFeishuEditorForm: () => Promise<FeishuEditorForm>;
+  onSaveFeishuSettings: (form: FeishuEditorForm) => void | Promise<void>;
+  onDismissFeishuNotice?: () => void;
+  onRefreshFeishuStatus: () => void | Promise<void>;
 }) {
   const [qqbotDialogOpen, setQqbotDialogOpen] = useState(false);
+  const [feishuDialogOpen, setFeishuDialogOpen] = useState(false);
   const eventLoopBanner =
     eventLoopHealth?.degraded === true ? formatGatewayEventLoopSummary(eventLoopHealth) : null;
   const connectionMap = new Map(connections.map((connection) => [connection.id, connection]));
@@ -328,6 +343,7 @@ export function ConnectionsPage({
       <div className="connection-list-panel">
         {rows.map((connection) => {
           const isWeixin = connection.id === "openclaw-weixin";
+          const isFeishu = connection.id === "feishu";
           const isQqbot = connection.id === "qqbot";
           const qqbotBadgeLabel =
             isQqbot && qqbotPluginRegistered && connection.status === "disabled"
@@ -376,6 +392,12 @@ export function ConnectionsPage({
                           qqbotStatus?.installedVersion ? `v${qqbotStatus.installedVersion}` : null,
                           qqbotStatus?.latestVersion ? `${tt(t, "common.latest", "Latest")} v${qqbotStatus.latestVersion}` : null,
                         ].filter(Boolean).join(" · ") || connection.activity || tt(t, "connections.qqbot.registeredHint", "Plugin is registered. Use Configure to manage credentials and group policy.")}
+                </p>
+              ) : isFeishu ? (
+                <p className="connection-qqbot-summary">
+                  {!gatewayConnected
+                    ? tt(t, "connections.feishu.gatewayDisconnected", "Gateway is disconnected. Cannot load or save settings right now.")
+                    : tt(t, "connections.feishu.cardHint", "Use Configure to manage app credentials, DM policy, and group policy.")}
                 </p>
               ) : (
                 <p>{connection.detail}</p>
@@ -448,6 +470,41 @@ export function ConnectionsPage({
                         busy={qqbotBusy}
                         notice={qqbotNotice}
                         onInstallPlugin={onInstallQqbotPlugin}
+                      />
+                    </>
+                  ) : null}
+                  {isFeishu ? (
+                    <>
+                      <button
+                        className="ghost-link-button"
+                        type="button"
+                        onClick={() => void onRefreshFeishuStatus()}
+                        disabled={loading}
+                      >
+                        {loading ? tt(t, "common.checking", "Checking") : tt(t, "common.refresh", "Refresh")}
+                      </button>
+                      <button
+                        className="ghost-link-button primary-action"
+                        type="button"
+                        onClick={() => {
+                          onDismissFeishuNotice?.();
+                          setFeishuDialogOpen(true);
+                        }}
+                      >
+                        {tt(t, "common.configure", "Configure")}
+                      </button>
+                      <FeishuConfigDialog
+                        t={t}
+                        open={feishuDialogOpen}
+                        onClose={() => {
+                          setFeishuDialogOpen(false);
+                          onDismissFeishuNotice?.();
+                        }}
+                        gatewayConnected={gatewayConnected}
+                        loadForm={onLoadFeishuEditorForm}
+                        onSave={onSaveFeishuSettings}
+                        busy={feishuBusy}
+                        notice={feishuNotice}
                       />
                     </>
                   ) : null}

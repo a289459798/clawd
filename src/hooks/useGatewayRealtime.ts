@@ -48,7 +48,7 @@ export function useGatewayRealtime({
           snapshot.skills.map((skill) => ({
             id: skill.id,
             name: skill.name,
-            summary: "来自本地 OpenClaw skill 目录。",
+            summary: "Loaded from local OpenClaw skill directory.",
             enabled: true,
           })),
         );
@@ -58,9 +58,9 @@ export function useGatewayRealtime({
             id: connection.id,
             name: connection.name,
             status: connection.enabled ? "connected" : "disabled",
-            detail: connection.enabled ? "已从本地 OpenClaw 配置读取" : "当前未启用",
+            detail: connection.enabled ? "Loaded from local OpenClaw config" : "Currently disabled",
             config: `channels.${connection.id}`,
-            activity: connection.enabled ? "配置已启用" : "配置关闭",
+            activity: connection.enabled ? "Configuration enabled" : "Configuration disabled",
           })),
         );
       } catch (error) {

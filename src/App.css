@@ -6011,6 +6011,8 @@ svg.nav-iconfont {
   max-height: min(90vh, 760px);
   display: flex;
   flex-direction: column;
+  border-color: color-mix(in srgb, var(--border) 78%, rgba(122, 162, 255, 0.2));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, #1e2331 4%), var(--panel));
 }
 
 .qqbot-config-header {
@@ -6019,8 +6021,9 @@ svg.nav-iconfont {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 84%, rgba(122, 162, 255, 0.22));
   flex-shrink: 0;
+  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
 }
 
 .qqbot-config-header h2 {
@@ -6043,17 +6046,22 @@ svg.nav-iconfont {
   margin: 0;
   font-size: 0.78rem;
   line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
 }
 
 .qqbot-config-banner.warn {
   color: rgba(243, 191, 99, 0.95);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+  border-color: color-mix(in srgb, var(--yellow) 30%, transparent);
 }
 
 .qqbot-config-guide {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px;
-  background: var(--panel-strong);
+  background: color-mix(in srgb, var(--panel-strong) 90%, #20263a 10%);
 }
 
 .qqbot-config-guide summary {
@@ -6069,6 +6077,22 @@ svg.nav-iconfont {
   font-size: 0.76rem;
   line-height: 1.5;
   color: rgba(230, 224, 210, 0.82);
+}
+
+.qqbot-config-guide a {
+  color: color-mix(in srgb, var(--text) 82%, #55d6c2 18%);
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 2px;
+}
+
+.qqbot-config-guide a:hover {
+  color: color-mix(in srgb, var(--text) 72%, #55d6c2 28%);
+}
+
+.qqbot-config-guide a:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #55d6c2 36%, transparent);
 }
 
 .qqbot-config-guide code {
@@ -6116,6 +6140,7 @@ svg.nav-iconfont {
 
 .qqbot-config-grid input,
 .qqbot-config-grid select,
+.qqbot-config-grid textarea,
 .qqbot-config-grid-wide input,
 .qqbot-config-grid-wide select,
 .qqbot-config-grid-wide textarea {
@@ -6126,6 +6151,21 @@ svg.nav-iconfont {
   background: var(--panel-strong);
   color: var(--text);
   font-size: 0.8rem;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.qqbot-config-grid :is(input, select, textarea):focus-visible,
+.qqbot-extra-row input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--blue) 65%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 24%, transparent);
+}
+
+.qqbot-config-grid :is(input, select, textarea):disabled,
+.qqbot-extra-row input:disabled {
+  opacity: 0.66;
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--panel-strong) 86%, transparent);
 }
 
 .qqbot-config-grid-wide textarea {
@@ -6174,6 +6214,10 @@ svg.nav-iconfont {
   font-size: 0.78rem;
 }
 
+.qqbot-extra-row button {
+  white-space: nowrap;
+}
+
 .qqbot-config-repairs {
   font-size: 0.74rem;
   border: 1px solid rgba(243, 191, 99, 0.2);
@@ -6192,11 +6236,26 @@ svg.nav-iconfont {
   justify-content: flex-end;
   gap: 10px;
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid color-mix(in srgb, var(--border) 84%, rgba(122, 162, 255, 0.2));
   flex-shrink: 0;
+  background: color-mix(in srgb, var(--panel-soft) 74%, transparent);
 }
 
 @media (max-width: 560px) {
+  .qqbot-config-dialog {
+    width: min(100vw, 100%);
+    max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .modal-backdrop {
+    padding: 0;
+  }
+
+  .qqbot-config-grid {
+    grid-template-columns: 1fr;
+  }
+
   .qqbot-extra-row {
     grid-template-columns: 1fr;
   }
@@ -8606,6 +8665,55 @@ select:not([multiple]) option,
 .app-shell[data-theme="light"] .qqbot-config-repairs {
   background: var(--panel-soft);
   border-color: var(--border);
+}
+
+.app-shell[data-theme="light"] .qqbot-config-dialog {
+  border-color: color-mix(in srgb, var(--border) 82%, rgba(63, 125, 255, 0.24));
+  background: linear-gradient(180deg, #ffffff, var(--panel));
+}
+
+.app-shell[data-theme="light"] .qqbot-config-header,
+.app-shell[data-theme="light"] .qqbot-config-footer {
+  background: color-mix(in srgb, #eef4ff 46%, var(--panel));
+  border-color: color-mix(in srgb, var(--border) 85%, rgba(63, 125, 255, 0.18));
+}
+
+.app-shell[data-theme="light"] .qqbot-config-grid label,
+.app-shell[data-theme="light"] .qqbot-config-grid-wide label,
+.app-shell[data-theme="light"] .qqbot-config-checkbox {
+  color: #4a5563;
+}
+
+.app-shell[data-theme="light"] .qqbot-config-guide summary,
+.app-shell[data-theme="light"] .qqbot-config-section-title {
+  color: #23364d;
+}
+
+.app-shell[data-theme="light"] .qqbot-config-guide ol,
+.app-shell[data-theme="light"] .qqbot-config-hint {
+  color: #5d6a78;
+}
+
+.app-shell[data-theme="light"] .qqbot-config-grid :is(input, select, textarea),
+.app-shell[data-theme="light"] .qqbot-extra-row input {
+  background: #ffffff;
+  border-color: color-mix(in srgb, var(--border) 84%, rgba(76, 128, 204, 0.18));
+}
+
+.app-shell[data-theme="light"] .qqbot-config-grid :is(input, select, textarea):focus-visible,
+.app-shell[data-theme="light"] .qqbot-extra-row input:focus-visible {
+  border-color: rgba(54, 118, 225, 0.65);
+  box-shadow: 0 0 0 2px rgba(90, 149, 247, 0.22);
+}
+
+.app-shell[data-theme="light"] .qqbot-config-banner.warn {
+  background: #fff6e5;
+  border-color: rgba(199, 142, 37, 0.28);
+  color: #7a5410;
+}
+
+.app-shell[data-theme="light"] .qqbot-channel-success {
+  color: #0f7a56;
 }
 
 .app-shell[data-theme="light"] .eyebrow,

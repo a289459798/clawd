@@ -67,7 +67,7 @@ export function QqbotConfigDialog({
         if (!cancelled) setForm(next);
       } catch (error) {
         if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : tt(t, "qqbot.loadError", "Failed to load QQ Bot config"));
+          setLoadError(error instanceof Error ? error.message : tt(t, "channelConfig.loadError", "Failed to load channel config"));
         }
       }
     })();
@@ -120,7 +120,7 @@ export function QqbotConfigDialog({
 
         <div className="qqbot-config-scroll">
           {!gatewayConnected ? (
-            <p className="qqbot-config-banner warn">{tt(t, "qqbot.gatewayRequired", "Connect Gateway before loading or saving settings.")}</p>
+            <p className="qqbot-config-banner warn">{tt(t, "channelConfig.gatewayRequired", "Connect Gateway before loading or saving settings.")}</p>
           ) : null}
           {!pluginInstalled ? (
             <p className="qqbot-config-banner warn">
@@ -130,7 +130,7 @@ export function QqbotConfigDialog({
           {loadError ? <p className="qqbot-config-banner warn">{loadError}</p> : null}
 
           <details className="qqbot-config-guide">
-            <summary>{tt(t, "qqbot.guide", "Guide")}</summary>
+            <summary>{tt(t, "common.guide", "Guide")}</summary>
             <ol>
               <li>
                 {tt(t, "qqbot.guide.step1Prefix", "In")}{" "}
@@ -138,6 +138,10 @@ export function QqbotConfigDialog({
                   {tt(t, "qqbot.qqOpenPlatform", "QQ Open Platform")}
                 </a>{" "}
                 {tt(t, "qqbot.guide.step1", "create a bot and save its AppID and App Secret before leaving the page.")}
+                {" "}
+                <a href="https://q.qq.com/" target="_blank" rel="noreferrer">
+                  {tt(t, "qqbot.guide.appidLink", "打开机器人后台")}
+                </a>
               </li>
               <li>
                 {tt(t, "qqbot.guide.step2Prefix", "Install plugin:")} <code>openclaw plugins install @openclaw/qqbot</code>, {tt(t, "qqbot.guide.step2", "then restart Gateway.")}
@@ -204,13 +208,13 @@ export function QqbotConfigDialog({
                 <input
                   value={row.accountId}
                   onChange={(e) => updateExtra(index, { accountId: e.target.value })}
-                  placeholder={tt(t, "qqbot.placeholder.accountId", "Account ID")}
+                  placeholder={tt(t, "channelConfig.accountId", "Account ID")}
                   disabled={disabled}
                 />
                 <input
                   value={row.appId}
                   onChange={(e) => updateExtra(index, { appId: e.target.value })}
-                  placeholder="AppID"
+                  placeholder={tt(t, "channelConfig.appId", "App ID")}
                   disabled={disabled}
                 />
                 <input
@@ -340,7 +344,7 @@ export function QqbotConfigDialog({
               void onSave(form);
             }}
           >
-            {busy ? tt(t, "common.saving", "Saving...") : tt(t, "qqbot.saveToOpenClaw", "Save to OpenClaw")}
+            {busy ? tt(t, "common.saving", "Saving...") : tt(t, "common.save", "Save")}
           </button>
         </div>
       </section>

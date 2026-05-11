@@ -29,7 +29,7 @@ import { useOpenClawRuntime } from "./hooks/useOpenClawRuntime";
 import { useModelsPageData } from "./hooks/useModelsPageData";
 import { useModelManagementActions } from "./hooks/useModelManagementActions";
 import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
-import { connectionLabel, formatTokenCount } from "./lib/appFormatters";
+import { formatTokenCount } from "./lib/appFormatters";
 import { parseSenderMeta } from "./lib/messageMeta";
 import { canonicalizeModelRef } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
@@ -38,6 +38,12 @@ import {
   applyPluginHealthToChannels,
   mapGatewaySkills,
 } from "./lib/appDerivedData";
+import {
+  buildFeishuSettingsPatch,
+  readFeishuEditorFormFromConfig,
+  validateFeishuEditorForm,
+  type FeishuEditorForm,
+} from "./lib/feishuChannelPatch";
 import {
   buildQqbotSettingsPatch,
   readQqbotEditorFormFromConfig,
@@ -146,6 +152,8 @@ function App() {
   const [qqbotStatusBusy, setQqbotStatusBusy] = useState(false);
   const [qqbotBusy, setQqbotBusy] = useState(false);
   const [qqbotNotice, setQqbotNotice] = useState<{ text: string; tone: "success" | "error" } | null>(null);
+  const [feishuBusy, setFeishuBusy] = useState(false);
+  const [feishuNotice, setFeishuNotice] = useState<{ text: string; tone: "success" | "error" } | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [usagePageReady, setUsagePageReady] = useState(true);
@@ -216,6 +224,15 @@ function App() {
       failed: tr(t, "conversation.status.failed", "Failed"),
       stopped: tr(t, "conversation.status.stopped", "Stopped"),
       idle: tr(t, "conversation.status.idle", "Idle"),
+    }),
+    [t],
+  );
+  const localizedConnectionLabel = useMemo(
+    () => ({
+      connected: tr(t, "common.connected", "Connected"),
+      degraded: tr(t, "connections.degraded", "Running (degraded)"),
+      warning: tr(t, "connections.warning", "Needs attention"),
+      disabled: tr(t, "connections.notEnabled", "Not enabled"),
     }),
     [t],
   );
@@ -942,6 +959,41 @@ function App() {
       setQqbotStatusBusy(false);
     }
   }, [refreshGatewayConnections, refreshQqbotPluginStatus]);
+
+  const loadFeishuEditorForm = useCallback(async (): Promise<FeishuEditorForm> => {
+    await invoke("gateway_connect");
+    const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
+    return readFeishuEditorFormFromConfig(current.config);
+  }, []);
+
+  const saveFeishuSettings = useCallback(
+    async (form: FeishuEditorForm) => {
+      const validationMessage = validateFeishuEditorForm(form);
+      if (validationMessage) {
+        setFeishuNotice({ text: validationMessage, tone: "error" });
+        return;
+      }
+      setFeishuBusy(true);
+      setFeishuNotice(null);
+      try {
+        await invoke("gateway_connect");
+        await patchOpenClawConfig(buildFeishuSettingsPatch(form));
+        setFeishuNotice({
+          text: "已写入 Feishu 配置。请重启 Gateway 使配置生效。",
+          tone: "success",
+        });
+        void refreshGatewayConnections();
+      } catch (error) {
+        setFeishuNotice({
+          text: error instanceof Error ? error.message : "保存 Feishu 配置失败",
+          tone: "error",
+        });
+      } finally {
+        setFeishuBusy(false);
+      }
+    },
+    [patchOpenClawConfig, refreshGatewayConnections],
+  );
 
   const mergeSessionsListFromGateway = useCallback(async () => {
     await invoke("gateway_connect");
@@ -2171,7 +2223,7 @@ function App() {
           <Suspense fallback={lazyPageFallback}>
             <ConnectionsPage
               connections={metadataPageReady ? connections : []}
-              connectionLabel={connectionLabel}
+              connectionLabel={localizedConnectionLabel}
               eventLoopHealth={metadataPageReady ? channelEventLoopHealth : null}
               unmatchedPluginRepairs={metadataPageReady ? unmatchedPluginRepairs : []}
               loading={metadataLoading || !metadataPageReady}
@@ -2195,6 +2247,12 @@ function App() {
               onLoadQqbotEditorForm={loadQqbotEditorForm}
               onSaveQqbotSettings={(form) => void saveQqbotSettings(form)}
               onDismissQqbotNotice={() => setQqbotNotice(null)}
+            feishuBusy={feishuBusy}
+            feishuNotice={feishuNotice}
+            onLoadFeishuEditorForm={loadFeishuEditorForm}
+            onSaveFeishuSettings={(form) => void saveFeishuSettings(form)}
+            onDismissFeishuNotice={() => setFeishuNotice(null)}
+            onRefreshFeishuStatus={() => void refreshGatewayConnections()}
             />
           </Suspense>
         ) : null}
