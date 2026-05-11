@@ -1295,6 +1295,44 @@ p {
   font-weight: 600;
 }
 
+.composer-session-hint-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 4px;
+  vertical-align: baseline;
+}
+
+button.composer-inline-action {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: inherit;
+  color: rgba(124, 214, 186, 0.85);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.composer-inline-action:hover {
+  color: rgba(148, 242, 210, 0.95);
+}
+
+button.composer-inline-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.app-shell[data-theme="light"] .composer-session-hint-actions button.composer-inline-action {
+  color: rgba(16, 112, 85, 0.92);
+}
+
+.app-shell[data-theme="light"] .composer-session-hint-actions button.composer-inline-action:hover {
+  color: rgba(10, 88, 66, 1);
+}
+
 @media (max-width: 720px) {
   .composer-bar {
     gap: 6px;
@@ -4867,6 +4905,50 @@ svg.nav-iconfont {
   color: var(--muted);
   font-size: 0.8rem;
   line-height: 1.5;
+}
+
+.settings-note-warn {
+  border-left: 3px solid rgba(242, 196, 98, 0.65);
+  padding-left: 10px;
+  color: rgba(242, 220, 170, 0.92);
+}
+
+.app-shell[data-theme="light"] .settings-note-warn {
+  border-left-color: rgba(180, 110, 20, 0.55);
+  color: rgba(90, 60, 20, 0.92);
+}
+
+/* OpenClaw version / upgrade prompts — high-visibility without error semantics */
+.settings-callout-upgrade {
+  margin: 10px 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(232, 168, 56, 0.55);
+  background: linear-gradient(
+    135deg,
+    rgba(232, 168, 56, 0.18) 0%,
+    rgba(120, 200, 255, 0.08) 100%
+  );
+  color: rgba(255, 230, 200, 0.98);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  font-weight: 550;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.12) inset,
+    0 1px 10px rgba(232, 168, 56, 0.12);
+}
+
+.app-shell[data-theme="light"] .settings-callout-upgrade {
+  border-color: rgba(200, 130, 30, 0.45);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 210, 150, 0.55) 0%,
+    rgba(200, 230, 255, 0.35) 100%
+  );
+  color: rgba(70, 45, 10, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.65) inset,
+    0 1px 8px rgba(200, 130, 30, 0.12);
 }
 
 .segmented-control {

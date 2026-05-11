@@ -55,6 +55,10 @@ type ConversationComposerProps = {
   onRemoveQueuedMessage: (messageId: string) => void;
   onSend: () => void | Promise<void>;
   onAbort: () => void | Promise<void>;
+  /** When true, show actions that clear session overrides (Gateway `sessions.patch` with null). */
+  sessionOverrideResetEnabled?: boolean;
+  onResetThinkingDefault?: () => void | Promise<void>;
+  onResetFastDefault?: () => void | Promise<void>;
 };
 
 export function ConversationComposer({
@@ -79,13 +83,31 @@ export function ConversationComposer({
   onRemoveQueuedMessage,
   onSend,
   onAbort,
+  sessionOverrideResetEnabled = false,
+  onResetThinkingDefault,
+  onResetFastDefault,
 }: ConversationComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resolvedThinkingOptions = thinkingOptions?.length ? thinkingOptions : FALLBACK_THINKING_OPTIONS;
 
   return (
     <div className={`conversation-composer ${focused ? "focused" : ""} ${transcriptScrollCompact ? "scroll-away" : ""}`}>
-      <p className="composer-session-hint">模型与思考选项仅作用于<strong>当前会话</strong>；默认模型请在「模型」页配置。</p>
+      <p className="composer-session-hint">
+        模型与思考选项仅作用于<strong>当前会话</strong>；默认模型请在「模型」页配置。
+        {sessionOverrideResetEnabled && onResetThinkingDefault && onResetFastDefault ? (
+          <>
+            {" "}
+            <span className="composer-session-hint-actions">
+              <button type="button" className="composer-inline-action" onClick={() => void onResetThinkingDefault()} title="清除会话思考等级覆盖，等同于频道内 /think default">
+                思考默认
+              </button>
+              <button type="button" className="composer-inline-action" onClick={() => void onResetFastDefault()} title="清除会话 Fast 模式覆盖，等同于频道内 /fast default">
+                Fast 默认
+              </button>
+            </span>
+          </>
+        ) : null}
+      </p>
       <div
         className="composer-input-wrap"
         tabIndex={-1}

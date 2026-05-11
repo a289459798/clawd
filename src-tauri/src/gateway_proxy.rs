@@ -663,7 +663,7 @@ fn gateway_event_loop(
                             "connect",
                             json!({
                                 "minProtocol": 3,
-                                "maxProtocol": 3,
+                                "maxProtocol": 4,
                                 "client": client,
                                 "role": role,
                                 "scopes": scopes,
@@ -1568,8 +1568,11 @@ pub fn gateway_sessions_create(
 pub struct GatewaySessionsPatchParams {
     pub session_key: String,
     pub model: Option<String>,
-    pub thinking_level: Option<String>,
-    pub fast_mode: Option<bool>,
+    /// Raw JSON value so callers can send explicit `null` to clear overrides (OpenClaw `/think default`, `/fast default`).
+    #[serde(default)]
+    pub thinking_level: Option<Value>,
+    #[serde(default)]
+    pub fast_mode: Option<Value>,
     pub reasoning_level: Option<String>,
     pub verbose_level: Option<String>,
     pub label: Option<String>,
@@ -1592,11 +1595,11 @@ pub fn gateway_sessions_patch(
     if let Some(model) = params.model {
         json_params.insert("model".to_string(), json!(model));
     }
-    if let Some(thinking_level) = params.thinking_level {
-        json_params.insert("thinkingLevel".to_string(), json!(thinking_level));
+    if let Some(value) = params.thinking_level {
+        json_params.insert("thinkingLevel".to_string(), value);
     }
-    if let Some(fast_mode) = params.fast_mode {
-        json_params.insert("fastMode".to_string(), json!(fast_mode));
+    if let Some(value) = params.fast_mode {
+        json_params.insert("fastMode".to_string(), value);
     }
     if let Some(reasoning_level) = params.reasoning_level {
         json_params.insert("reasoningLevel".to_string(), json!(reasoning_level));

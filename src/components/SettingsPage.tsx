@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ClawKitBootstrapStatus, OpenClawCliStatus } from "../types/app";
 import type {
   AppearanceSettings,
@@ -7,6 +8,13 @@ import type {
   GeneralSettings,
   NotificationSettings,
 } from "../types/settings";
+import type { GatewayConfigGetResult } from "../types/gateway";
+import {
+  isOpenClawCliBelowRecommended,
+  MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD,
+  openClawCliMeetsMinimum,
+  RECOMMENDED_OPENCLAW_CLI_VERSION,
+} from "../lib/openClawVersion";
 
 type SettingsSection = "general" | "appearance" | "notifications" | "openclaw";
 
@@ -34,6 +42,7 @@ type SettingsPageProps = {
   onInstallOpenClaw: () => void;
   onUpdateOpenClaw: () => void;
   onNavigate: (nav: "models" | "connections") => void;
+  patchOpenClawConfig: (patch: unknown) => Promise<void>;
 };
 
 const sections: Array<{ key: SettingsSection; labelKey: string; descriptionKey: string }> = [
@@ -186,6 +195,15 @@ function NumberRow({
   );
 }
 
+function readAllowUploadedArchives(config: unknown): boolean {
+  if (!config || typeof config !== "object") return false;
+  const skills = (config as Record<string, unknown>).skills;
+  if (!skills || typeof skills !== "object") return false;
+  const install = (skills as Record<string, unknown>).install;
+  if (!install || typeof install !== "object") return false;
+  return (install as Record<string, unknown>).allowUploadedArchives === true;
+}
+
 function ReadOnlyRow({ title, value, hint }: { title: string; value: string; hint?: string }) {
   return (
     <div className="settings-row">
@@ -217,10 +235,38 @@ export function SettingsPage({
   onInstallOpenClaw,
   onUpdateOpenClaw,
   onNavigate,
+  patchOpenClawConfig,
 }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [allowUploadedArchives, setAllowUploadedArchives] = useState(false);
+  const [allowUploadedArchivesLoaded, setAllowUploadedArchivesLoaded] = useState(false);
+  const [skillsConfigError, setSkillsConfigError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeSection !== "openclaw" || !gatewayConnected) return;
+    let cancelled = false;
+    setSkillsConfigError(null);
+    if (!openClawCliMeetsMinimum(openClawCliStatus?.installedVersion, MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD)) {
+      setAllowUploadedArchives(false);
+      setAllowUploadedArchivesLoaded(true);
+      return;
+    }
+    void (async () => {
+      try {
+        const result = await invoke<GatewayConfigGetResult>("gateway_config_get");
+        if (cancelled) return;
+        setAllowUploadedArchives(readAllowUploadedArchives(result.config));
+        setAllowUploadedArchivesLoaded(true);
+      } catch {
+        if (!cancelled) setAllowUploadedArchivesLoaded(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, gatewayConnected, openClawCliStatus?.installedVersion]);
 
   const savePatch = async (key: string, patch: ClawKitSettingsPatch) => {
     setSavingKey(key);
@@ -235,6 +281,15 @@ export function SettingsPage({
   };
 
   const disabled = loading || Boolean(savingKey);
+  const installedCliVersion = openClawCliStatus?.installedVersion?.trim() ?? "";
+  const skillZipUploadSupported = openClawCliMeetsMinimum(openClawCliStatus?.installedVersion, MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD);
+  const openclawInstalled = bootstrapStatus?.openclawInstalled ?? false;
+  const bindingConfigured = bootstrapStatus?.bindingConfigured ?? false;
+  const showOpenClawInstall = !openclawInstalled;
+  const showOpenClawUpdate = openclawInstalled && Boolean(openClawCliStatus?.updateAvailable);
+  const showGatewayReconnect = openclawInstalled && bindingConfigured;
+  const showGatewayToggle = openclawInstalled && bindingConfigured;
+  const showRepairBinding = openclawInstalled && !bindingConfigured;
   const updateGeneral = <K extends keyof GeneralSettings>(key: K, value: GeneralSettings[K]) =>
     void savePatch(`general.${String(key)}`, { general: { [key]: value } });
   const updateAppearance = <K extends keyof AppearanceSettings>(key: K, value: AppearanceSettings[K]) =>
@@ -242,6 +297,19 @@ export function SettingsPage({
   const updateNotifications = <K extends keyof NotificationSettings>(key: K, value: NotificationSettings[K]) =>
     void savePatch(`notifications.${String(key)}`, { notifications: { [key]: value } });
   const activeSectionMeta = sections.find((section) => section.key === activeSection) ?? sections[0];
+
+  const handleAllowUploadedArchivesChange = async (checked: boolean) => {
+    if (!openClawCliMeetsMinimum(openClawCliStatus?.installedVersion, MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD)) {
+      return;
+    }
+    setSkillsConfigError(null);
+    try {
+      await patchOpenClawConfig({ skills: { install: { allowUploadedArchives: checked } } });
+      setAllowUploadedArchives(checked);
+    } catch (err) {
+      setSkillsConfigError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   return (
     <section className="single-page settings-page">
@@ -432,27 +500,44 @@ export function SettingsPage({
             <>
               <ReadOnlyRow title={t("settings.openclaw.gatewayStatus")} value={gatewayConnected ? t("settings.openclaw.connected") : t("settings.openclaw.disconnected")} hint={gatewayStatusText} />
               <ReadOnlyRow title={t("settings.openclaw.cli")} value={openClawCliStatus?.path ?? t("settings.openclaw.cliMissing")} hint={openClawCliStatus?.installedVersion ?? t("settings.openclaw.versionUnknown")} />
+              {openClawCliStatus?.installedVersion && isOpenClawCliBelowRecommended(openClawCliStatus.installedVersion) ? (
+                <div className="settings-callout-upgrade" role="status">
+                  {t("settings.openclaw.recommendedVersionHint")
+                    .replace("{{current}}", openClawCliStatus.installedVersion)
+                    .replace("{{recommended}}", RECOMMENDED_OPENCLAW_CLI_VERSION)}
+                </div>
+              ) : null}
               <ReadOnlyRow title={t("settings.openclaw.config")} value={bootstrapStatus?.configPath ?? t("settings.openclaw.waiting")} />
               <ReadOnlyRow title={t("settings.openclaw.clawkitSettings")} value="~/.clawkit/clawkit.json" />
               <div className="settings-action-row">
                 <button className="ghost-button" type="button" onClick={onRefreshOpenClaw} disabled={actionBusy}>
                   {t("settings.openclaw.refresh")}
                 </button>
-                <button className="ghost-button" type="button" onClick={onReconnectGateway} disabled={actionBusy}>
-                  {t("settings.openclaw.reconnect")}
-                </button>
-                <button className="ghost-button" type="button" onClick={onToggleGateway} disabled={actionBusy}>
-                  {gatewayConnected ? t("settings.openclaw.stopGateway") : t("settings.openclaw.startGateway")}
-                </button>
-                <button className="ghost-button" type="button" onClick={onRepairBinding} disabled={actionBusy}>
-                  {t("settings.openclaw.repairBinding")}
-                </button>
-                <button className="ghost-button" type="button" onClick={onInstallOpenClaw} disabled={actionBusy}>
-                  {t("settings.openclaw.install")}
-                </button>
-                <button className="ghost-button" type="button" onClick={onUpdateOpenClaw} disabled={actionBusy}>
-                  {t("settings.openclaw.update")}
-                </button>
+                {showGatewayReconnect ? (
+                  <button className="ghost-button" type="button" onClick={onReconnectGateway} disabled={actionBusy}>
+                    {t("settings.openclaw.reconnect")}
+                  </button>
+                ) : null}
+                {showGatewayToggle ? (
+                  <button className="ghost-button" type="button" onClick={onToggleGateway} disabled={actionBusy}>
+                    {gatewayConnected ? t("settings.openclaw.stopGateway") : t("settings.openclaw.startGateway")}
+                  </button>
+                ) : null}
+                {showRepairBinding ? (
+                  <button className="ghost-button" type="button" onClick={onRepairBinding} disabled={actionBusy}>
+                    {t("settings.openclaw.repairBinding")}
+                  </button>
+                ) : null}
+                {showOpenClawInstall ? (
+                  <button className="ghost-button" type="button" onClick={onInstallOpenClaw} disabled={actionBusy}>
+                    {t("settings.openclaw.install")}
+                  </button>
+                ) : null}
+                {showOpenClawUpdate ? (
+                  <button className="ghost-button" type="button" onClick={onUpdateOpenClaw} disabled={actionBusy}>
+                    {t("settings.openclaw.update")}
+                  </button>
+                ) : null}
               </div>
               {actionBusy ? <div className="inline-page-status">{t("settings.openclaw.busy")}</div> : null}
               {actionMessage ? <div className="settings-note">{actionMessage}</div> : null}
@@ -463,6 +548,25 @@ export function SettingsPage({
                 disabled={disabled}
                 onChange={(value) => void savePatch("openclaw.autoStartGateway", { openclaw: { autoStartGateway: value } })}
               />
+              {!skillZipUploadSupported ? (
+                <div className="settings-callout-upgrade" role="status">
+                  {t("settings.openclaw.allowUploadedArchives.requiresOpenClaw")
+                    .replace("{{min}}", MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD)
+                    .replace("{{current}}", installedCliVersion || t("settings.openclaw.versionUnknown"))}
+                </div>
+              ) : null}
+              <ToggleRow
+                title={t("settings.openclaw.allowUploadedArchives")}
+                description={
+                  skillZipUploadSupported
+                    ? t("settings.openclaw.allowUploadedArchives.description")
+                    : t("settings.openclaw.allowUploadedArchives.upgradeShort")
+                }
+                checked={skillZipUploadSupported && allowUploadedArchives}
+                disabled={disabled || !gatewayConnected || !allowUploadedArchivesLoaded || !skillZipUploadSupported}
+                onChange={(value) => void handleAllowUploadedArchivesChange(value)}
+              />
+              {skillsConfigError ? <div className="settings-note" role="alert">{skillsConfigError}</div> : null}
               <div className="settings-note">
                 {t("settings.openclaw.note")}
                 <div className="settings-inline-actions">

@@ -65,6 +65,9 @@ type ConversationWorkspaceProps = {
   onRemoveQueuedMessage: (messageId: string) => void;
   onSend: () => void;
   onAbort: () => void;
+  sessionOverrideResetEnabled?: boolean;
+  onResetThinkingDefault?: () => void | Promise<void>;
+  onResetFastDefault?: () => void | Promise<void>;
   sessionActionBusy: string | null;
   sessionActionError: string | null;
   onCopySessionKey: (conversationId: string) => Promise<void> | void;
@@ -125,6 +128,9 @@ export function ConversationWorkspace({
   onRemoveQueuedMessage,
   onSend,
   onAbort,
+  sessionOverrideResetEnabled,
+  onResetThinkingDefault,
+  onResetFastDefault,
   sessionActionBusy,
   sessionActionError,
   onCopySessionKey,
@@ -285,6 +291,9 @@ export function ConversationWorkspace({
             onRemoveQueuedMessage={onRemoveQueuedMessage}
             onSend={onSend}
             onAbort={onAbort}
+            sessionOverrideResetEnabled={sessionOverrideResetEnabled}
+            onResetThinkingDefault={onResetThinkingDefault}
+            onResetFastDefault={onResetFastDefault}
           />
         </>
       ) : (

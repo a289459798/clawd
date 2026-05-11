@@ -1213,6 +1213,64 @@ function App() {
     });
   }, []);
 
+  const mergeSessionsListFromGateway = useCallback(async () => {
+    await invoke("gateway_connect");
+    const sessionsResult = await invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+      params: {
+        limit: 100,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
+    const rows = sessionsResult.sessions ?? [];
+    const transcriptSourceOfTruthIds = new Set<string>();
+    const aid = activeConversationIdRef.current;
+    if (aid) transcriptSourceOfTruthIds.add(aid);
+    for (const agent of agentsRef.current) {
+      for (const conversation of agent.conversations) {
+        if (conversation.runtime?.activeRunId) transcriptSourceOfTruthIds.add(conversation.id);
+      }
+    }
+    setAgents(mergeGatewaySessionRowsIntoAgents(agentsRef.current, rows, { transcriptSourceOfTruthIds }));
+    setGatewaySessionsDefaults(sessionsResult.defaults ?? null);
+  }, []);
+
+  const handleResetComposerThinkingDefault = useCallback(async () => {
+    const key = activeConversationId;
+    if (!key || key.startsWith("draft-")) return;
+    setSessionActionError(null);
+    try {
+      await invoke("gateway_connect");
+      await invoke("gateway_sessions_patch", {
+        params: { sessionKey: key, thinkingLevel: null },
+      });
+      await mergeSessionsListFromGateway();
+      announceWorkspace("已恢复思考等级默认");
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setSessionActionError(`恢复思考默认失败：${messageText}`);
+    }
+  }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
+
+  const handleResetComposerFastDefault = useCallback(async () => {
+    const key = activeConversationId;
+    if (!key || key.startsWith("draft-")) return;
+    setSessionActionError(null);
+    try {
+      await invoke("gateway_connect");
+      await invoke("gateway_sessions_patch", {
+        params: { sessionKey: key, fastMode: null },
+      });
+      await mergeSessionsListFromGateway();
+      announceWorkspace("已恢复 Fast 模式默认");
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setSessionActionError(`恢复 Fast 默认失败：${messageText}`);
+    }
+  }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
+
   const handleSetDefaultModel = useCallback(async (modelRef: string) => {
     setModelActionBusy(true);
     setModelsActionMessage(null);
@@ -2513,6 +2571,9 @@ function App() {
               onRemoveQueuedMessage={removeQueuedMessage}
               onSend={handleSend}
               onAbort={handleAbort}
+              sessionOverrideResetEnabled={Boolean(activeConversationId && !activeConversationId.startsWith("draft-") && !activeConversation?.isDraft)}
+              onResetThinkingDefault={handleResetComposerThinkingDefault}
+              onResetFastDefault={handleResetComposerFastDefault}
               sessionActionBusy={sessionActionBusy}
               sessionActionError={sessionActionError}
               onCopySessionKey={handleCopySessionKey}
@@ -2602,6 +2663,7 @@ function App() {
             onInstallOpenClaw={installOpenClawFromSettings}
             onUpdateOpenClaw={() => void runOpenClawUpdate()}
             onNavigate={handleNavChange}
+            patchOpenClawConfig={patchOpenClawConfig}
           />
         ) : null}
       </div>

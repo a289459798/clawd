@@ -9,14 +9,13 @@ import {
 import { buildChannelAccountReadiness, readinessHasSignals } from "../lib/channelCredentialHints";
 
 const supportedChannels = [
-  { id: "bluebubbles", name: "BlueBubbles", detail: "iMessage 推荐通道，连接 BlueBubbles macOS server。", docsUrl: "https://docs.openclaw.ai/channels/bluebubbles" },
   { id: "discord", name: "Discord", detail: "Discord Bot API + Gateway。", docsUrl: "https://docs.openclaw.ai/channels/discord" },
   { id: "feishu", name: "Feishu", detail: "飞书/Lark 机器人，常用配置为 App ID、App Secret、Verification Token、Encrypt Key。", docsUrl: "https://docs.openclaw.ai/channels/feishu" },
   { id: "googlechat", name: "Google Chat", detail: "Google Chat API app webhook。", docsUrl: "https://docs.openclaw.ai/channels/google-chat" },
-  { id: "imessage", name: "iMessage", detail: "legacy macOS 集成，新配置建议优先使用 BlueBubbles。", docsUrl: "https://docs.openclaw.ai/channels/imessage" },
+  { id: "imessage", name: "iMessage", detail: "macOS 通过 OpenClaw channels.imessage + imsg 桥接；BlueBubbles 路径已由上游弃用。", docsUrl: "https://docs.openclaw.ai/channels/imessage" },
   { id: "irc", name: "IRC", detail: "经典 IRC server、频道和 DM。", docsUrl: "https://docs.openclaw.ai/channels/irc" },
   { id: "line", name: "LINE", detail: "LINE Messaging API bot。", docsUrl: "https://docs.openclaw.ai/channels/line" },
-  { id: "matrix", name: "Matrix", detail: "Matrix protocol。", docsUrl: "https://docs.openclaw.ai/channels/matrix" },
+  { id: "matrix", name: "Matrix", detail: "需安装外部 Matrix channel 插件（ClawHub/npm），核心发行版不再内置 SDK。", docsUrl: "https://docs.openclaw.ai/channels/matrix" },
   { id: "mattermost", name: "Mattermost", detail: "Bot API + WebSocket。", docsUrl: "https://docs.openclaw.ai/channels/mattermost" },
   { id: "msteams", name: "Microsoft Teams", detail: "Bot Framework 企业协作通道。", docsUrl: "https://docs.openclaw.ai/channels/microsoft-teams" },
   { id: "nextcloud-talk", name: "Nextcloud Talk", detail: "Nextcloud Talk 自托管聊天。", docsUrl: "https://docs.openclaw.ai/channels/nextcloud-talk" },
