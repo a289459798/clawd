@@ -123,6 +123,15 @@ export type WeixinPluginStatus = {
   latestCheckError?: string | null;
 };
 
+export type QqbotPluginStatus = {
+  installed: boolean;
+  enabled: boolean;
+  installedVersion?: string | null;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  latestCheckError?: string | null;
+};
+
 export type OpenClawCliStatus = {
   installed: boolean;
   path?: string | null;

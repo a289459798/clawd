@@ -9,6 +9,12 @@ import type { ComposerAttachment, ModelOption, QueuedComposerMessage } from "../
 import type { Conversation } from "../types/conversation";
 import type { SendShortcut } from "../types/settings";
 
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
+
 type VisibleConversation = Conversation & {
   agentId: string;
   agentName: string;
@@ -16,6 +22,7 @@ type VisibleConversation = Conversation & {
 };
 
 type ConversationWorkspaceProps = {
+  t: TranslateFn;
   activeConversation: Conversation | null;
   defaultDisplayMode: "focus" | "conversation";
   sendShortcut: SendShortcut;
@@ -79,6 +86,7 @@ type ConversationWorkspaceProps = {
 };
 
 export function ConversationWorkspace({
+  t,
   activeConversation,
   defaultDisplayMode,
   sendShortcut,
@@ -163,12 +171,13 @@ export function ConversationWorkspace({
       false,
     );
     const shouldShowInProgress = activeConversation.runtime?.activeRunId || (!gatewayError && detailState.isWaitingReply) || detailState.isStillStreaming;
-    if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无回复内容</p>;
+    if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">{tt(t, "conversation.emptyReply", "No reply content yet")}</p>;
 
     return (
       <>
         {detailState.hasRenderableContent ? (
           <FocusAssistantMessageList
+            t={t}
             messages={detailState.normalizedMessages}
             conversationId={activeConversation.id}
             onOpenImage={onOpenImage}
@@ -202,12 +211,13 @@ export function ConversationWorkspace({
       true,
     );
     const shouldShowInProgress = activeConversation.runtime?.activeRunId || (!gatewayError && detailState.isStillStreaming);
-    if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">暂无对话内容</p>;
+    if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">{tt(t, "conversation.emptyConversation", "No conversation content yet")}</p>;
 
     return (
       <>
         {detailState.hasRenderableContent ? (
           <FullConversationMessageList
+            t={t}
             messages={detailState.normalizedMessages}
             conversationId={activeConversation.id}
             onOpenImage={onOpenImage}
@@ -238,7 +248,8 @@ export function ConversationWorkspace({
         <>
           <ConversationDetail
             activeConversation={activeConversation}
-            agentName={visibleConversations.find((conversation) => conversation.id === activeConversation.id)?.agentName ?? "未知 Agent"}
+            agentName={visibleConversations.find((conversation) => conversation.id === activeConversation.id)?.agentName ?? tt(t, "conversation.unknownAgent", "Unknown agent")}
+            t={t}
             statusLabel={statusLabel}
             gatewayError={gatewayError}
             onBack={(resetUserExpanded) => { onBack(); resetUserExpanded(); }}
@@ -270,6 +281,7 @@ export function ConversationWorkspace({
           />
 
           <ConversationComposer
+            t={t}
             transcriptScrollCompact={transcriptScrollCompact}
             focused={composerFocused}
             value={composerValue}
@@ -303,27 +315,27 @@ export function ConversationWorkspace({
               type="search"
               value={conversationSearch}
               onChange={(event) => onConversationSearchChange(event.target.value)}
-              placeholder="搜索对话、Agent、模型或 session key"
-              aria-label="搜索对话"
+              placeholder={tt(t, "conversation.searchPlaceholder", "Search conversations, agent, model, or session key")}
+              aria-label={tt(t, "conversation.searchAria", "Search conversations")}
             />
             <div className="conversation-sort-select">
               <select
                 value={conversationSort}
                 onChange={(event) => onConversationSortChange(event.target.value as "updated" | "tokens" | "status")}
-                aria-label="排序对话"
+                aria-label={tt(t, "conversation.sortAria", "Sort conversations")}
               >
-                <option value="updated">最近更新</option>
-                <option value="status">运行状态</option>
-                <option value="tokens">Token 用量</option>
+                <option value="updated">{tt(t, "conversation.sort.updated", "Recently updated")}</option>
+                <option value="status">{tt(t, "conversation.sort.status", "Runtime status")}</option>
+                <option value="tokens">{tt(t, "conversation.sort.tokens", "Token usage")}</option>
               </select>
             </div>
             <div className="conversation-sort-select runtime-filter-select">
               <select
                 value={conversationRuntimeFilter}
                 onChange={(event) => onConversationRuntimeFilterChange(event.target.value)}
-                aria-label="按 Agent Runtime 筛选对话"
+                aria-label={tt(t, "conversation.runtimeFilterAria", "Filter conversations by agent runtime")}
               >
-                <option value="all">全部 Runtime</option>
+                <option value="all">{tt(t, "conversation.runtimeFilterAll", "All runtimes")}</option>
                 {conversationRuntimeOptions.map((runtime) => (
                   <option value={runtime.value} key={runtime.value}>
                     {runtime.label} · {runtime.count}
@@ -333,6 +345,7 @@ export function ConversationWorkspace({
             </div>
           </div>
           <ConversationList
+            t={t}
             conversations={filteredVisibleConversations}
             statusLabel={statusLabel}
             onOpen={onOpenConversation}
@@ -344,16 +357,16 @@ export function ConversationWorkspace({
         <div className="empty-chat-state">
           {visibleConversationCount > 0 && conversationFiltersActive ? (
             <>
-              <strong>没有符合筛选条件的对话</strong>
-              <p>试着调整搜索关键词或 Runtime 筛选；也可一键清空筛选。</p>
+              <strong>{tt(t, "conversation.emptyFilteredTitle", "No conversations match current filters")}</strong>
+              <p>{tt(t, "conversation.emptyFilteredHint", "Try adjusting search keywords or runtime filter, or clear filters in one click.")}</p>
               <button type="button" className="ghost-button" onClick={onClearConversationFilters}>
-                清空筛选
+                {tt(t, "conversation.clearFilters", "Clear filters")}
               </button>
             </>
           ) : (
             <>
-              <strong>还没有可显示的对话</strong>
-              <p>先从左侧 Agent 树里展开一个会话，后续这里会支持直接新建对话。</p>
+              <strong>{tt(t, "conversation.emptyTitle", "No conversations to show yet")}</strong>
+              <p>{tt(t, "conversation.emptyHint", "Open a conversation from the left agent tree first.")}</p>
             </>
           )}
         </div>

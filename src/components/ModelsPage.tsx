@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { GatewayModelAuthStatusProfile, GatewayModelAuthStatusResult, GatewayModelSummary } from "../types/gateway";
 
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
+
 type ModelConfigDraft = {
   provider: string;
   modelId: string;
@@ -15,6 +21,7 @@ type ProviderConfigDraft = {
 };
 
 type ModelsPageProps = {
+  t: TranslateFn;
   configuredModels: GatewayModelSummary[];
   allModels: GatewayModelSummary[];
   authStatus: GatewayModelAuthStatusResult | null;
@@ -73,13 +80,13 @@ function profileCredentialLabel(type: GatewayModelAuthStatusProfile["type"]) {
   return type;
 }
 
-function profileHealthLabel(status: string) {
+function profileHealthLabel(status: string, t: TranslateFn) {
   const map: Record<string, string> = {
-    ok: "正常",
-    expiring: "即将过期",
-    expired: "已过期",
-    missing: "缺失",
-    static: "静态",
+    ok: tt(t, "models.auth.ok", "OK"),
+    expiring: tt(t, "models.auth.expiring", "Expiring soon"),
+    expired: tt(t, "models.auth.expired", "Expired"),
+    missing: tt(t, "models.auth.missing", "Missing"),
+    static: tt(t, "models.auth.static", "Static"),
   };
   return map[status] ?? status;
 }
@@ -89,13 +96,13 @@ function providerDisplayName(provider: string, authStatus: GatewayModelAuthStatu
   return auth?.displayName || provider;
 }
 
-function providerAuthLabel(provider: string, authStatus: GatewayModelAuthStatusResult | null) {
+function providerAuthLabel(provider: string, authStatus: GatewayModelAuthStatusResult | null, t: TranslateFn) {
   const auth = authStatus?.providers.find((item) => normalize(item.provider) === normalize(provider));
-  if (!auth) return "未配置";
-  if (auth.status === "ok" || auth.status === "static") return auth.profiles.some((profile) => profile.type === "oauth") ? "OAuth 已登录" : "已配置";
-  if (auth.status === "expiring") return `即将过期${auth.expiry?.label ? ` · ${auth.expiry.label}` : ""}`;
-  if (auth.status === "expired") return "授权已过期";
-  if (auth.status === "missing") return "未授权";
+  if (!auth) return tt(t, "models.auth.notConfigured", "Not configured");
+  if (auth.status === "ok" || auth.status === "static") return auth.profiles.some((profile) => profile.type === "oauth") ? tt(t, "models.auth.oauthSignedIn", "OAuth signed in") : tt(t, "models.auth.configured", "Configured");
+  if (auth.status === "expiring") return `${tt(t, "models.auth.expiring", "Expiring soon")}${auth.expiry?.label ? ` · ${auth.expiry.label}` : ""}`;
+  if (auth.status === "expired") return tt(t, "models.auth.expiredAuth", "Authorization expired");
+  if (auth.status === "missing") return tt(t, "models.auth.unauthorized", "Unauthorized");
   return auth.status;
 }
 
@@ -110,18 +117,18 @@ function isProviderConfigured(provider: string, authStatus: GatewayModelAuthStat
   return Boolean(auth && (auth.status === "ok" || auth.status === "static"));
 }
 
-function modelTags(model: ModelRow): string[] {
+function modelTags(model: ModelRow, t: TranslateFn): string[] {
   const tags: string[] = [];
   const inputs = model.input ?? [];
-  if (inputs.includes("text") || inputs.length === 0) tags.push("文本");
-  if (inputs.includes("image")) tags.push("图片");
-  if (inputs.includes("document")) tags.push("文档");
-  if (inputs.includes("audio")) tags.push("音频转写");
-  if (inputs.includes("video")) tags.push("视频");
-  if (model.reasoning) tags.push("推理");
+  if (inputs.includes("text") || inputs.length === 0) tags.push(tt(t, "models.tag.text", "Text"));
+  if (inputs.includes("image")) tags.push(tt(t, "models.tag.image", "Image"));
+  if (inputs.includes("document")) tags.push(tt(t, "models.tag.document", "Document"));
+  if (inputs.includes("audio")) tags.push(tt(t, "models.tag.audio", "Audio transcription"));
+  if (inputs.includes("video")) tags.push(tt(t, "models.tag.video", "Video"));
+  if (model.reasoning) tags.push(tt(t, "models.tag.reasoning", "Reasoning"));
   if (model.contextTokens || model.contextWindow) {
     const context = model.contextTokens ?? model.contextWindow ?? 0;
-    if (context >= 100_000) tags.push("长上下文");
+    if (context >= 100_000) tags.push(tt(t, "models.tag.longContext", "Long context"));
   }
   const catalogTags = model.tags?.filter((tag) => typeof tag === "string" && tag.trim()) ?? [];
   for (const tag of catalogTags) {
@@ -133,7 +140,8 @@ function modelTags(model: ModelRow): string[] {
       || lower === "audio"
       || lower === "audio-input"
     ) {
-      if (!tags.includes("音频转写")) tags.push("音频转写");
+      const audioTag = tt(t, "models.tag.audio", "Audio transcription");
+      if (!tags.includes(audioTag)) tags.push(audioTag);
       continue;
     }
     if (!tags.includes(tag)) tags.push(tag);
@@ -142,6 +150,7 @@ function modelTags(model: ModelRow): string[] {
 }
 
 export function ModelsPage({
+  t,
   configuredModels,
   allModels,
   authStatus,
@@ -217,7 +226,7 @@ export function ModelsPage({
       .map(([provider, models]) => ({
         provider,
         name: providerDisplayName(provider, authStatus),
-        authLabel: providerAuthLabel(provider, authStatus),
+        authLabel: providerAuthLabel(provider, authStatus, t),
         supportsOAuth: providerSupportsOAuth(provider, authStatus),
         configured: models.some((model) => model.configured) || isProviderConfigured(provider, authStatus),
         models: models.sort((left, right) => {
@@ -234,7 +243,7 @@ export function ModelsPage({
         if (leftHasDefault !== rightHasDefault) return leftHasDefault ? -1 : 1;
         return left.name.localeCompare(right.name);
       });
-  }, [allModels, authStatus, configuredModels, configuredRefs, currentDefaultModel, filter, query]);
+  }, [allModels, authStatus, configuredModels, configuredRefs, currentDefaultModel, filter, query, t]);
 
   useEffect(() => {
     if (providerGroups.length === 0) {
@@ -259,27 +268,27 @@ export function ModelsPage({
 
   return (
     <section className="single-page models-page">
-      {loading ? <div className="inline-page-status">正在同步模型状态...</div> : null}
+      {loading ? <div className="inline-page-status">{tt(t, "models.loading", "Syncing model status...")}</div> : null}
       <div className="models-summary-grid">
-        <div className="model-summary-stat"><span>当前默认</span><strong>{currentDefaultModel || "-"}</strong></div>
-        <div className="model-summary-stat"><span>可用模型</span><strong>{configuredCount}</strong></div>
-        <div className="model-summary-stat"><span>全部模型</span><strong>{allCount}</strong></div>
-        <div className="model-summary-stat"><span>授权提醒</span><strong>{authIssueCount}</strong></div>
+        <div className="model-summary-stat"><span>{tt(t, "models.currentDefault", "Current default")}</span><strong>{currentDefaultModel || "-"}</strong></div>
+        <div className="model-summary-stat"><span>{tt(t, "models.available", "Available models")}</span><strong>{configuredCount}</strong></div>
+        <div className="model-summary-stat"><span>{tt(t, "models.total", "All models")}</span><strong>{allCount}</strong></div>
+        <div className="model-summary-stat"><span>{tt(t, "models.authAlerts", "Auth alerts")}</span><strong>{authIssueCount}</strong></div>
       </div>
 
       <div className="models-toolbar">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型，例如 gpt、claude、gemini" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tt(t, "models.searchPlaceholder", "Search models, e.g. gpt, claude, gemini")} />
         <select value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}>
-          <option value="all">全部</option>
-          <option value="configured">可用</option>
-          <option value="missing">未配置</option>
+          <option value="all">{tt(t, "models.filter.all", "All")}</option>
+          <option value="configured">{tt(t, "models.filter.configured", "Configured")}</option>
+          <option value="missing">{tt(t, "models.filter.missing", "Missing")}</option>
           <option value="oauth">OAuth</option>
         </select>
-        <button className="ghost-link-button primary-action" type="button" onClick={onRefresh} disabled={loading || actionBusy}>刷新</button>
+        <button className="ghost-link-button primary-action" type="button" onClick={onRefresh} disabled={loading || actionBusy}>{tt(t, "common.refresh", "Refresh")}</button>
       </div>
 
       {message ? <div className="model-action-message">{message}</div> : null}
-      {actionBusy ? <div className="inline-page-status">正在处理模型操作...</div> : null}
+      {actionBusy ? <div className="inline-page-status">{tt(t, "models.busy", "Processing model action...")}</div> : null}
 
       <div className="models-split-layout">
         <aside className="model-provider-sidebar">
@@ -288,7 +297,7 @@ export function ModelsPage({
             type="button"
             onClick={() => setProviderDraft({ provider: "", apiKey: "", baseUrl: "" })}
           >
-            添加 Provider
+            {tt(t, "models.addProvider", "Add provider")}
           </button>
           {providerGroups.map((group) => {
             const providerDefault = group.models.find((model) => normalize(model.ref) === normalize(currentDefaultModel));
@@ -301,7 +310,7 @@ export function ModelsPage({
                 onClick={() => setSelectedProvider(group.provider)}
               >
                 <strong>{group.name}</strong>
-                <span>{providerDefault ? `默认：${providerDefault.displayName}` : group.authLabel}</span>
+                <span>{providerDefault ? `${tt(t, "models.default", "Default")}: ${providerDefault.displayName}` : group.authLabel}</span>
                 <em>{availableCount}/{group.models.length}</em>
               </button>
             );
@@ -314,12 +323,12 @@ export function ModelsPage({
               <div className="model-provider-head">
                 <div>
                   <strong>{activeProviderGroup.name}</strong>
-                  <span>{activeProviderGroup.models.length} 个模型 · {activeProviderGroup.authLabel}</span>
+                  <span>{activeProviderGroup.models.length} {tt(t, "models.countUnit", "models")} · {activeProviderGroup.authLabel}</span>
                 </div>
                 <div className="model-provider-actions">
                   {activeProviderGroup.supportsOAuth ? (
                     <button className="ghost-link-button" type="button" onClick={() => onAuthProvider(activeProviderGroup.provider, false)} disabled={actionBusy}>
-                      授权登录
+                      {tt(t, "models.oauthLogin", "OAuth sign in")}
                     </button>
                   ) : null}
                   <button
@@ -327,7 +336,7 @@ export function ModelsPage({
                     type="button"
                     onClick={() => setProviderDraft({ provider: activeProviderGroup.provider, apiKey: "", baseUrl: "" })}
                   >
-                    配置
+                    {tt(t, "common.configure", "Configure")}
                   </button>
                   {activeProviderGroup.configured ? (
                     <button
@@ -336,17 +345,17 @@ export function ModelsPage({
                       onClick={() => setModelDraft({ provider: activeProviderGroup.provider, modelId: "", alias: "", setDefault: false })}
                       disabled={actionBusy}
                     >
-                      增加
+                      {tt(t, "common.add", "Add")}
                     </button>
                   ) : null}
                 </div>
               </div>
 
               {authStatus && activeAuthProvider ? (
-                <div className="model-auth-profiles" aria-label="Gateway 授权档案">
+                <div className="model-auth-profiles" aria-label={tt(t, "models.authProfilesAria", "Gateway auth profiles")}>
                   <div className="model-auth-profiles-caption">
-                    <span className="model-auth-profiles-title">授权档案</span>
-                    <span className="model-auth-profiles-source">来自 Gateway · models.authStatus（对齐 CLI models auth list）</span>
+                    <span className="model-auth-profiles-title">{tt(t, "models.authProfiles", "Auth profiles")}</span>
+                    <span className="model-auth-profiles-source">{tt(t, "models.authProfilesSource", "From Gateway · models.authStatus")}</span>
                   </div>
                   {activeAuthProvider.profiles.length > 0 ? (
                     <ul className="model-auth-profile-list">
@@ -356,18 +365,18 @@ export function ModelsPage({
                             {profile.profileId}
                           </code>
                           <span className="auth-profile-type">{profileCredentialLabel(profile.type)}</span>
-                          <span className={`auth-profile-status auth-status-${profile.status}`}>{profileHealthLabel(profile.status)}</span>
+                          <span className={`auth-profile-status auth-status-${profile.status}`}>{profileHealthLabel(profile.status, t)}</span>
                           {profile.expiry?.label ? <span className="auth-profile-expiry">{profile.expiry.label}</span> : null}
                         </li>
                       ))}
                     </ul>
                   ) : (
                     <p className="model-auth-profiles-empty">
-                      Gateway 未返回独立档案行。若仅使用 API Key 或环境变量绑定，可能不在档案列表中。
+                      {tt(t, "models.authProfilesEmpty", "Gateway did not return independent profile rows. API-key/env setups may not appear here.")}
                     </p>
                   )}
                   {activeAuthProvider.usage?.plan ? (
-                    <p className="model-auth-usage-hint">用量计划：{String(activeAuthProvider.usage.plan)}</p>
+                    <p className="model-auth-usage-hint">{tt(t, "models.usagePlan", "Usage plan")}: {String(activeAuthProvider.usage.plan)}</p>
                   ) : null}
                 </div>
               ) : null}
@@ -382,16 +391,16 @@ export function ModelsPage({
                         <strong>{model.displayName}</strong>
                         <code>{model.ref}</code>
                         <div className="model-row-tags">
-                          {modelTags(model).map((tag) => (
+                          {modelTags(model, t).map((tag) => (
                             <span
                               key={tag}
-                              title={tag === "音频转写" ? "Gateway 模型元数据：支持音频输入（含 OpenAI Codex 等场景的语音转写能力）" : undefined}
+                              title={tag === tt(t, "models.tag.audio", "Audio transcription") ? tt(t, "models.audioTooltip", "Gateway metadata: supports audio input/transcription.") : undefined}
                             >
                               {tag}
                             </span>
                           ))}
-                          {isDefault ? <span className="model-default-tag">默认模型</span> : null}
-                          {providerConfigured ? (model.configured ? <span>已添加</span> : <span>可添加</span>) : <span>Provider 未配置</span>}
+                          {isDefault ? <span className="model-default-tag">{tt(t, "models.defaultModel", "Default model")}</span> : null}
+                          {providerConfigured ? (model.configured ? <span>{tt(t, "models.added", "Added")}</span> : <span>{tt(t, "models.addable", "Addable")}</span>) : <span>{tt(t, "models.providerNotConfigured", "Provider not configured")}</span>}
                         </div>
                       </div>
                       <div className="model-row-actions">
@@ -403,18 +412,18 @@ export function ModelsPage({
                               onClick={() => setModelDraft({ provider: model.provider, modelId: model.modelId, alias: model.displayName === model.modelId ? "" : model.displayName, setDefault: false })}
                               disabled={actionBusy}
                             >
-                              修改
+                              {tt(t, "common.edit", "Edit")}
                             </button>
                             {isDefault ? (
-                              <span className="current-model-pill">当前默认</span>
+                              <span className="current-model-pill">{tt(t, "models.currentDefault", "Current default")}</span>
                             ) : (
                               <button className="ghost-link-button primary-action" type="button" onClick={() => onSetDefault(model.ref)} disabled={actionBusy}>
-                                设为默认
+                                {tt(t, "models.setDefault", "Set as default")}
                               </button>
                             )}
                           </>
                         ) : (
-                          <span className="current-model-pill muted">请先配置 Provider</span>
+                          <span className="current-model-pill muted">{tt(t, "models.configureProviderFirst", "Configure provider first")}</span>
                         )}
                       </div>
                     </div>
@@ -423,10 +432,10 @@ export function ModelsPage({
               </div>
             </>
           ) : !loading ? (
-            <div className="empty-panel">暂无可展示模型。</div>
+            <div className="empty-panel">{tt(t, "models.empty", "No models to display.")}</div>
           ) : null}
         </section>
-        {!providerGroups.length && !loading ? <div className="empty-panel">暂无可展示模型。</div> : null}
+        {!providerGroups.length && !loading ? <div className="empty-panel">{tt(t, "models.empty", "No models to display.")}</div> : null}
       </div>
 
       {providerDraft ? (
@@ -440,10 +449,10 @@ export function ModelsPage({
           >
             <div className="model-config-head">
               <div>
-                <strong>配置 Provider</strong>
+                <strong>{tt(t, "models.configureProvider", "Configure provider")}</strong>
                 <span>{providerDisplayName(providerDraft.provider, authStatus)}</span>
               </div>
-              <button type="button" onClick={() => setProviderDraft(null)} title="关闭" aria-label="关闭">×</button>
+              <button type="button" onClick={() => setProviderDraft(null)} title={tt(t, "common.close", "Close")} aria-label={tt(t, "common.close", "Close")}>×</button>
             </div>
             <label>
               <span>Provider</span>
@@ -451,14 +460,14 @@ export function ModelsPage({
             </label>
             <label>
               <span>API Key</span>
-              <input value={providerDraft.apiKey} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} type="password" placeholder="已通过 OAuth 或环境变量配置时可留空" />
+              <input value={providerDraft.apiKey} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} type="password" placeholder={tt(t, "models.apiKeyPlaceholder", "Leave empty if OAuth or env var is already configured")} />
             </label>
             <label>
               <span>Base URL</span>
-              <input value={providerDraft.baseUrl} onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} placeholder="可选，OpenAI-compatible 服务常用" />
+              <input value={providerDraft.baseUrl} onChange={(event) => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} placeholder={tt(t, "models.baseUrlPlaceholder", "Optional, common for OpenAI-compatible services")} />
             </label>
             <button className="openclaw-update-button" type="submit" disabled={actionBusy}>
-              {actionBusy ? "保存中..." : "保存 Provider"}
+              {actionBusy ? tt(t, "common.saving", "Saving...") : tt(t, "models.saveProvider", "Save provider")}
             </button>
           </form>
         </div>
@@ -475,29 +484,29 @@ export function ModelsPage({
           >
             <div className="model-config-head">
               <div>
-                <strong>修改模型</strong>
+                <strong>{tt(t, "models.editModel", "Edit model")}</strong>
                 <span>{providerDisplayName(modelDraft.provider, authStatus)}</span>
               </div>
-              <button type="button" onClick={() => setModelDraft(null)} title="关闭" aria-label="关闭">×</button>
+              <button type="button" onClick={() => setModelDraft(null)} title={tt(t, "common.close", "Close")} aria-label={tt(t, "common.close", "Close")}>×</button>
             </div>
             <label>
               <span>Provider</span>
               <input value={modelDraft.provider} readOnly />
             </label>
             <label>
-              <span>模型名称</span>
-              <input value={modelDraft.modelId} onChange={(event) => setModelDraft({ ...modelDraft, modelId: event.target.value })} placeholder="例如 gpt-5.5" required />
+              <span>{tt(t, "models.modelName", "Model name")}</span>
+              <input value={modelDraft.modelId} onChange={(event) => setModelDraft({ ...modelDraft, modelId: event.target.value })} placeholder={tt(t, "models.modelNamePlaceholder", "e.g. gpt-5.5")} required />
             </label>
             <label>
-              <span>显示名称</span>
-              <input value={modelDraft.alias} onChange={(event) => setModelDraft({ ...modelDraft, alias: event.target.value })} placeholder="可选，例如 主力模型" />
+              <span>{tt(t, "models.displayName", "Display name")}</span>
+              <input value={modelDraft.alias} onChange={(event) => setModelDraft({ ...modelDraft, alias: event.target.value })} placeholder={tt(t, "models.displayNamePlaceholder", "Optional, e.g. primary model")} />
             </label>
             <label className="model-checkbox-row">
               <input type="checkbox" checked={modelDraft.setDefault} onChange={(event) => setModelDraft({ ...modelDraft, setDefault: event.target.checked })} />
-              <span>保存后设为默认模型</span>
+              <span>{tt(t, "models.setDefaultAfterSave", "Set as default after saving")}</span>
             </label>
             <button className="openclaw-update-button" type="submit" disabled={actionBusy}>
-              {actionBusy ? "保存中..." : "保存模型"}
+              {actionBusy ? tt(t, "common.saving", "Saving...") : tt(t, "models.saveModel", "Save model")}
             </button>
           </form>
         </div>

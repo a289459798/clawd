@@ -4,6 +4,12 @@ import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { shouldSubmitComposer } from "../lib/composerShortcut";
 import type { SendShortcut } from "../types/settings";
 
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
+
 type ComposerAttachment = {
   id: string;
   name: string;
@@ -34,6 +40,7 @@ const FALLBACK_THINKING_OPTIONS = [
 ];
 
 type ConversationComposerProps = {
+  t: TranslateFn;
   transcriptScrollCompact?: boolean;
   focused: boolean;
   value: string;
@@ -62,6 +69,7 @@ type ConversationComposerProps = {
 };
 
 export function ConversationComposer({
+  t,
   transcriptScrollCompact = false,
   focused,
   value,
@@ -93,16 +101,16 @@ export function ConversationComposer({
   return (
     <div className={`conversation-composer ${focused ? "focused" : ""} ${transcriptScrollCompact ? "scroll-away" : ""}`}>
       <p className="composer-session-hint">
-        模型与思考选项仅作用于<strong>当前会话</strong>；默认模型请在「模型」页配置。
+        {tt(t, "composer.sessionHintPrefix", "Model and thinking options only apply to")}<strong>{tt(t, "composer.currentSession", " current session")}</strong>{tt(t, "composer.sessionHintSuffix", "; configure default model in Models page.")}
         {sessionOverrideResetEnabled && onResetThinkingDefault && onResetFastDefault ? (
           <>
             {" "}
             <span className="composer-session-hint-actions">
-              <button type="button" className="composer-inline-action" onClick={() => void onResetThinkingDefault()} title="清除会话思考等级覆盖，等同于频道内 /think default">
-                思考默认
+              <button type="button" className="composer-inline-action" onClick={() => void onResetThinkingDefault()} title={tt(t, "composer.resetThinkingTitle", "Clear session thinking override, same as /think default")}>
+                {tt(t, "composer.resetThinking", "Thinking default")}
               </button>
-              <button type="button" className="composer-inline-action" onClick={() => void onResetFastDefault()} title="清除会话 Fast 模式覆盖，等同于频道内 /fast default">
-                Fast 默认
+              <button type="button" className="composer-inline-action" onClick={() => void onResetFastDefault()} title={tt(t, "composer.resetFastTitle", "Clear session Fast override, same as /fast default")}>
+                {tt(t, "composer.resetFast", "Fast default")}
               </button>
             </span>
           </>
@@ -129,9 +137,9 @@ export function ConversationComposer({
           }}
         />
         {queuedMessages.length > 0 ? (
-          <div className="composer-queue" aria-label="待发送消息列表">
+          <div className="composer-queue" aria-label={tt(t, "composer.queueAria", "Queued messages")}>
             <div className="composer-queue-head">
-              <span>待发送</span>
+              <span>{tt(t, "composer.queued", "Queued")}</span>
               <strong>{queuedMessages.length}</strong>
             </div>
             <div className="composer-queue-list">
@@ -139,9 +147,9 @@ export function ConversationComposer({
                 <div className="composer-queue-item" key={item.id}>
                   <span className="composer-queue-index">#{index + 1}</span>
                   <span className="composer-queue-text">
-                    {item.text || (item.attachments.length > 0 ? `[附件] ${item.attachments.map((attachment) => attachment.name).join(", ")}` : "空消息")}
+                    {item.text || (item.attachments.length > 0 ? `[${tt(t, "composer.attachment", "Attachment")}] ${item.attachments.map((attachment) => attachment.name).join(", ")}` : tt(t, "composer.emptyMessage", "Empty message"))}
                   </span>
-                  <button type="button" onClick={() => onRemoveQueuedMessage(item.id)} title="删除待发送消息">×</button>
+                  <button type="button" onClick={() => onRemoveQueuedMessage(item.id)} title={tt(t, "composer.removeQueued", "Remove queued message")}>×</button>
                 </div>
               ))}
             </div>
@@ -149,7 +157,7 @@ export function ConversationComposer({
         ) : null}
         <textarea
           className="composer-input"
-          placeholder="输入消息…"
+          placeholder={tt(t, "composer.inputPlaceholder", "Type a message...")}
           onChange={(e) => onValueChange(e.target.value)}
           onKeyDown={(e) => {
             if (shouldSubmitComposer(sendShortcut, e)) {
@@ -160,7 +168,7 @@ export function ConversationComposer({
           value={value}
         />
         {attachments.length > 0 ? (
-          <div className="composer-attachments" aria-label="已选择附件">
+          <div className="composer-attachments" aria-label={tt(t, "composer.attachmentsAria", "Selected attachments")}>
             {attachments.map((attachment) => (
               <div className="composer-attachment-card" key={attachment.id}>
                 {attachment.previewUrl ? (
@@ -174,23 +182,23 @@ export function ConversationComposer({
                   <span title={attachment.name}>{attachment.name}</span>
                   {attachment.size ? <small>{formatFileSize(attachment.size)}</small> : null}
                 </div>
-                <button type="button" onClick={() => onRemoveAttachment(attachment.id)} title="移除附件">×</button>
+                <button type="button" onClick={() => onRemoveAttachment(attachment.id)} title={tt(t, "composer.removeAttachment", "Remove attachment")}>×</button>
               </div>
             ))}
           </div>
         ) : null}
         <div className="composer-bar">
-          <button className="composer-file-btn" type="button" title="发送文件" onClick={() => fileInputRef.current?.click()}>
+          <button className="composer-file-btn" type="button" title={tt(t, "composer.sendFile", "Send file")} onClick={() => fileInputRef.current?.click()}>
             <Icon name={IconNames.UPLOAD} size={16} />
           </button>
-          <select className="composer-select" value={model} onChange={(e) => onModelChange(e.target.value)} title="模型" disabled={modelsLoading || modelOptions.length === 0}>
-            {modelsLoading ? <option value={model}>加载模型…</option> : null}
-            {!modelsLoading && modelOptions.length === 0 ? <option value="">无可用模型</option> : null}
+          <select className="composer-select" value={model} onChange={(e) => onModelChange(e.target.value)} title={tt(t, "models.title", "Model")} disabled={modelsLoading || modelOptions.length === 0}>
+            {modelsLoading ? <option value={model}>{tt(t, "composer.loadingModels", "Loading models...")}</option> : null}
+            {!modelsLoading && modelOptions.length === 0 ? <option value="">{tt(t, "composer.noModels", "No models available")}</option> : null}
             {!modelsLoading ? modelOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             )) : null}
           </select>
-          <select className="composer-select" value={thinking} onChange={(e) => onThinkingChange(e.target.value)} title="思考模式">
+          <select className="composer-select" value={thinking} onChange={(e) => onThinkingChange(e.target.value)} title={tt(t, "composer.thinkingMode", "Thinking mode")}>
             {resolvedThinkingOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
@@ -198,15 +206,15 @@ export function ConversationComposer({
           <div style={{ flex: 1 }} />
           {sending ? (
             <>
-              <button className="composer-send-btn" type="button" title="加入待发送" disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
+              <button className="composer-send-btn" type="button" title={tt(t, "composer.enqueue", "Queue message")} disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
                 <Icon name={IconNames.SEND} size={18} />
               </button>
-              <button className="composer-stop-btn" type="button" title="停止" onClick={() => void onAbort()}>
-                停止
+              <button className="composer-stop-btn" type="button" title={tt(t, "common.stop", "Stop")} onClick={() => void onAbort()}>
+                {tt(t, "common.stop", "Stop")}
               </button>
             </>
           ) : (
-            <button className="composer-send-btn" type="button" title="发送" disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
+            <button className="composer-send-btn" type="button" title={tt(t, "composer.send", "Send")} disabled={value.trim().length === 0 && attachments.length === 0} onClick={() => void onSend()}>
               <Icon name={IconNames.SEND} size={18} />
             </button>
           )}

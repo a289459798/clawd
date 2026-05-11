@@ -3,13 +3,15 @@ import type { CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { createTranslator, resolveLocale } from "../lib/i18n";
+import { mergeClawKitSettings } from "../lib/settingsDefaults";
 import type { PetAnimation, PetConversationContext, PetSummary } from "../types/pet";
 import "../App.css";
 
 const emptyContext: PetConversationContext = {
   status: "idle",
   lastUserMessage: "/pet",
-  lastReply: "等待 ClawKit 对话更新。",
+  lastReply: "Waiting for ClawKit conversation updates.",
   replies: [],
 };
 
@@ -88,6 +90,7 @@ function resolveAnimation(pet: PetSummary | null, state: string): PetAnimation |
 }
 
 export function PetWindow() {
+  const [t, setT] = useState(() => createTranslator(resolveLocale("auto", typeof navigator !== "undefined" ? navigator.language : null)));
   const initialPetId = new URLSearchParams(window.location.search).get("petId") ?? "";
   const [pets, setPets] = useState<PetSummary[]>([]);
   const [petId, setPetId] = useState(initialPetId);
@@ -122,6 +125,21 @@ export function PetWindow() {
       window.removeEventListener("keydown", handleGlobalKeyDown);
       void unlistenContext.then((unlisten) => unlisten());
       void unlistenSelected.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<unknown>("get_clawkit_settings")
+      .then((raw) => {
+        if (cancelled) return;
+        const settings = mergeClawKitSettings(raw);
+        const locale = resolveLocale(settings.general.language, typeof navigator !== "undefined" ? navigator.language : null);
+        setT(() => createTranslator(locale));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -249,13 +267,13 @@ export function PetWindow() {
               <div className="pet-bubble-command">{formatBubbleCommand(reply.userMessage, reply.title)}</div>
               {reply.loading && !reply.reply?.trim() ? (
                 <div className="pet-thinking-line" role="status" aria-live="polite">
-                  <span>正在思考</span>
+                  <span>{t("pet.thinking")}</span>
                   <i />
                   <i />
                   <i />
                 </div>
               ) : (
-                <p>{compactTail(reply.reply, "正在思考")}</p>
+                <p>{compactTail(reply.reply, t("pet.thinking"))}</p>
               )}
             </article>
           ))}
@@ -273,7 +291,7 @@ export function PetWindow() {
               setCollapsed((value) => !value);
               setLastExpandedSignature(replySignature);
             }}
-            title={collapsed ? "显示消息" : "隐藏消息"}
+            title={collapsed ? t("pet.showMessages") : t("pet.hideMessages")}
           >
             {collapsed ? (
               hiddenCount
@@ -309,7 +327,7 @@ export function PetWindow() {
           onClick={(event) => event.stopPropagation()}
         >
           <button type="button" onClick={() => void getCurrentWindow().close()}>
-            关闭宠物
+            {t("pet.closeWindow")}
           </button>
         </div>
       ) : null}

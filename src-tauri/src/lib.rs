@@ -152,6 +152,17 @@ struct WeixinPluginStatus {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct QqbotPluginStatus {
+    installed: bool,
+    enabled: bool,
+    installed_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: bool,
+    latest_check_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenClawCliStatus {
     installed: bool,
     path: Option<String>,
@@ -2203,6 +2214,50 @@ async fn weixin_plugin_status() -> Result<WeixinPluginStatus, String> {
         .map_err(|error| format!("failed to check WeChat plugin status: {error}"))
 }
 
+fn qqbot_plugin_status_blocking() -> QqbotPluginStatus {
+    const PACKAGE_NAME: &str = "@openclaw/qqbot";
+    const PLUGIN_ID: &str = "qqbot";
+
+    let installed = installed_plugin_from_registry(PLUGIN_ID, PACKAGE_NAME);
+    let (latest_version, latest_check_error) = if installed.is_some() {
+        match latest_npm_package_version(PACKAGE_NAME) {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
+
+    let installed_version = installed
+        .as_ref()
+        .map(|(version, _)| version.clone())
+        .filter(|version| !version.is_empty());
+    let update_available = installed_version
+        .as_deref()
+        .zip(latest_version.as_deref())
+        .map(|(installed, latest)| compare_semver(installed, latest) == std::cmp::Ordering::Less)
+        .unwrap_or(false);
+
+    QqbotPluginStatus {
+        installed: installed.is_some(),
+        enabled: installed
+            .as_ref()
+            .map(|(_, enabled)| *enabled)
+            .unwrap_or(false),
+        installed_version,
+        latest_version,
+        update_available,
+        latest_check_error,
+    }
+}
+
+#[tauri::command]
+async fn qqbot_plugin_status() -> Result<QqbotPluginStatus, String> {
+    tauri::async_runtime::spawn_blocking(qqbot_plugin_status_blocking)
+        .await
+        .map_err(|error| format!("failed to check QQ Bot plugin status: {error}"))
+}
+
 fn ensure_weixin_plugin_enabled_blocking() -> Result<String, String> {
     let enable_output = run_openclaw_command(&[
         "config",
@@ -2276,6 +2331,39 @@ fn open_weixin_plugin_update_terminal() -> Result<String, String> {
     };
     open_terminal_command(&command_line, "openclaw-weixin update")?;
     Ok("已打开终端更新 WeChat 插件。更新完成后请回到连接页刷新状态。".to_string())
+}
+
+#[tauri::command]
+fn open_qqbot_plugin_install_terminal() -> Result<String, String> {
+    if installed_plugin_from_registry("qqbot", "@openclaw/qqbot").is_some() {
+        let restart_output = run_openclaw_command(&["gateway", "restart"])?;
+        if restart_output.status.success() {
+            return Ok("QQ Bot 插件已安装，已尝试重启 Gateway。请回到连接页刷新状态。".to_string());
+        }
+        let stderr = String::from_utf8_lossy(&restart_output.stderr)
+            .trim()
+            .to_string();
+        return Ok(if stderr.is_empty() {
+            "QQ Bot 插件已安装。Gateway 重启状态未知，请手动执行 openclaw gateway restart。"
+                .to_string()
+        } else {
+            format!(
+                "QQ Bot 插件已安装，但 Gateway 重启失败：{stderr}。请手动执行 openclaw gateway restart。"
+            )
+        });
+    }
+
+    let install = openclaw_terminal_command(&["plugins", "install", "npm:@openclaw/qqbot"])?;
+    let restart = openclaw_terminal_command(&["gateway", "restart"])?;
+    let command_line = if cfg!(windows) {
+        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'QQ Bot plugin install finished. Return to ClawKit and refresh connections.' }}")
+    } else {
+        format!(
+            "{install} && {restart}; echo 'QQ Bot plugin install finished. Return to ClawKit and refresh connections.'"
+        )
+    };
+    open_terminal_command(&command_line, "openclaw-qqbot install")?;
+    Ok("已打开终端安装 QQ Bot 插件（@openclaw/qqbot）。完成后请回到连接页刷新状态。".to_string())
 }
 
 #[tauri::command]
@@ -2794,10 +2882,12 @@ pub fn run() {
             openclaw_cli_status,
             open_model_auth_terminal,
             weixin_plugin_status,
+            qqbot_plugin_status,
             ensure_weixin_plugin_enabled,
             open_weixin_login_terminal,
             open_weixin_plugin_install_terminal,
             open_weixin_plugin_update_terminal,
+            open_qqbot_plugin_install_terminal,
             open_openclaw_install_terminal,
             open_openclaw_update_terminal,
             list_codex_pets,

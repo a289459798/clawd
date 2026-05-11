@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import type { NavKey } from "../types/app";
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
 /** Alibaba iconfont Symbol JS injects `#icon-*` defs into the document body. */
 function NavSidebarIconfont({ symbolId }: { symbolId: string }) {
@@ -67,16 +72,19 @@ export function GatewayBanner({
   connected,
   statusText,
   error,
+  t,
 }: {
   connected: boolean;
   statusText: string;
   error: string | null;
+  t?: TranslateFn;
 }) {
+  const translate = t ?? ((key: string) => key);
   if (connected) return null;
   return (
     <div className="global-gateway-banner" role="alert">
       <div className="global-gateway-banner-main">
-        <strong>Gateway 不可用</strong>
+        <strong>{tt(translate, "app.gatewayUnavailable", "Gateway unavailable")}</strong>
         <span>{statusText}</span>
       </div>
       {error ? (
@@ -89,10 +97,13 @@ export function GatewayBanner({
 export function ImageLightbox({
   src,
   onClose,
+  t,
 }: {
   src: string | null;
   onClose: () => void;
+  t?: TranslateFn;
 }) {
+  const translate = t ?? ((key: string) => key);
   if (!src) return null;
   return (
     <div
@@ -107,7 +118,7 @@ export function ImageLightbox({
       <img
         className="image-lightbox-content"
         src={src}
-        alt="预览大图"
+        alt={tt(translate, "app.imagePreviewAlt", "Image preview")}
         onClick={(event) => event.stopPropagation()}
       />
     </div>
@@ -151,10 +162,10 @@ export function NavSidebar({
     { key: "pets", label: translate("nav.pets"), icon: "pet" },
   ];
   const openClawTitle = [
-    gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接",
-    gatewayVersion ? `版本 ${gatewayVersion}` : "",
-    updateAvailable ? "有可用更新" : "",
-    typeof sessionCount === "number" ? `${sessionCount} 个会话` : "",
+    gatewayConnected ? tt(translate, "app.openclawConnected", "OpenClaw connected") : tt(translate, "app.openclawDisconnected", "OpenClaw disconnected"),
+    gatewayVersion ? `${tt(translate, "app.version", "Version")} ${gatewayVersion}` : "",
+    updateAvailable ? tt(translate, "app.updateAvailable", "Update available") : "",
+    typeof sessionCount === "number" ? `${sessionCount} ${tt(translate, "app.sessions", "sessions")}` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -198,7 +209,7 @@ export function NavSidebar({
         >
           <img src="/openclaw-logo-text.svg" alt="OpenClaw" />
           {updateAvailable ? (
-            <span className="openclaw-update-badge">有更新</span>
+            <span className="openclaw-update-badge">{tt(translate, "app.hasUpdate", "Update")}</span>
           ) : null}
         </button>
         <button

@@ -2,17 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { PetAnimation, PetConversationContext, PetSummary } from "../types/pet";
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
 const statePreviews = [
-  { key: "idle", label: "待机", meta: "第 0 行 · 6 帧" },
-  { key: "running-right", label: "向右跑", meta: "第 1 行 · 8 帧" },
-  { key: "running-left", label: "向左跑", meta: "第 2 行 · 8 帧" },
-  { key: "waving", label: "挥手", meta: "第 3 行 · 4 帧" },
-  { key: "jumping", label: "跳跃", meta: "第 4 行 · 5 帧" },
-  { key: "failed", label: "失败", meta: "第 5 行 · 8 帧" },
-  { key: "waiting", label: "等待", meta: "第 6 行 · 6 帧" },
-  { key: "running", label: "奔跑", meta: "第 7 行 · 6 帧" },
-  { key: "review", label: "审视", meta: "第 8 行 · 6 帧" },
+  { key: "idle", label: "Idle", meta: "Row 0 · 6 frames" },
+  { key: "running-right", label: "Run right", meta: "Row 1 · 8 frames" },
+  { key: "running-left", label: "Run left", meta: "Row 2 · 8 frames" },
+  { key: "waving", label: "Wave", meta: "Row 3 · 4 frames" },
+  { key: "jumping", label: "Jump", meta: "Row 4 · 5 frames" },
+  { key: "failed", label: "Failed", meta: "Row 5 · 8 frames" },
+  { key: "waiting", label: "Waiting", meta: "Row 6 · 6 frames" },
+  { key: "running", label: "Running", meta: "Row 7 · 6 frames" },
+  { key: "review", label: "Review", meta: "Row 8 · 6 frames" },
 ];
 
 function petGlyph(pet: PetSummary) {
@@ -82,8 +87,10 @@ function PetSprite({
 
 export function PetsPage({
   context,
+  t,
 }: {
   context: PetConversationContext;
+  t: TranslateFn;
 }) {
   const [pets, setPets] = useState<PetSummary[]>([]);
   const [selectedPetId, setSelectedPetId] = useState("");
@@ -103,7 +110,7 @@ export function PetsPage({
       setPets(result);
       setSelectedPetId((current) => result.some((pet) => pet.id === current) ? current : result[0]?.id ?? "");
     } catch (error) {
-      console.warn("读取宠物失败", error);
+      console.warn("Failed to read pets", error);
     } finally {
       setLoading(false);
     }
@@ -120,7 +127,7 @@ export function PetsPage({
       await refreshPets();
       setSelectedPetId(imported.id);
     } catch (error) {
-      console.warn("导入宠物失败或已取消", error);
+      console.warn("Failed to import pet or cancelled", error);
     } finally {
       setBusy(false);
     }
@@ -134,7 +141,7 @@ export function PetsPage({
       setSummonedPetId(pet.id);
       setSelectedPetId(pet.id);
     } catch (error) {
-      console.warn("召唤宠物失败", error);
+      console.warn("Failed to summon pet", error);
     } finally {
       setBusy(false);
     }
@@ -156,7 +163,7 @@ export function PetsPage({
                 </div>
               </div>
 
-              <div className="pet-state-preview-grid" aria-label="宠物状态动画">
+              <div className="pet-state-preview-grid" aria-label={tt(t, "pets.stateAnimations", "Pet state animations")}>
                 {statePreviews.map((item) => (
                   <div className="pet-state-preview" key={item.key}>
                     <div className="pet-state-sprite">
@@ -170,31 +177,31 @@ export function PetsPage({
 
               <dl className="pet-meta-grid">
                 <div>
-                  <dt>状态</dt>
+                  <dt>{tt(t, "pets.status", "Status")}</dt>
                   <dd>{selectedPet.status}</dd>
                 </div>
                 <div>
-                  <dt>兼容</dt>
+                  <dt>{tt(t, "pets.compatibility", "Compatibility")}</dt>
                   <dd>{selectedPet.compatibleWith.join(", ") || "ClawKit"}</dd>
                 </div>
                 <div>
-                  <dt>来源</dt>
+                  <dt>{tt(t, "pets.source", "Source")}</dt>
                   <dd>{selectedPet.source === "clawkit" ? "ClawKit" : "Codex"}</dd>
                 </div>
               </dl>
             </>
           ) : (
             <div className="pet-detail-empty">
-              <strong>暂无宠物</strong>
-              <span>扫描或导入后会在这里展示宠物形象和状态动画。</span>
+              <strong>{tt(t, "pets.none", "No pets yet")}</strong>
+              <span>{tt(t, "pets.noneHint", "After scanning or importing, pets and animations will appear here.")}</span>
             </div>
           )}
         </article>
 
         <aside className="pets-list-panel">
-          <div className="pets-list" aria-label="宠物列表">
-          {loading ? <p className="empty-state">正在扫描 Codex 与 ClawKit 宠物目录</p> : null}
-          {!loading && pets.length === 0 ? <p className="empty-state">没有找到宠物。</p> : null}
+          <div className="pets-list" aria-label={tt(t, "pets.list", "Pet list")}>
+          {loading ? <p className="empty-state">{tt(t, "pets.scanning", "Scanning Codex and ClawKit pet directories")}</p> : null}
+          {!loading && pets.length === 0 ? <p className="empty-state">{tt(t, "pets.notFound", "No pets found.")}</p> : null}
           {pets.map((pet) => {
             const petSummoned = summonedPetId === pet.id;
             return (
@@ -216,7 +223,7 @@ export function PetsPage({
               </span>
               <span className="pet-row-main">
                 <strong>{pet.name}</strong>
-                <span>{pet.source === "clawkit" ? "ClawKit 目录" : "Codex 目录"} · {pet.species}</span>
+                <span>{pet.source === "clawkit" ? tt(t, "pets.sourceClawkit", "ClawKit directory") : tt(t, "pets.sourceCodex", "Codex directory")} · {pet.species}</span>
               </span>
               <button
                 className={`pet-row-summon ${petSummoned ? "summoned" : ""}`}
@@ -227,7 +234,7 @@ export function PetsPage({
                 }}
                 disabled={petSummoned || loading || busy}
               >
-                {petSummoned ? "已召唤" : "召唤"}
+                {petSummoned ? tt(t, "pets.summoned", "Summoned") : tt(t, "pets.summon", "Summon")}
               </button>
             </div>
             );
@@ -235,10 +242,10 @@ export function PetsPage({
           </div>
           <div className="pets-list-actions">
             <button className="ghost-button" type="button" onClick={() => void refreshPets()} disabled={loading || busy}>
-              刷新
+              {tt(t, "common.refresh", "Refresh")}
             </button>
             <button className="ghost-button" type="button" onClick={() => void importPet()} disabled={loading || busy}>
-              导入
+              {tt(t, "pets.import", "Import")}
             </button>
           </div>
         </aside>

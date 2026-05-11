@@ -31,5 +31,5 @@ export function resolveLocale(setting: ClawKitLanguage, systemLanguage?: string 
 }
 
 export function createTranslator(locale: Locale) {
-  return (key: string): string => dictionaries[locale][key] ?? dictionaries["zh-CN"][key] ?? key;
+  return (key: string): string => dictionaries[locale][key] ?? dictionaries["en-US"][key] ?? dictionaries["zh-CN"][key] ?? key;
 }

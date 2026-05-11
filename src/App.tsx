@@ -29,7 +29,7 @@ import { useMessageSender } from "./hooks/useMessageSender";
 import { useModels } from "./hooks/useModels";
 import { useUiFrameDiagnostics } from "./hooks/useUiFrameDiagnostics";
 import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
-import { connectionLabel, formatTokenCount, statusLabel } from "./lib/appFormatters";
+import { connectionLabel, formatTokenCount } from "./lib/appFormatters";
 import { buildSkillPolicyHints } from "./lib/skillPolicyHints";
 import {
   interpretPluginHealthError,
@@ -37,10 +37,17 @@ import {
   parseHealthPluginErrors,
 } from "./lib/pluginPackagingDiagnostics";
 import { resolveChannelHealthHint, resolveChannelOperationalDegraded } from "./lib/channelHealth";
+import { resolveGatewayChannelStatusIds } from "./lib/gatewayChannelStatusIds";
 import { parseSenderMeta } from "./lib/messageMeta";
 import { buildModelOptions, canonicalizeModelRef } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
+import {
+  buildQqbotSettingsPatch,
+  readQqbotEditorFormFromConfig,
+  validateQqbotEditorForm,
+  type QqbotEditorForm,
+} from "./lib/qqbotChannelPatch";
 import { describeUpdateRestartSentinel, extrapolateGatewayUptimeMs, formatApproxDurationMs } from "./lib/gatewayRuntimeInfo";
 import { resolveComposerThinkingOptions } from "./lib/thinkingOptions";
 import { buildAppearanceDataAttributes } from "./lib/appAppearance";
@@ -51,7 +58,7 @@ import { shouldRunDestructiveAction } from "./lib/sessionConfirmations";
 import { parseConversationFilters, serializeConversationFilters } from "./lib/appUiPersistence";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
 import type { PetConversationContext } from "./types/pet";
-import type { Agent, ChannelConnection, ClawKitBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
+import type { Agent, ChannelConnection, ClawKitBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QqbotPluginStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, GatewayUpdateStatusResult, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
@@ -64,6 +71,10 @@ const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const BOOTSTRAP_DEBUG_STORAGE_KEY = "clawkit.debug.bootstrapStep";
 const CONVERSATION_FILTERS_STORAGE_KEY = "clawkit.conversationFilters";
 const LAST_CONVERSATION_STORAGE_KEY = "clawkit.lastConversationId";
+const tr = (t: (key: string) => string, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
 function readBootstrapDebugStep() {
   try {
@@ -212,10 +223,10 @@ function resolvePetToolProgress(conversation: Conversation | null): string | nul
   if (!latestPart) return null;
   if (latestPart.kind === "tool_call") {
     const toolName = latestPart.tool?.trim() || "tool";
-    return `调用工具：${toolName}`;
+    return `Tool call: ${toolName}`;
   }
   const output = latestPart.text?.replace(/\s+/g, " ").trim();
-  return output ? `工具结果：${output.slice(0, 88)}` : "工具调用已返回";
+  return output ? `Tool result: ${output.slice(0, 88)}` : "Tool call returned";
 }
 
 function resolvePetLastUserMessage(conversation: Conversation | null): string | null {
@@ -308,7 +319,7 @@ function mapGatewaySkills(result: GatewaySkillsStatusResult): Skill[] {
   return (result.skills ?? []).map((skill) => ({
     id: skill.skillKey ?? skill.name,
     name: [skill.emoji, skill.name].filter(Boolean).join(" "),
-    summary: skill.description ?? "暂无技能说明。",
+    summary: skill.description ?? "No skill description yet.",
     description: skill.description,
     enabled: !skill.disabled,
     eligible: skill.eligible,
@@ -349,7 +360,7 @@ function mapGatewayChannels(result: GatewayChannelsStatusResult): {
   connections: ChannelConnection[];
   eventLoop?: GatewayChannelsEventLoopHealth;
 } {
-  const ids = result.channelOrder ?? Object.keys(result.channels ?? {});
+  const ids = resolveGatewayChannelStatusIds(result);
   const connections = ids.map((id) => {
     const accounts = result.channelAccounts?.[id] ?? [];
     const connected = accounts.some((account) => account.connected || account.running);
@@ -377,9 +388,14 @@ function mapGatewayChannels(result: GatewayChannelsStatusResult): {
       status,
       detail: error ? `${detail}：${error}` : detail,
       config: `channels.${id}`,
-      activity: connected ? "运行中" : configured ? "已配置，等待连接" : "待配置",
+      activity: connected ? "Running" : configured ? "Configured, waiting for connection" : "Pending configuration",
       healthHint,
-      packageName: id === "openclaw-weixin" ? "@tencent-weixin/openclaw-weixin" : undefined,
+      packageName:
+        id === "openclaw-weixin"
+          ? "@tencent-weixin/openclaw-weixin"
+          : id === "qqbot"
+            ? "@openclaw/qqbot"
+            : undefined,
       docsUrl: `https://docs.openclaw.ai/channels/${id}`,
       accounts: accounts.map((account) => ({
         accountId: account.accountId,
@@ -436,6 +452,10 @@ function App() {
   const [weixinStatus, setWeixinStatus] = useState<WeixinPluginStatus | null>(null);
   const [weixinBusy, setWeixinBusy] = useState(false);
   const [weixinMessage, setWeixinMessage] = useState<string | null>(null);
+  const [qqbotStatus, setQqbotStatus] = useState<QqbotPluginStatus | null>(null);
+  const [qqbotStatusBusy, setQqbotStatusBusy] = useState(false);
+  const [qqbotBusy, setQqbotBusy] = useState(false);
+  const [qqbotNotice, setQqbotNotice] = useState<{ text: string; tone: "success" | "error" } | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [usagePageReady, setUsagePageReady] = useState(true);
@@ -486,7 +506,7 @@ function App() {
   const suppressSessionRefreshUntilRef = useRef(0);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
-  const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
+  const [gatewayStatusText, setGatewayStatusText] = useState("Gateway connecting...");
   const [gatewayUptimeBasisMs, setGatewayUptimeBasisMs] = useState<number | null>(null);
   const [gatewayUptimeRecordedAtMs, setGatewayUptimeRecordedAtMs] = useState<number | null>(null);
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => (
@@ -514,6 +534,16 @@ function App() {
     [clawKitSettings.general.language],
   );
   const t = useMemo(() => createTranslator(locale), [locale]);
+  const localizedStatusLabel = useMemo(
+    () => ({
+      working: tr(t, "conversation.status.working", "Running"),
+      completed: tr(t, "conversation.status.completed", "Completed"),
+      failed: tr(t, "conversation.status.failed", "Failed"),
+      stopped: tr(t, "conversation.status.stopped", "Stopped"),
+      idle: tr(t, "conversation.status.idle", "Idle"),
+    }),
+    [t],
+  );
   const clawKitSelfUpdate = useClawKitSelfUpdate(
     bootstrapStep === "ready" && !clawKitSettingsLoading && clawKitSettings.general.autoCheckUpdates,
   );
@@ -673,7 +703,7 @@ function App() {
       setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
     } catch (error) {
       console.error("Failed to load clawkit bootstrap status", error);
-      setBootstrapError(error instanceof Error ? error.message : "读取 OpenClaw 状态失败");
+      setBootstrapError(error instanceof Error ? error.message : t("app.readOpenClawStatusFailed"));
     } finally {
       setBootstrapLoading(false);
     }
@@ -689,7 +719,7 @@ function App() {
       setBootstrapStep(status.bindingConfigured ? "connect_test" : "bind");
     } catch (error) {
       console.error("Failed to bind OpenClaw config", error);
-      setBootstrapError(error instanceof Error ? error.message : "写入 OpenClaw 配置失败");
+      setBootstrapError(error instanceof Error ? error.message : t("app.writeOpenClawConfigFailed"));
     } finally {
       setBindingInProgress(false);
     }
@@ -702,9 +732,25 @@ function App() {
       setWeixinStatus(status);
     } catch (error) {
       console.warn("Failed to refresh WeChat plugin status", error);
-      setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件状态检测失败");
+      setWeixinMessage(error instanceof Error ? error.message : t("app.wechatPluginStatusFailed"));
     } finally {
       setWeixinBusy(false);
+    }
+  }, []);
+
+  const refreshQqbotPluginStatus = useCallback(async () => {
+    setQqbotStatusBusy(true);
+    try {
+      const status = await invoke<QqbotPluginStatus>("qqbot_plugin_status");
+      setQqbotStatus(status);
+    } catch (error) {
+      console.warn("Failed to refresh QQ Bot plugin status", error);
+      setQqbotNotice({
+        text: error instanceof Error ? error.message : t("app.qqbotPluginStatusFailed"),
+        tone: "error",
+      });
+    } finally {
+      setQqbotStatusBusy(false);
     }
   }, []);
 
@@ -753,7 +799,7 @@ function App() {
       await refreshGatewayConnections();
     } catch (error) {
       console.error("Failed to enable WeChat plugin", error);
-      setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件启用失败");
+      setWeixinMessage(error instanceof Error ? error.message : t("app.wechatPluginEnableFailed"));
     } finally {
       setWeixinBusy(false);
     }
@@ -781,7 +827,7 @@ function App() {
         } catch (error) {
           console.error("Gateway connect test failed", error);
           if (!cancelled) {
-            setBootstrapConnectError(error instanceof Error ? error.message : "Gateway 连接测试失败");
+            setBootstrapConnectError(error instanceof Error ? error.message : t("app.gatewayConnectionTestFailed"));
           }
         }
       })();
@@ -1084,7 +1130,7 @@ function App() {
     try {
       const status = await invoke<GatewayStatus>("gateway_status");
       setGatewayConnected(status.connected);
-      setGatewayStatusText(status.statusText || (status.connected ? "Gateway 已连接" : "Gateway 未连接"));
+      setGatewayStatusText(status.statusText || (status.connected ? t("app.gatewayConnected") : t("app.gatewayDisconnected")));
       setGatewayError(status.error ?? null);
       setGatewayUptimeBasisMs(status.gatewayUptimeBasisMs ?? null);
       setGatewayUptimeRecordedAtMs(status.gatewayUptimeRecordedAtMs ?? null);
@@ -1113,7 +1159,7 @@ function App() {
       const message = error instanceof Error ? error.message : String(error);
       const disconnectedAt = Date.now();
       setGatewayConnected(false);
-      setGatewayStatusText(`Gateway 状态获取失败: ${message}`);
+      setGatewayStatusText(`${t("app.gatewayStatusFetchFailed")}: ${message}`);
       setGatewayError(message);
       setGatewayUptimeBasisMs(null);
       setGatewayUptimeRecordedAtMs(null);
@@ -1194,7 +1240,7 @@ function App() {
       })();
     } catch (error) {
       console.warn("Failed to refresh models page", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "模型状态刷新失败");
+      setModelsActionMessage(error instanceof Error ? error.message : t("app.modelStatusRefreshFailed"));
       setModelsPageLoading(false);
     }
   }, [currentDefaultModel, setModelOptions]);
@@ -1202,7 +1248,7 @@ function App() {
   const patchOpenClawConfig = useCallback(async (patch: unknown) => {
     const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
     if (!current.hash) {
-      throw new Error("OpenClaw 配置 hash 不可用，请刷新后重试");
+      throw new Error(t("app.openclawConfigHashMissing"));
     }
     await invoke<GatewayConfigPatchResult>("gateway_config_patch", {
       params: {
@@ -1212,6 +1258,58 @@ function App() {
       },
     });
   }, []);
+
+  const loadQqbotEditorForm = useCallback(async (): Promise<QqbotEditorForm> => {
+    await invoke("gateway_connect");
+    const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
+    return readQqbotEditorFormFromConfig(current.config);
+  }, []);
+
+  const saveQqbotSettings = useCallback(
+    async (form: QqbotEditorForm) => {
+      const validationMessage = validateQqbotEditorForm(form);
+      if (validationMessage) {
+        setQqbotNotice({ text: validationMessage, tone: "error" });
+        return;
+      }
+      setQqbotBusy(true);
+      setQqbotNotice(null);
+      try {
+        await invoke("gateway_connect");
+        await patchOpenClawConfig(buildQqbotSettingsPatch(form));
+        setQqbotNotice({
+          text: t("app.qqbotConfigSavedRestartGateway"),
+          tone: "success",
+        });
+        void refreshGatewayConnections();
+      } catch (error) {
+        setQqbotNotice({
+          text: error instanceof Error ? error.message : t("app.qqbotConfigSaveFailed"),
+          tone: "error",
+        });
+      } finally {
+        setQqbotBusy(false);
+      }
+    },
+    [patchOpenClawConfig, refreshGatewayConnections],
+  );
+
+  const runQqbotPluginInstall = useCallback(async () => {
+    setQqbotStatusBusy(true);
+    try {
+      const message = await invoke<string>("open_qqbot_plugin_install_terminal");
+      setQqbotNotice({ text: message, tone: "success" });
+      await refreshQqbotPluginStatus();
+      void refreshGatewayConnections();
+    } catch (error) {
+      setQqbotNotice({
+        text: error instanceof Error ? error.message : t("app.qqbotInstallTerminalFailed"),
+        tone: "error",
+      });
+    } finally {
+      setQqbotStatusBusy(false);
+    }
+  }, [refreshGatewayConnections, refreshQqbotPluginStatus]);
 
   const mergeSessionsListFromGateway = useCallback(async () => {
     await invoke("gateway_connect");
@@ -1247,10 +1345,10 @@ function App() {
         params: { sessionKey: key, thinkingLevel: null },
       });
       await mergeSessionsListFromGateway();
-      announceWorkspace("已恢复思考等级默认");
+      announceWorkspace(t("app.restoredThinkingDefault"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`恢复思考默认失败：${messageText}`);
+      setSessionActionError(`${t("app.restoreThinkingDefaultFailed")}: ${messageText}`);
     }
   }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
 
@@ -1264,10 +1362,10 @@ function App() {
         params: { sessionKey: key, fastMode: null },
       });
       await mergeSessionsListFromGateway();
-      announceWorkspace("已恢复 Fast 模式默认");
+      announceWorkspace(t("app.restoredFastDefault"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`恢复 Fast 默认失败：${messageText}`);
+      setSessionActionError(`${t("app.restoreFastDefaultFailed")}: ${messageText}`);
     }
   }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
 
@@ -1276,7 +1374,7 @@ function App() {
     setModelsActionMessage(null);
     try {
       await patchOpenClawConfig({ agents: { defaults: { model: { primary: modelRef }, models: { [modelRef]: {} } } } });
-      setModelsActionMessage(`已设为默认模型：${modelRef}`);
+      setModelsActionMessage(`${t("app.setDefaultModelSuccess")}: ${modelRef}`);
       setComposerModel(modelRef);
       setOpenClawConfigDefaultModel(modelRef);
       setOpenClawConfigDefaultModelLoaded(true);
@@ -1294,7 +1392,7 @@ function App() {
       void refreshModelsPage({ refreshAuth: true });
     } catch (error) {
       console.error("Failed to set default model", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "设置默认模型失败");
+      setModelsActionMessage(error instanceof Error ? error.message : t("app.setDefaultModelFailed"));
     } finally {
       setModelActionBusy(false);
     }
@@ -1309,7 +1407,7 @@ function App() {
       window.setTimeout(() => void refreshModelsPage({ refreshAuth: true }), 1500);
     } catch (error) {
       console.error("Failed to open model auth terminal", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "打开模型授权失败");
+      setModelsActionMessage(error instanceof Error ? error.message : t("app.openModelAuthFailed"));
     } finally {
       setModelActionBusy(false);
     }
@@ -1318,25 +1416,25 @@ function App() {
   const handleSaveProviderConfig = useCallback(async (draft: { provider: string; apiKey: string; baseUrl: string }) => {
     const provider = draft.provider.trim();
     if (!provider) {
-      setModelsActionMessage("Provider 不能为空");
+      setModelsActionMessage(t("app.providerRequired"));
       return;
     }
     const providerConfig: Record<string, unknown> = {};
     if (draft.apiKey.trim()) providerConfig.apiKey = draft.apiKey.trim();
     if (draft.baseUrl.trim()) providerConfig.baseUrl = draft.baseUrl.trim();
     if (Object.keys(providerConfig).length === 0) {
-      setModelsActionMessage("请填写 API Key 或 Base URL");
+      setModelsActionMessage(t("app.apiKeyOrBaseUrlRequired"));
       return;
     }
     setModelActionBusy(true);
     setModelsActionMessage(null);
     try {
       await patchOpenClawConfig({ models: { providers: { [provider]: providerConfig } } });
-      setModelsActionMessage(`已保存 Provider：${provider}`);
+      setModelsActionMessage(`${t("app.providerSaved")}: ${provider}`);
       void refreshModelsPage({ refreshAuth: true });
     } catch (error) {
       console.error("Failed to save provider config", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "保存 Provider 配置失败");
+      setModelsActionMessage(error instanceof Error ? error.message : t("app.saveProviderConfigFailed"));
     } finally {
       setModelActionBusy(false);
     }
@@ -1346,7 +1444,7 @@ function App() {
     const provider = draft.provider.trim();
     const modelId = draft.modelId.trim();
     if (!provider || !modelId) {
-      setModelsActionMessage("Provider 和模型名称不能为空");
+      setModelsActionMessage(t("app.providerAndModelRequired"));
       return;
     }
     const modelRef = `${provider}/${modelId}`;
@@ -1379,12 +1477,12 @@ function App() {
           },
         } : current);
       }
-      setModelsActionMessage(draft.setDefault ? `已保存并设为默认：${modelRef}` : `已保存模型：${modelRef}`);
+      setModelsActionMessage(draft.setDefault ? `${t("app.modelSavedAndDefault")}: ${modelRef}` : `${t("app.modelSaved")}: ${modelRef}`);
       void refreshOpenClawStatus();
       void refreshModelsPage({ refreshAuth: true });
     } catch (error) {
       console.error("Failed to save provider model config", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "保存模型配置失败");
+      setModelsActionMessage(error instanceof Error ? error.message : t("app.saveModelConfigFailed"));
     } finally {
       setModelActionBusy(false);
     }
@@ -1411,7 +1509,7 @@ function App() {
       }, 1500);
     } catch (error) {
       console.error("Failed to open OpenClaw update terminal", error);
-      setOpenClawUpdateMessage(error instanceof Error ? error.message : "OpenClaw 更新失败");
+      setOpenClawUpdateMessage(error instanceof Error ? error.message : t("app.openclawUpdateFailed"));
     } finally {
       setOpenClawUpdateBusy(false);
     }
@@ -1424,10 +1522,10 @@ function App() {
     setOpenClawGatewayMessage(null);
     try {
       const message = await invoke<string>(shouldStop ? "openclaw_gateway_stop" : "openclaw_gateway_start");
-      setOpenClawGatewayMessage(message || (shouldStop ? "OpenClaw Gateway 已停止。" : "OpenClaw Gateway 已启动。"));
+      setOpenClawGatewayMessage(message || (shouldStop ? t("app.openclawGatewayStopped") : t("app.openclawGatewayStarted")));
       if (shouldStop) {
         setGatewayConnected(false);
-        setGatewayStatusText("OpenClaw Gateway 已停止");
+        setGatewayStatusText(t("app.openclawGatewayStoppedShort"));
         setOpenClawStatus(null);
         setGatewayUpdateRestartSentinel(null);
         setGatewayUptimeBasisMs(null);
@@ -1436,7 +1534,7 @@ function App() {
       window.setTimeout(() => void refreshOpenClawStatus(), shouldStop ? 900 : 1200);
     } catch (error) {
       console.error(`Failed to ${shouldStop ? "stop" : "start"} OpenClaw Gateway`, error);
-      setOpenClawGatewayMessage(error instanceof Error ? error.message : (shouldStop ? "停止 OpenClaw 失败" : "启动 OpenClaw 失败"));
+      setOpenClawGatewayMessage(error instanceof Error ? error.message : (shouldStop ? t("app.stopOpenClawFailed") : t("app.startOpenClawFailed")));
       void refreshOpenClawStatus();
     } finally {
       setOpenClawGatewayBusy(false);
@@ -1457,7 +1555,7 @@ function App() {
     setSettingsOpenClawActionMessage(null);
     try {
       const message = await action();
-      setSettingsOpenClawActionMessage(message || "操作已执行。");
+      setSettingsOpenClawActionMessage(message || t("app.actionExecuted"));
     } catch (error) {
       setSettingsOpenClawActionMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1468,7 +1566,7 @@ function App() {
   const refreshSettingsOpenClawStatus = useCallback(() => {
     void runSettingsOpenClawAction(async () => {
       await Promise.all([loadBootstrapStatus(), refreshOpenClawCliStatus(), refreshOpenClawStatus()]);
-      return "状态已刷新。";
+      return t("app.statusRefreshed");
     });
   }, [loadBootstrapStatus, refreshOpenClawCliStatus, refreshOpenClawStatus, runSettingsOpenClawAction]);
 
@@ -1476,7 +1574,7 @@ function App() {
     void runSettingsOpenClawAction(async () => {
       await invoke("gateway_connect");
       await refreshOpenClawStatus();
-      return "Gateway 已重新连接。";
+      return t("app.gatewayReconnected");
     });
   }, [refreshOpenClawStatus, runSettingsOpenClawAction]);
 
@@ -1484,7 +1582,7 @@ function App() {
     void runSettingsOpenClawAction(async () => {
       await bindOpenClaw();
       await loadBootstrapStatus();
-      return "ClawKit 绑定已重新写入。";
+      return t("app.clawkitBindingRewritten");
     });
   }, [bindOpenClaw, loadBootstrapStatus, runSettingsOpenClawAction]);
 
@@ -1605,6 +1703,7 @@ function App() {
         void refreshGatewayConnections();
       }, 80);
       scheduleAfterPaint(() => void refreshWeixinPluginStatus(), 430);
+      scheduleAfterPaint(() => void refreshQqbotPluginStatus(), 430);
     }
     if (activeNav === "models" && openClawConfigDefaultModelLoaded) {
       scheduleAfterPaint(() => {
@@ -1623,7 +1722,7 @@ function App() {
       frames.forEach((frame) => window.cancelAnimationFrame(frame));
       timeouts.forEach((timeout) => clearTimeout(timeout));
     };
-  }, [activeNav, bootstrapStep, openClawConfigDefaultModelLoaded, refreshGatewayConnections, refreshGatewaySkills, refreshModelsPage, refreshUsage, refreshWeixinPluginStatus]);
+  }, [activeNav, bootstrapStep, openClawConfigDefaultModelLoaded, refreshGatewayConnections, refreshGatewaySkills, refreshModelsPage, refreshQqbotPluginStatus, refreshUsage, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     if (bootstrapStep !== "ready") {
@@ -1668,7 +1767,7 @@ function App() {
       }
     } catch (error) {
       console.error(`Failed to run ${command}`, error);
-      setWeixinMessage(error instanceof Error ? error.message : "WeChat 操作失败");
+      setWeixinMessage(error instanceof Error ? error.message : t("app.wechatActionFailed"));
     } finally {
       setWeixinBusy(false);
     }
@@ -1893,16 +1992,16 @@ function App() {
       if (agent.id !== agentId) return agent;
       const nextConversation: Conversation = {
         id: draftId,
-        title: "新对话",
+        title: t("conversation.newTitle"),
         status: "idle",
         lastMessage: "",
         lastTime: new Date().toLocaleString("zh-CN"),
         updatedAt: now,
         tokens: "--",
-        model: defaultModel || "未配置",
+        model: defaultModel || t("app.notConfigured"),
         thinkingDefault: draftThinkingDefault,
         thinkingOptions: draftThinkingOptions,
-        workspace: "未配置工作区",
+        workspace: t("app.workspaceNotConfigured"),
         visible: true,
         previewMessages: [],
         isDraft: true,
@@ -1922,9 +2021,9 @@ function App() {
     const conv = findConversationById(agentsRef.current, conversationId);
     const label = conv?.title ?? conversationId;
     if (visible) {
-      announceWorkspace(`「${label}」已加入主工作区`);
+      announceWorkspace(`"${label}" ${t("app.addedToMainWorkspace")}`);
     } else {
-      announceWorkspace(`「${label}」已从主工作区隐藏`);
+      announceWorkspace(`"${label}" ${t("app.hiddenFromMainWorkspace")}`);
     }
     setAgents((current) =>
       current.map((agent) =>
@@ -2215,12 +2314,12 @@ function App() {
         runId: runIdForAbort,
       });
       setGatewayError(null);
-      announceWorkspace("已请求停止当前运行");
+      announceWorkspace(t("app.stopRequested"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       setGatewayError(messageText);
-      setSessionActionError(`停止失败：${messageText}`);
-      setGatewayStatusText(`停止失败: ${messageText}`);
+      setSessionActionError(`${t("app.stopFailed")}: ${messageText}`);
+      setGatewayStatusText(`${t("app.stopFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
@@ -2230,17 +2329,17 @@ function App() {
     setSessionActionError(null);
     try {
       await navigator.clipboard.writeText(conversationId);
-      announceWorkspace("已复制会话 ID");
+      announceWorkspace(t("app.sessionIdCopied"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`复制失败：${messageText}`);
+      setSessionActionError(`${t("app.copyFailed")}: ${messageText}`);
     }
   }, [announceWorkspace]);
 
   const handleCompactSession = useCallback(async (conversationId: string) => {
     const target = findConversationById(agentsRef.current, conversationId);
     if (target?.isDraft) {
-      setSessionActionError("这还是草稿会话，发送第一条消息后才需要整理上下文。");
+      setSessionActionError(t("app.draftConversationCompactionHint"));
       return;
     }
     setSessionActionBusy("compact");
@@ -2248,13 +2347,13 @@ function App() {
     try {
       await invoke("gateway_connect");
       await invoke("gateway_sessions_compact", { params: { sessionKey: conversationId } });
-      announceWorkspace("已整理上下文，长对话会更轻一些");
+      announceWorkspace(t("app.contextCompacted"));
       if (activeConversationIdRef.current === conversationId) {
         await openConversationDetail(conversationId, true);
       }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`整理上下文失败：${messageText}`);
+      setSessionActionError(`${t("app.compactContextFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
@@ -2265,7 +2364,7 @@ function App() {
     const label = target?.title ?? conversationId;
     const confirmed = shouldRunDestructiveAction(
       clawKitSettings.general.confirmDestructiveActions,
-      () => window.confirm(`要让「${label}」重新开始吗？\n\n这会清空这段会话的上下文和历史消息，但会保留会话入口。`),
+      () => window.confirm(`${t("app.restartConfirmTitle")} "${label}"?\n\n${t("app.restartConfirmBody")}`),
     );
     if (!confirmed) return;
     setSessionActionBusy("reset");
@@ -2280,7 +2379,7 @@ function App() {
               : conversation,
           ),
         })));
-        announceWorkspace("草稿会话已清空");
+        announceWorkspace(t("app.draftConversationCleared"));
         return;
       }
       await invoke("gateway_connect");
@@ -2293,13 +2392,13 @@ function App() {
             : conversation,
         ),
       })));
-      announceWorkspace("会话已重新开始");
+      announceWorkspace(t("app.conversationRestarted"));
       if (activeConversationIdRef.current === conversationId) {
         await openConversationDetail(conversationId, true);
       }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`重新开始失败：${messageText}`);
+      setSessionActionError(`${t("app.restartFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
@@ -2310,7 +2409,7 @@ function App() {
     const label = target?.title ?? conversationId;
     const confirmed = shouldRunDestructiveAction(
       clawKitSettings.general.confirmDestructiveActions,
-      () => window.confirm(`确定删除「${label}」吗？\n\n删除后它会从 OpenClaw 会话列表中移除。只是暂时不想看到的话，可以在左侧列表用“隐藏”。`),
+      () => window.confirm(`${t("app.deleteConfirmTitle")} "${label}"?\n\n${t("app.deleteConfirmBody")}`),
     );
     if (!confirmed) return;
     setSessionActionBusy("delete");
@@ -2335,10 +2434,10 @@ function App() {
       if (activeConversationIdRef.current === conversationId) {
         setActiveConversationId(null);
       }
-      announceWorkspace("会话已删除");
+      announceWorkspace(t("app.conversationDeleted"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`删除失败：${messageText}`);
+      setSessionActionError(`${t("app.deleteFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
@@ -2401,6 +2500,7 @@ function App() {
 
   const bootstrapScreen = (
     <BootstrapScreens
+      t={t}
       bootstrapLoading={bootstrapLoading}
       bootstrapError={bootstrapError}
       bootstrapStatus={bootstrapStatus}
@@ -2427,8 +2527,8 @@ function App() {
 
   return (
     <main className="app-shell" {...appearanceDataAttributes}>
-      <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} />
-      <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} />
+      <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} t={t} />
+      <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} t={t} />
       <MandatoryAppUpdateModal
         open={clawKitSelfUpdate.mandatoryUpdateOpen}
         version={clawKitSelfUpdate.pendingVersion}
@@ -2437,6 +2537,7 @@ function App() {
         t={t}
       />
       <AgentCreateDialog
+        t={t}
         open={agentCreateOpen}
         creating={agentCreating}
         error={agentCreateError}
@@ -2448,6 +2549,7 @@ function App() {
         onCreate={handleCreateAgent}
       />
       <AgentFilesDialog
+        t={t}
         open={Boolean(agentFilesAgentId)}
         agentId={agentFilesAgentId}
         agentName={agents.find((agent) => agent.id === agentFilesAgentId)?.name}
@@ -2479,6 +2581,7 @@ function App() {
         {activeNav === "conversations" ? (
           <>
             <ResourceSidebar
+              t={t}
               agents={agents}
               expandedConversationId={expandedConversationId}
               visible={showResourceSidebar}
@@ -2493,6 +2596,7 @@ function App() {
             />
 
             <ConversationWorkspace
+              t={t}
               defaultDisplayMode={clawKitSettings.general.defaultConversationMode}
               sendShortcut={clawKitSettings.general.sendShortcut}
               visibleConversationCount={visibleConversations.length}
@@ -2509,7 +2613,7 @@ function App() {
               conversationRuntimeFilter={conversationRuntimeFilter}
               conversationRuntimeOptions={conversationRuntimeOptions}
               conversationSort={conversationSort}
-              statusLabel={statusLabel}
+              statusLabel={localizedStatusLabel}
               userExpanded={userExpanded}
               aiResponseScrollRef={aiResponseScrollRef}
               showJumpToBottom={showJumpToBottom}
@@ -2586,6 +2690,7 @@ function App() {
 
         {activeNav === "models" ? (
           <ModelsPage
+            t={t}
             configuredModels={modelsPageReady ? configuredModels : []}
             allModels={modelsPageReady ? allModels : []}
             authStatus={modelsPageReady ? modelAuthStatus : null}
@@ -2606,6 +2711,7 @@ function App() {
             skills={metadataPageReady ? skills : []}
             pluginLoadRepairs={metadataPageReady ? pluginLoadRepairs : []}
             loading={metadataLoading || !metadataPageReady}
+            t={t}
             onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
           />
         ) : null}
@@ -2617,14 +2723,26 @@ function App() {
             eventLoopHealth={metadataPageReady ? channelEventLoopHealth : null}
             unmatchedPluginRepairs={metadataPageReady ? unmatchedPluginRepairs : []}
             loading={metadataLoading || !metadataPageReady}
+            gatewayConnected={gatewayConnected}
             weixinStatus={weixinStatus}
             weixinBusy={weixinBusy}
             weixinMessage={weixinMessage}
+            qqbotBusy={qqbotBusy}
+            qqbotStatusBusy={qqbotStatusBusy}
+            qqbotNotice={qqbotNotice}
+            qqbotPluginRegistered={Boolean(qqbotStatus?.installed)}
+            qqbotStatus={qqbotStatus}
+            t={t}
             onRefreshWeixinStatus={() => void refreshWeixinPluginStatus()}
             onEnableWeixin={() => void ensureWeixinPluginEnabled()}
             onInstallWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_install_terminal")}
             onUpdateWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_update_terminal")}
             onLoginWeixin={() => void runWeixinTerminalAction("open_weixin_login_terminal")}
+            onInstallQqbotPlugin={() => void runQqbotPluginInstall()}
+            onRefreshQqbotStatus={() => void refreshQqbotPluginStatus()}
+            onLoadQqbotEditorForm={loadQqbotEditorForm}
+            onSaveQqbotSettings={(form) => void saveQqbotSettings(form)}
+            onDismissQqbotNotice={() => setQqbotNotice(null)}
           />
         ) : null}
 
@@ -2632,15 +2750,16 @@ function App() {
           <CronPage
             gatewayConnected={gatewayConnected}
             onOpenSessionKey={handleOpenCronSessionKey}
+            t={t}
           />
         ) : null}
 
         {activeNav === "usage" ? (
-          <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} />
+          <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} t={t} />
         ) : null}
 
         {activeNav === "pets" ? (
-          <PetsPage context={petContext} />
+          <PetsPage context={petContext} t={t} />
         ) : null}
 
         {activeNav === "settings" ? (
@@ -2680,15 +2799,15 @@ function App() {
             <div className="openclaw-info-status">
               <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
               <div>
-                <strong>{gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接"}</strong>
+                <strong>{gatewayConnected ? t("app.openclawConnected") : t("app.openclawDisconnected")}</strong>
                 <span>{gatewayStatusText}</span>
               </div>
             </div>
             <button
               className={`openclaw-connect-switch ${openClawGatewayBusy ? "busy" : ""}`}
               type="button"
-              title={gatewayConnected ? "停止 OpenClaw Gateway" : "启动 OpenClaw Gateway"}
-              aria-label={gatewayConnected ? "停止 OpenClaw Gateway" : "启动 OpenClaw Gateway"}
+              title={gatewayConnected ? t("openclaw.stopGateway") : t("openclaw.startGateway")}
+              aria-label={gatewayConnected ? t("openclaw.stopGateway") : t("openclaw.startGateway")}
               aria-pressed={gatewayConnected}
               disabled={openClawGatewayBusy}
               onClick={() => void toggleOpenClawGateway()}
@@ -2703,29 +2822,30 @@ function App() {
             </button>
           </div>
           <div className="openclaw-info-metrics">
-            <div><span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
-            <div><span>默认模型</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong></div>
-            <div><span>默认 Agent</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong></div>
+            <div><span>{t("openclaw.sessions")}</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
+            <div><span>{t("openclaw.defaultModel")}</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong></div>
+            <div><span>{t("openclaw.defaultAgent")}</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong></div>
             {gatewayConnected && gatewayProcessUptimeLabel ? (
-              <div><span>Gateway 运行时长</span><strong title="基于连接握手时的进程 uptime，并随本机时间推算">约 {gatewayProcessUptimeLabel}</strong></div>
+              <div><span>{t("openclaw.gatewayUptime")}</span><strong title={t("openclaw.gatewayUptimeHint")}>{t("openclaw.approx")} {gatewayProcessUptimeLabel}</strong></div>
             ) : null}
           </div>
           {gatewayConnected && gatewayRestartSentinelLine ? (
             <p className="openclaw-restart-sentinel-hint">{gatewayRestartSentinelLine}</p>
           ) : null}
           <OpenClawUiDiagnostics
+            t={t}
             entries={uiFrameDiagnostics.entries}
             capabilities={uiFrameDiagnostics.capabilities}
             onClear={uiFrameDiagnostics.clear}
           />
           <div className={`openclaw-update-panel ${openClawCliStatus?.updateAvailable ? "available" : ""}`}>
             <div className="openclaw-update-row">
-              <span>当前版本</span>
+              <span>{t("openclaw.currentVersion")}</span>
               <strong>{openClawCliStatus?.installedVersion || openClawStatus?.runtimeVersion || "-"}</strong>
             </div>
             <div className="openclaw-update-row">
-              <span>最新版本</span>
-              <strong>{openClawCliStatus?.latestVersion || (openClawCliStatus?.latestCheckError ? "检测失败" : "-")}</strong>
+              <span>{t("openclaw.latestVersion")}</span>
+              <strong>{openClawCliStatus?.latestVersion || (openClawCliStatus?.latestCheckError ? t("openclaw.checkFailed") : "-")}</strong>
             </div>
             {openClawCliStatus?.latestCheckError ? (
               <p className="openclaw-update-note">{openClawCliStatus.latestCheckError}</p>
@@ -2734,14 +2854,14 @@ function App() {
             {openClawGatewayMessage ? <p className="openclaw-update-note">{openClawGatewayMessage}</p> : null}
             {openClawCliStatus?.updateAvailable ? (
               <button className="openclaw-update-button" type="button" onClick={() => void runOpenClawUpdate()} disabled={openClawUpdateBusy}>
-                {openClawUpdateBusy ? "正在打开终端..." : "更新 OpenClaw"}
+                {openClawUpdateBusy ? t("openclaw.openingTerminal") : t("openclaw.update")}
               </button>
             ) : null}
           </div>
           <div className="openclaw-info-actions">
-            <button className="openclaw-home-button" type="button" onClick={() => void openLocalOpenClaw()} title="打开本地 OpenClaw">
+            <button className="openclaw-home-button" type="button" onClick={() => void openLocalOpenClaw()} title={t("openclaw.openLocal")}>
               <span>⌂</span>
-              打开本地 OpenClaw
+              {t("openclaw.openLocal")}
             </button>
           </div>
         </aside>

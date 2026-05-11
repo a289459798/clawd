@@ -17,8 +17,13 @@ import {
 
 type CronPageProps = {
   gatewayConnected: boolean;
+  t: (key: string) => string;
   /** Navigate to chat tab and focus session key */
   onOpenSessionKey: (sessionKey: string) => void;
+};
+const tt = (t: (key: string) => string, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
 };
 
 type CronEditDraft = {
@@ -45,7 +50,7 @@ function formatRunTs(ts: number): string {
   }
 }
 
-export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) {
+export function CronPage({ gatewayConnected, onOpenSessionKey, t }: CronPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [listPayload, setListPayload] = useState<unknown>(null);
@@ -77,7 +82,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
       const raw = await invoke<unknown>("gateway_cron_list", { params });
       setListPayload(raw);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载定时任务失败");
+      setError(err instanceof Error ? err.message : tt(t, "cron.loadFailed", "Failed to load cron jobs"));
       setListPayload(null);
     } finally {
       setLoading(false);
@@ -128,7 +133,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
 
   const removeJob = async (job: CronJobRow) => {
     const title = job.name?.trim() || job.id;
-    if (!window.confirm(`删除定时任务「${title}」？此操作不可撤销。`)) return;
+    if (!window.confirm(`${tt(t, "cron.deleteConfirmPrefix", "Delete cron job")} "${title}"? ${tt(t, "cron.deleteConfirmSuffix", "This action cannot be undone.")}`)) return;
     setBusyJobId(job.id);
     setError(null);
     try {
@@ -197,7 +202,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
   };
 
   const saveEditDraft = async (draft: CronEditDraft) => {
-    const patch = buildCronPatchFromDraft(draft, !draft.id);
+    const patch = buildCronPatchFromDraft(draft, !draft.id, t);
     if (!patch) return;
     setEditDraft(null);
     if (draft.id) {
@@ -219,7 +224,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
   if (!gatewayConnected) {
     return (
       <section className="single-page cron-page">
-        <div className="empty-panel">请先连接 OpenClaw Gateway，才能读取 Gateway 侧的定时任务列表。</div>
+        <div className="empty-panel">{tt(t, "cron.connectGatewayFirst", "Please connect OpenClaw Gateway first to load cron jobs.")}</div>
       </section>
     );
   }
@@ -227,27 +232,27 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
   return (
     <section className="single-page cron-page">
       <div className="cron-summary-grid">
-        <div className="cron-summary-stat"><span>任务</span><strong>{parsed.total || parsed.jobs.length}</strong></div>
-        <div className="cron-summary-stat"><span>启用</span><strong>{enabledCount}</strong></div>
-        <div className="cron-summary-stat"><span>投递</span><strong>{deliveryCount}</strong></div>
-        <div className="cron-summary-stat"><span>禁用</span><strong>{disabledCount}</strong></div>
+        <div className="cron-summary-stat"><span>{tt(t, "cron.stat.jobs", "Jobs")}</span><strong>{parsed.total || parsed.jobs.length}</strong></div>
+        <div className="cron-summary-stat"><span>{tt(t, "cron.stat.enabled", "Enabled")}</span><strong>{enabledCount}</strong></div>
+        <div className="cron-summary-stat"><span>{tt(t, "cron.stat.delivery", "Delivery")}</span><strong>{deliveryCount}</strong></div>
+        <div className="cron-summary-stat"><span>{tt(t, "cron.stat.disabled", "Disabled")}</span><strong>{disabledCount}</strong></div>
       </div>
 
       <div className="cron-toolbar">
         <span />
         <button type="button" className="ghost-link-button" onClick={openCreate} disabled={loading || busyJobId !== null}>
-          创建
+          {tt(t, "common.create", "Create")}
         </button>
         <button type="button" className="ghost-link-button primary-action" onClick={() => void loadList()} disabled={loading}>
-          {loading ? "刷新中" : "刷新"}
+          {loading ? tt(t, "common.refreshing", "Refreshing") : tt(t, "common.refresh", "Refresh")}
         </button>
       </div>
 
       {error ? <div className="inline-page-status cron-error">{error}</div> : null}
-      {loading && !parsed.jobs.length ? <div className="inline-page-status">正在加载定时任务...</div> : null}
+      {loading && !parsed.jobs.length ? <div className="inline-page-status">{tt(t, "cron.loading", "Loading cron jobs...")}</div> : null}
 
       {!loading && !error && parsed.jobs.length === 0 ? (
-        <div className="empty-panel">当前筛选条件下没有定时任务。</div>
+        <div className="empty-panel">{tt(t, "cron.empty", "No cron jobs under current filters.")}</div>
       ) : null}
 
       <div className="cron-job-list">
@@ -266,6 +271,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
             onEdit={() => openEdit(job)}
             onToggleEnabled={() => void updateJob(job.id, { enabled: job.enabled === false })}
             onDelete={() => void removeJob(job)}
+            t={t}
           />
         ))}
       </div>
@@ -276,16 +282,17 @@ export function CronPage({ gatewayConnected, onOpenSessionKey }: CronPageProps) 
           onChange={setEditDraft}
           onCancel={() => setEditDraft(null)}
           onSubmit={() => void saveEditDraft(editDraft)}
+          t={t}
         />
       ) : null}
     </section>
   );
 }
 
-function buildCronPatchFromDraft(draft: CronEditDraft, requirePayload: boolean): Record<string, unknown> | null {
+function buildCronPatchFromDraft(draft: CronEditDraft, requirePayload: boolean, t: (key: string) => string): Record<string, unknown> | null {
   const name = draft.name.trim();
   if (!name) {
-    window.alert("任务名称不能为空。");
+    window.alert(tt(t, "cron.alert.nameRequired", "Job name is required."));
     return null;
   }
   const patch: Record<string, unknown> = {
@@ -295,11 +302,11 @@ function buildCronPatchFromDraft(draft: CronEditDraft, requirePayload: boolean):
   };
   const payloadText = draft.payloadText.trim();
   if (requirePayload && !payloadText) {
-    window.alert("创建任务时需要填写任务内容。");
+    window.alert(tt(t, "cron.alert.payloadRequired", "Job content is required when creating."));
     return null;
   }
   if (draft.sendMode === "webhook" && !draft.deliveryTo.trim()) {
-    window.alert("Webhook URL 不能为空。");
+    window.alert(tt(t, "cron.alert.webhookRequired", "Webhook URL is required."));
     return null;
   }
   Object.assign(patch, buildSendModePatch(draft, payloadText));
@@ -307,7 +314,7 @@ function buildCronPatchFromDraft(draft: CronEditDraft, requirePayload: boolean):
   if (draft.scheduleKind === "cron") {
     const expr = draft.cronExpr.trim();
     if (!expr) {
-      window.alert("Cron 表达式不能为空。");
+      window.alert(tt(t, "cron.alert.cronRequired", "Cron expression is required."));
       return null;
     }
     patch.schedule = {
@@ -318,13 +325,13 @@ function buildCronPatchFromDraft(draft: CronEditDraft, requirePayload: boolean):
   } else if (draft.scheduleKind === "every") {
     const minutes = Number(draft.everyMinutes);
     if (!Number.isFinite(minutes) || minutes <= 0) {
-      window.alert("间隔分钟必须大于 0。");
+      window.alert(tt(t, "cron.alert.everyMinutesInvalid", "Interval minutes must be greater than 0."));
       return null;
     }
     patch.schedule = { kind: "every", everyMs: Math.round(minutes * 60_000) };
   } else {
     if (!draft.atLocal) {
-      window.alert("定时时间不能为空。");
+      window.alert(tt(t, "cron.alert.atRequired", "Scheduled time is required."));
       return null;
     }
     patch.schedule = { kind: "at", at: new Date(draft.atLocal).toISOString() };
@@ -391,12 +398,12 @@ function buildCronCreateFromPatch(patch: Record<string, unknown>): Record<string
   };
 }
 
-function describeCronSendMode(job: CronJobRow, deliveryText: string): string {
+function describeCronSendMode(job: CronJobRow, deliveryText: string, t: (key: string) => string): string {
   const mode = resolveCronSendMode(job);
-  if (mode === "notify") return `通知我 · ${deliveryText}`;
-  if (mode === "silent") return "静默 · 运行时不通知";
-  if (mode === "isolated") return "独立会话 · 在自己的会话中运行";
-  return "Webhook · 将结果发送到 URL";
+  if (mode === "notify") return `${tt(t, "cron.send.notify", "Notify")} · ${deliveryText}`;
+  if (mode === "silent") return tt(t, "cron.send.silent", "Silent · Run without notification");
+  if (mode === "isolated") return tt(t, "cron.send.isolated", "Isolated session · Run in own session");
+  return tt(t, "cron.send.webhook", "Webhook · Send result to URL");
 }
 
 function CronJobCard({
@@ -412,6 +419,7 @@ function CronJobCard({
   onEdit,
   onToggleEnabled,
   onDelete,
+  t,
 }: {
   job: CronJobRow;
   preview?: { label?: string; detail?: string };
@@ -425,6 +433,7 @@ function CronJobCard({
   onEdit: () => void;
   onToggleEnabled: () => void;
   onDelete: () => void;
+  t: (key: string) => string;
 }) {
   const scheduleText = formatCronSchedule(job.schedule);
   const delivery = describeCronDeliveryLine(job, preview ?? null);
@@ -432,7 +441,7 @@ function CronJobCard({
   const lastRunText = formatCronTimestamp(job.state?.lastRunAtMs);
   const lastRunStatus = job.state?.lastRunStatus;
   const sendMode = resolveCronSendMode(job);
-  const sendText = describeCronSendMode(job, delivery.text);
+  const sendText = describeCronSendMode(job, delivery.text, t);
 
   return (
     <article className={`info-card cron-job-card ${job.enabled === false ? "cron-job-disabled" : ""} ${expanded ? "cron-job-expanded" : ""}`}>
@@ -441,30 +450,30 @@ function CronJobCard({
           <strong>{title}</strong>
           <div className="cron-job-meta">
             <code>{job.id}</code>
-            {job.agentId ? <span>Agent · {job.agentId}</span> : null}
+            {job.agentId ? <span>{tt(t, "common.agent", "Agent")} · {job.agentId}</span> : null}
           </div>
         </div>
         <div className="cron-job-badges">
-          {job.enabled === false ? <span className="toggle-badge disabled">已禁用</span> : null}
+          {job.enabled === false ? <span className="toggle-badge disabled">{tt(t, "common.disabled", "Disabled")}</span> : null}
           {sendMode === "silent" || sendMode === "isolated" ? (
-            <span className="cron-badge cron-badge-none" title="不在通道投递摘要，仅执行任务">
-              {sendMode === "isolated" ? "独立" : "静默"}
+            <span className="cron-badge cron-badge-none" title={tt(t, "cron.noDeliverySummary", "No channel delivery summary, execute only")}>
+              {sendMode === "isolated" ? tt(t, "cron.badge.isolated", "Isolated") : tt(t, "cron.badge.silent", "Silent")}
             </span>
           ) : (
-            <span className="cron-badge cron-badge-deliver">{sendMode === "webhook" ? "Webhook" : "通知"}</span>
+            <span className="cron-badge cron-badge-deliver">{sendMode === "webhook" ? "Webhook" : tt(t, "cron.badge.notify", "Notify")}</span>
           )}
         </div>
       </div>
       <div className="cron-job-schedule">
-        <span>调度</span>
+        <span>{tt(t, "cron.schedule", "Schedule")}</span>
         <code>{scheduleText}</code>
       </div>
       <div className="cron-job-delivery-line">
-        <span>发送</span>
+        <span>{tt(t, "cron.delivery", "Delivery")}</span>
         <span>{sendText}</span>
       </div>
       <div className="cron-job-last-run">
-        <span>最后执行</span>
+        <span>{tt(t, "cron.lastRun", "Last run")}</span>
         <span title={lastRunText}>
           {lastRunText}
           {lastRunStatus ? <em className={`cron-last-status cron-last-status-${lastRunStatus}`}>{lastRunStatus}</em> : null}
@@ -472,46 +481,46 @@ function CronJobCard({
       </div>
       {job.sessionKey ? (
         <div className="cron-job-session">
-          <span>绑定会话</span>
+          <span>{tt(t, "cron.boundSession", "Bound session")}</span>
           <button type="button" className="ghost-link-button" onClick={() => onOpenSessionKey(job.sessionKey!)}>
-            打开会话
+            {tt(t, "conversation.openSession", "Open session")}
           </button>
         </div>
       ) : null}
       <div className="cron-job-actions">
         <button type="button" className="ghost-link-button primary-action" onClick={onRun} disabled={busy}>
-          {busy ? "运行中" : "运行"}
+          {busy ? tt(t, "cron.running", "Running") : tt(t, "cron.run", "Run")}
         </button>
         <button type="button" className="ghost-link-button" onClick={onToggleRuns} disabled={busy}>
-          {expanded ? "隐藏运行记录" : "运行记录"}
+          {expanded ? tt(t, "cron.hideRuns", "Hide runs") : tt(t, "cron.runs", "Runs")}
         </button>
-        <button type="button" className="ghost-link-button" onClick={onEdit} disabled={busy}>编辑</button>
+        <button type="button" className="ghost-link-button" onClick={onEdit} disabled={busy}>{tt(t, "common.edit", "Edit")}</button>
         <button type="button" className="ghost-link-button" onClick={onToggleEnabled} disabled={busy}>
-          {job.enabled === false ? "启用" : "停用"}
+          {job.enabled === false ? tt(t, "common.enable", "Enable") : tt(t, "common.disable", "Disable")}
         </button>
-        <button type="button" className="ghost-link-button danger-action" onClick={onDelete} disabled={busy}>删除</button>
+        <button type="button" className="ghost-link-button danger-action" onClick={onDelete} disabled={busy}>{tt(t, "common.delete", "Delete")}</button>
       </div>
       {expanded ? (
         <div className="cron-runs-panel">
-          {runsLoading ? <div className="inline-page-status">加载运行记录…</div> : null}
-          {!runsLoading && runs && runs.length === 0 ? <div className="empty-panel">暂无运行记录。</div> : null}
+          {runsLoading ? <div className="inline-page-status">{tt(t, "cron.loadingRuns", "Loading runs...")}</div> : null}
+          {!runsLoading && runs && runs.length === 0 ? <div className="empty-panel">{tt(t, "cron.emptyRuns", "No run records yet.")}</div> : null}
           {!runsLoading && runs && runs.length > 0 ? (
             <div className="cron-runs-list">
               {runs.map((row, idx) => (
                 <div className="cron-run-row" key={`${row.ts}-${idx}`}>
                   <span className="cron-run-time">{formatRunTs(row.ts)}</span>
                   <span className={`cron-run-status cron-run-status-${row.status ?? "unknown"}`}>{row.status ?? "-"}</span>
-                  <span className="cron-run-summary">{row.summary || row.jobId || "无摘要"}</span>
+                  <span className="cron-run-summary">{row.summary || row.jobId || tt(t, "cron.noSummary", "No summary")}</span>
                   {row.sessionKey ? (
                     <button
                       type="button"
                       className="ghost-link-button"
                       onClick={() => onOpenSessionKey(row.sessionKey!)}
                     >
-                      打开会话
+                      {tt(t, "conversation.openSession", "Open session")}
                     </button>
                   ) : (
-                    <span className="cron-run-no-session">无会话</span>
+                    <span className="cron-run-no-session">{tt(t, "cron.noSession", "No session")}</span>
                   )}
                 </div>
               ))}
@@ -529,12 +538,14 @@ function CronEditDialog({
   onChange,
   onCancel,
   onSubmit,
+  t,
 }: {
   draft: CronEditDraft;
   busy: boolean;
   onChange: (draft: CronEditDraft) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  t: (key: string) => string;
 }) {
   const patch = <K extends keyof CronEditDraft>(key: K, value: CronEditDraft[K]) => {
     onChange({ ...draft, [key]: value });
@@ -551,37 +562,37 @@ function CronEditDialog({
       >
         <div className="cron-edit-head">
           <div>
-            <strong>{draft.id ? "编辑定时任务" : "创建定时任务"}</strong>
-            <span>{draft.id ?? "新建任务"}</span>
+            <strong>{draft.id ? tt(t, "cron.editTitle", "Edit cron job") : tt(t, "cron.createTitle", "Create cron job")}</strong>
+            <span>{draft.id ?? tt(t, "cron.newJob", "New job")}</span>
           </div>
-          <button type="button" onClick={onCancel} aria-label="关闭" title="关闭">×</button>
+          <button type="button" onClick={onCancel} aria-label={tt(t, "common.close", "Close")} title={tt(t, "common.close", "Close")}>×</button>
         </div>
 
         <label>
-          <span>名称</span>
+          <span>{tt(t, "common.name", "Name")}</span>
           <input value={draft.name} onChange={(event) => patch("name", event.target.value)} />
         </label>
         <label>
-          <span>说明</span>
+          <span>{tt(t, "common.description", "Description")}</span>
           <input value={draft.description} onChange={(event) => patch("description", event.target.value)} />
         </label>
         <label>
-          <span>任务内容</span>
-          <input value={draft.payloadText} onChange={(event) => patch("payloadText", event.target.value)} placeholder="到时间后注入给 OpenClaw 的任务文本" />
+          <span>{tt(t, "cron.payload", "Job content")}</span>
+          <input value={draft.payloadText} onChange={(event) => patch("payloadText", event.target.value)} placeholder={tt(t, "cron.payloadPlaceholder", "Text injected into OpenClaw when triggered")} />
         </label>
         <label className="cron-edit-checkbox">
           <input type="checkbox" checked={draft.enabled} onChange={(event) => patch("enabled", event.target.checked)} />
-          <span>启用任务</span>
+          <span>{tt(t, "cron.enableJob", "Enable job")}</span>
         </label>
 
         <div className="cron-edit-section">
-          <strong>调度</strong>
+          <strong>{tt(t, "cron.schedule", "Schedule")}</strong>
           <label>
-            <span>类型</span>
+            <span>{tt(t, "common.type", "Type")}</span>
             <select value={draft.scheduleKind} onChange={(event) => patch("scheduleKind", event.target.value as CronEditDraft["scheduleKind"])}>
-              <option value="cron">Cron 表达式</option>
-              <option value="every">固定间隔</option>
-              <option value="at">指定时间</option>
+              <option value="cron">{tt(t, "cron.type.cron", "Cron expression")}</option>
+              <option value="every">{tt(t, "cron.type.every", "Fixed interval")}</option>
+              <option value="at">{tt(t, "cron.type.at", "Specific time")}</option>
             </select>
           </label>
           {draft.scheduleKind === "cron" ? (
@@ -591,45 +602,45 @@ function CronEditDialog({
                 <input value={draft.cronExpr} onChange={(event) => patch("cronExpr", event.target.value)} placeholder="0 9 * * *" />
               </label>
               <label>
-                <span>时区</span>
+                <span>{tt(t, "common.timezone", "Timezone")}</span>
                 <input value={draft.cronTz} onChange={(event) => patch("cronTz", event.target.value)} placeholder="Asia/Shanghai" />
               </label>
             </>
           ) : null}
           {draft.scheduleKind === "every" ? (
             <label>
-              <span>间隔分钟</span>
+              <span>{tt(t, "cron.intervalMinutes", "Interval minutes")}</span>
               <input type="number" min="1" value={draft.everyMinutes} onChange={(event) => patch("everyMinutes", event.target.value)} />
             </label>
           ) : null}
           {draft.scheduleKind === "at" ? (
             <label>
-              <span>时间</span>
+              <span>{tt(t, "common.time", "Time")}</span>
               <input type="datetime-local" value={draft.atLocal} onChange={(event) => patch("atLocal", event.target.value)} />
             </label>
           ) : null}
         </div>
 
         <div className="cron-edit-section">
-          <strong>发送方式</strong>
+          <strong>{tt(t, "cron.sendMode", "Send mode")}</strong>
           <label>
-            <span>结果发送</span>
+            <span>{tt(t, "cron.resultDelivery", "Result delivery")}</span>
             <select value={draft.sendMode} onChange={(event) => patch("sendMode", event.target.value as CronEditDraft["sendMode"])}>
-              <option value="notify">通知我：将结果发送到聊天</option>
-              <option value="silent">静默：运行时不通知</option>
-              <option value="isolated">独立会话：在自己的会话中运行</option>
-              <option value="webhook">Webhook：发送到 URL</option>
+              <option value="notify">{tt(t, "cron.sendOption.notify", "Notify: send result to chat")}</option>
+              <option value="silent">{tt(t, "cron.sendOption.silent", "Silent: no runtime notification")}</option>
+              <option value="isolated">{tt(t, "cron.sendOption.isolated", "Isolated session: run in own session")}</option>
+              <option value="webhook">{tt(t, "cron.sendOption.webhook", "Webhook: send to URL")}</option>
             </select>
           </label>
           {draft.sendMode === "notify" ? (
             <>
               <label>
-                <span>通道</span>
+                <span>{tt(t, "common.channel", "Channel")}</span>
                 <input value={draft.deliveryChannel} onChange={(event) => patch("deliveryChannel", event.target.value)} placeholder="last / telegram / slack" />
               </label>
               <label>
-                <span>目标</span>
-                <input value={draft.deliveryTo} onChange={(event) => patch("deliveryTo", event.target.value)} placeholder="可留空使用默认上下文" />
+                <span>{tt(t, "common.target", "Target")}</span>
+                <input value={draft.deliveryTo} onChange={(event) => patch("deliveryTo", event.target.value)} placeholder={tt(t, "cron.targetPlaceholder", "Leave empty to use default context")} />
               </label>
             </>
           ) : null}
@@ -642,8 +653,8 @@ function CronEditDialog({
         </div>
 
         <div className="cron-edit-actions">
-          <button className="ghost-link-button" type="button" onClick={onCancel}>取消</button>
-          <button className="ghost-link-button primary-action" type="submit" disabled={busy}>{busy ? "保存中" : "保存"}</button>
+          <button className="ghost-link-button" type="button" onClick={onCancel}>{tt(t, "common.cancel", "Cancel")}</button>
+          <button className="ghost-link-button primary-action" type="submit" disabled={busy}>{busy ? tt(t, "common.saving", "Saving") : tt(t, "common.save", "Save")}</button>
         </div>
       </form>
     </div>

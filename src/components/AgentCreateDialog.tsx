@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { normalizeAgentId, validateAgentCreateInput } from "../lib/agentCreate";
 
 type AgentCreateDialogProps = {
+  t: (key: string) => string;
   open: boolean;
   creating: boolean;
   error: string | null;
@@ -11,12 +12,17 @@ type AgentCreateDialogProps = {
 };
 
 export function AgentCreateDialog({
+  t,
   open,
   creating,
   error,
   onClose,
   onCreate,
 }: AgentCreateDialogProps) {
+  const tt = (key: string, fallback: string) => {
+    const value = t(key);
+    return value === key ? fallback : value;
+  };
   const [agentIdInput, setAgentIdInput] = useState("");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
@@ -86,26 +92,26 @@ export function AgentCreateDialog({
       <section className="agent-create-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-create-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="agent-create-header">
           <div>
-            <h2 id="agent-create-title">新建 Agent</h2>
+            <h2 id="agent-create-title">{tt("agent.create", "Create agent")}</h2>
           </div>
-          <button className="icon-only-button" type="button" onClick={onClose} title="关闭">×</button>
+          <button className="icon-only-button" type="button" onClick={onClose} title={tt("common.close", "Close")}>×</button>
         </div>
 
         <div className="agent-create-form">
           <label>
             <span>Agent ID</span>
-            <input value={agentIdInput} onChange={(event) => setAgentIdInput(event.target.value)} placeholder="例如：coding、research-cn、ops" autoFocus />
+            <input value={agentIdInput} onChange={(event) => setAgentIdInput(event.target.value)} placeholder={tt("agent.idPlaceholder", "e.g. coding, research-cn, ops")} autoFocus />
           </label>
           <label>
-            <span>名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：研究助手、代码助手、运营助手" />
+            <span>{tt("common.name", "Name")}</span>
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder={tt("agent.namePlaceholder", "e.g. Research assistant, Coding assistant")} />
           </label>
           <label>
-            <span>工作区</span>
+            <span>{tt("common.workspace", "Workspace")}</span>
             <div className="workspace-picker-row">
-              <input value={workspace} readOnly placeholder="选择工作区" />
+              <input value={workspace} readOnly placeholder={tt("agent.selectWorkspace", "Select workspace")} />
               <button className="ghost-button" type="button" onClick={() => void chooseWorkspace()} disabled={pickingWorkspace}>
-                {pickingWorkspace ? "选择中" : "选择"}
+                {pickingWorkspace ? tt("common.selecting", "Selecting...") : tt("common.select", "Select")}
               </button>
             </div>
           </label>
@@ -116,7 +122,7 @@ export function AgentCreateDialog({
         {pickError ? <div className="agent-create-error">{pickError}</div> : null}
 
         <div className="agent-create-actions">
-          <button className="ghost-button" type="button" onClick={onClose} disabled={creating}>取消</button>
+          <button className="ghost-button" type="button" onClick={onClose} disabled={creating}>{tt("common.cancel", "Cancel")}</button>
           <button
             className="primary-action-button"
             type="button"
@@ -127,7 +133,7 @@ export function AgentCreateDialog({
               workspace: workspace.trim(),
             })}
           >
-            {creating ? "创建中..." : "创建"}
+            {creating ? tt("agent.creating", "Creating...") : tt("common.create", "Create")}
           </button>
         </div>
       </section>

@@ -1,6 +1,11 @@
 import { useState } from "react";
 import type { Agent } from "../types/app";
 import { Icon, IconNames } from "./Icon";
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
 type ResourceSidebarProps = {
   agents: Agent[];
@@ -14,6 +19,7 @@ type ResourceSidebarProps = {
   onCollapse: () => void;
   onExpand: () => void;
   visible: boolean;
+  t: TranslateFn;
 };
 
 export function ResourceSidebar({
@@ -28,6 +34,7 @@ export function ResourceSidebar({
   onCollapse,
   onExpand,
   visible,
+  t,
 }: ResourceSidebarProps) {
   const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<Set<string>>(() => new Set());
@@ -35,7 +42,7 @@ export function ResourceSidebar({
   if (!visible) {
     return (
       <aside className="resource-sidebar-collapsed">
-        <button className="sidebar-handle outside" onClick={onExpand} title="展开 Agent 区域" type="button">
+        <button className="sidebar-handle outside" onClick={onExpand} title={tt(t, "sidebar.expandAgentArea", "Expand agent area")} type="button">
           <span>⟩</span>
         </button>
       </aside>
@@ -46,10 +53,10 @@ export function ResourceSidebar({
     <aside className="resource-sidebar">
       <div className="panel-head panel-head-with-actions">
         <button className="ghost-button full-width" type="button" onClick={onCreateAgent}>
-          新建 Agent
+          {tt(t, "agent.create", "Create agent")}
         </button>
       </div>
-      <button className="sidebar-handle inside" onClick={onCollapse} title="隐藏 Agent 区域" type="button">
+      <button className="sidebar-handle inside" onClick={onCollapse} title={tt(t, "sidebar.hideAgentArea", "Hide agent area")} type="button">
         <span>⟨</span>
       </button>
 
@@ -102,7 +109,7 @@ export function ResourceSidebar({
                 <div className="agent-inline-actions">
                   <button
                     className="icon-only-button"
-                    title="编辑身份文件"
+                    title={tt(t, "agent.editIdentityFile", "Edit identity files")}
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -113,7 +120,7 @@ export function ResourceSidebar({
                   </button>
                   <button
                     className="icon-only-button"
-                    title="新建对话"
+                    title={tt(t, "conversation.create", "New conversation")}
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -161,7 +168,7 @@ export function ResourceSidebar({
                         setExpandedAgentIds((current) => new Set(current).add(agent.id));
                       }}
                     >
-                      查看更多 {hiddenCount} 条
+                      {tt(t, "common.showMore", "Show more")} {hiddenCount}
                     </button>
                   ) : showsAll && agent.conversations.length > 5 ? (
                     <button
@@ -175,7 +182,7 @@ export function ResourceSidebar({
                         });
                       }}
                     >
-                      收起
+                      {tt(t, "common.collapse", "Collapse")}
                     </button>
                   ) : null}
                 </div>

@@ -316,7 +316,7 @@ export function SettingsPage({
       {error || localError ? <div className="settings-error" role="alert">{localError ?? error}</div> : null}
 
       <div className="settings-layout">
-        <nav className="settings-section-list" aria-label="设置分组">
+        <nav className="settings-section-list" aria-label={t("settings.sectionGroups")}>
           {sections.map((section) => (
             <button
               type="button"

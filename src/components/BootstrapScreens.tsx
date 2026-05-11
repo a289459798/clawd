@@ -2,7 +2,14 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClawKitBootstrapStatus } from "../types/app";
 
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
+
 type BootstrapScreensProps = {
+  t: TranslateFn;
   bootstrapLoading: boolean;
   bootstrapError: string | null;
   bootstrapStatus: ClawKitBootstrapStatus | null;
@@ -15,6 +22,7 @@ type BootstrapScreensProps = {
 };
 
 export function BootstrapScreens({
+  t,
   bootstrapLoading,
   bootstrapError,
   bootstrapStatus,
@@ -47,11 +55,11 @@ export function BootstrapScreens({
     return (
       <main className="bootstrap-screen">
         <div className="bootstrap-card">
-          <strong>欢迎使用 ClawKit</strong>
-          <p>首次启动会先检查本机 OpenClaw 环境，并确认是否允许 ClawKit 访问本地 Gateway。</p>
+          <strong>{tt(t, "bootstrap.welcome", "Welcome to ClawKit")}</strong>
+          <p>{tt(t, "bootstrap.intro", "On first launch, ClawKit checks your local OpenClaw environment and verifies Gateway access.")}</p>
           <div className="bootstrap-meta">
-            <span>步骤 1/3，检测本机 OpenClaw</span>
-            <span>当前阶段: {bootstrapStep === "detect" ? "环境检测" : bootstrapStep}</span>
+            <span>{tt(t, "bootstrap.step1", "Step 1/3: detect local OpenClaw")}</span>
+            <span>{tt(t, "bootstrap.currentStage", "Current stage")}: {bootstrapStep === "detect" ? tt(t, "bootstrap.stageDetect", "environment detection") : bootstrapStep}</span>
           </div>
         </div>
       </main>
@@ -62,11 +70,11 @@ export function BootstrapScreens({
     return (
       <main className="bootstrap-screen">
         <div className="bootstrap-card danger">
-          <strong>读取 OpenClaw 状态失败</strong>
+          <strong>{tt(t, "bootstrap.loadFailed", "Failed to read OpenClaw status")}</strong>
           <p>{bootstrapError}</p>
           <div className="bootstrap-actions">
             <button className="ghost-button" type="button" onClick={onLoadBootstrapStatus}>
-              重试
+              {tt(t, "common.retry", "Retry")}
             </button>
           </div>
         </div>
@@ -78,20 +86,20 @@ export function BootstrapScreens({
     return (
       <main className="bootstrap-screen">
         <div className="bootstrap-card">
-          <strong>先安装 OpenClaw，才能继续使用 ClawKit</strong>
-          <p>ClawKit 本身不托管模型会话，它依赖本机 OpenClaw 提供 Gateway、配置和会话数据。所以第一次使用前，需要先完成 OpenClaw 安装。</p>
+          <strong>{tt(t, "bootstrap.installRequired", "Install OpenClaw before continuing with ClawKit")}</strong>
+          <p>{tt(t, "bootstrap.installHint", "ClawKit depends on local OpenClaw for Gateway, config, and session data. Please install OpenClaw first.")}</p>
           <div className="bootstrap-meta">
-            <span>步骤 2/3，等待安装 OpenClaw</span>
-            <span>期望配置路径: {bootstrapStatus?.configPath ?? "~/.openclaw/openclaw.json"}</span>
+            <span>{tt(t, "bootstrap.step2", "Step 2/3: install OpenClaw")}</span>
+            <span>{tt(t, "bootstrap.expectedConfigPath", "Expected config path")}: {bootstrapStatus?.configPath ?? "~/.openclaw/openclaw.json"}</span>
           </div>
           {installMessage ? <p className="bootstrap-inline-status">{installMessage}</p> : null}
           {installError ? <p className="bootstrap-inline-status danger">{installError}</p> : null}
           <div className="bootstrap-actions">
             <button className="ghost-button" type="button" onClick={onLoadBootstrapStatus}>
-              我已安装，重新检测
+              {tt(t, "bootstrap.recheckAfterInstall", "I have installed it, recheck")}
             </button>
             <button className="primary-button" type="button" onClick={() => void startOpenClawInstall()} disabled={installingOpenClaw}>
-              {installingOpenClaw ? "正在打开终端..." : "立即安装"}
+              {installingOpenClaw ? tt(t, "bootstrap.openingTerminal", "Opening terminal...") : tt(t, "bootstrap.installNow", "Install now")}
             </button>
           </div>
         </div>
@@ -103,26 +111,26 @@ export function BootstrapScreens({
     return (
       <main className="bootstrap-screen">
         <div className="bootstrap-card">
-          <strong>连接 OpenClaw</strong>
-          <p>为了让 ClawKit 正常读取会话、发消息并接收流式回复，需要先授权它接入本机 OpenClaw Gateway。你确认后，ClawKit 会把下面这些配置写入你的 openclaw.json。</p>
+          <strong>{tt(t, "bootstrap.connectTitle", "Connect OpenClaw")}</strong>
+          <p>{tt(t, "bootstrap.connectHint", "Authorize ClawKit to access your local OpenClaw Gateway. After confirmation, ClawKit writes the following settings to openclaw.json.")}</p>
           <div className="bootstrap-meta">
-            <span>步骤 3/3，绑定本机 OpenClaw</span>
-            <span>OpenClaw: {bootstrapStatus.openclawPath ?? "已安装"}</span>
-            <span>配置文件: {bootstrapStatus.configPath}</span>
-            <span>Gateway 端口: {bootstrapStatus.gatewayPort ?? 18789}</span>
+            <span>{tt(t, "bootstrap.step3", "Step 3/3: bind local OpenClaw")}</span>
+            <span>OpenClaw: {bootstrapStatus.openclawPath ?? tt(t, "connections.installed", "Installed")}</span>
+            <span>{tt(t, "bootstrap.configFile", "Config file")}: {bootstrapStatus.configPath}</span>
+            <span>Gateway {tt(t, "bootstrap.port", "port")}: {bootstrapStatus.gatewayPort ?? 18789}</span>
           </div>
           <div className="code-block-shell">
             <div className="code-block-toolbar">
-              <span className="code-block-language">将写入的配置</span>
+              <span className="code-block-language">{tt(t, "bootstrap.bindingWrites", "Settings to be written")}</span>
             </div>
             <pre className="tool-entry-body code terminal-block">{bootstrapStatus.bindingWrites.join("\n")}</pre>
           </div>
           <div className="bootstrap-actions">
             <button className="ghost-button" type="button" onClick={onLoadBootstrapStatus} disabled={bindingInProgress}>
-              刷新状态
+              {tt(t, "settings.openclaw.refresh", "Refresh status")}
             </button>
             <button className="primary-button" type="button" onClick={onBindOpenClaw} disabled={bindingInProgress}>
-              {bindingInProgress ? "正在写入并绑定..." : "同意并继续"}
+              {bindingInProgress ? tt(t, "bootstrap.binding", "Writing and binding...") : tt(t, "bootstrap.approveContinue", "Approve and continue")}
             </button>
           </div>
         </div>
@@ -134,24 +142,24 @@ export function BootstrapScreens({
     return (
       <main className={`bootstrap-screen`}>
         <div className={`bootstrap-card ${bootstrapConnectError ? "danger" : ""}`}>
-          <strong>{bootstrapConnectError ? "OpenClaw 连接测试失败" : "正在验证 OpenClaw 连接"}</strong>
+          <strong>{bootstrapConnectError ? tt(t, "bootstrap.connectTestFailed", "OpenClaw connection test failed") : tt(t, "bootstrap.connectVerifying", "Verifying OpenClaw connection")}</strong>
           <p>
             {bootstrapConnectError
-              ? "配置已经写入，但 ClawKit 还没能成功连上本机 Gateway。你可以重试，或者先检查 OpenClaw Gateway 是否正在运行。"
-              : "ClawKit 正在测试 Gateway 连接与流式能力，确认通过后才会进入主界面。"}
+              ? tt(t, "bootstrap.connectTestFailedHint", "Settings were written, but ClawKit still cannot connect to local Gateway. Retry or check whether Gateway is running.")
+              : tt(t, "bootstrap.connectTesting", "ClawKit is testing Gateway connectivity and streaming before entering the main workspace.")}
           </p>
           <div className="bootstrap-meta">
-            <span>当前阶段: 连接测试</span>
-            <span>Gateway 端口: {bootstrapStatus.gatewayPort ?? 18789}</span>
-            {bootstrapConnectError ? <span>错误: {bootstrapConnectError}</span> : null}
+            <span>{tt(t, "bootstrap.currentStage", "Current stage")}: {tt(t, "bootstrap.connectTest", "connection test")}</span>
+            <span>Gateway {tt(t, "bootstrap.port", "port")}: {bootstrapStatus.gatewayPort ?? 18789}</span>
+            {bootstrapConnectError ? <span>{tt(t, "common.error", "Error")}: {bootstrapConnectError}</span> : null}
           </div>
           {bootstrapConnectError ? (
             <div className="bootstrap-actions">
               <button className="ghost-button" type="button" onClick={onLoadBootstrapStatus}>
-                重新检测环境
+                {tt(t, "bootstrap.recheckEnv", "Recheck environment")}
               </button>
               <button className="primary-button" type="button" onClick={() => onSetBootstrapStep("connect_test")}>
-                重试连接
+                {tt(t, "bootstrap.retryConnect", "Retry connection")}
               </button>
             </div>
           ) : null}
