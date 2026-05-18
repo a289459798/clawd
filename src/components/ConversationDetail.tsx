@@ -7,6 +7,7 @@ import { isConversationRunning } from "../lib/conversationRunState";
 import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
 import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
+import type { ConversationAutoScrollMode } from "../types/settings";
 
 type TranslateFn = (key: string) => string;
 const tt = (t: TranslateFn, key: string, fallback: string) => {
@@ -31,6 +32,7 @@ type ConversationDetailProps = {
   onUserExpandedChange: (expanded: boolean) => void;
   showJumpToBottom: boolean;
   displayMode: "focus" | "conversation";
+  autoScrollMode: ConversationAutoScrollMode;
   onDisplayModeChange: (mode: "focus" | "conversation") => void;
   onJumpToBottom: () => void;
   onUpdateTitle?: (conversationId: string, newTitle: string) => Promise<void>;
@@ -84,6 +86,7 @@ export function ConversationDetail({
   onUserExpandedChange,
   showJumpToBottom,
   displayMode,
+  autoScrollMode,
   onDisplayModeChange,
   onJumpToBottom,
   onUpdateTitle,
@@ -173,10 +176,15 @@ export function ConversationDetail({
     };
   }, [activeConversation.id, aiResponseScrollRef, displayMode]);
 
-  // Keep new incoming messages pinned to the latest reply by default.
+  // Manual mode leaves incoming replies in place and lets the jump button carry the update.
   useEffect(() => {
+    if (autoScrollMode === "manual") return;
     const scrollContainer = aiResponseScrollRef.current;
     if (!scrollContainer) return;
+    if (autoScrollMode === "nearBottom") {
+      const distanceFromBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+      if (distanceFromBottom > 120) return;
+    }
     const frame = requestAnimationFrame(() => {
       scrollContainer.scrollTo({
         top: scrollContainer.scrollHeight,
@@ -184,7 +192,7 @@ export function ConversationDetail({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef]);
+  }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef, autoScrollMode]);
 
   return (
     <div className="conversation-detail-shell">

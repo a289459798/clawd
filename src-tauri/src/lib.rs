@@ -312,10 +312,12 @@ fn default_clawkit_settings() -> Value {
         "version": 1,
         "general": {
             "defaultConversationMode": "focus",
+            "conversationAutoScrollMode": "nearBottom",
             "language": "auto",
             "sendShortcut": "enterToSend",
             "restoreLastConversation": false,
             "rememberConversationFilters": true,
+            "showSystemConversations": false,
             "autoCheckUpdates": true,
             "confirmDestructiveActions": true
         },
@@ -399,6 +401,12 @@ fn sanitize_clawkit_settings_value(settings: &mut Value) {
         );
         sanitize_string_enum(
             general,
+            "conversationAutoScrollMode",
+            &["nearBottom", "always", "manual"],
+            "nearBottom",
+        );
+        sanitize_string_enum(
+            general,
             "language",
             &["auto", "zh-CN", "zh-TW", "en-US", "ja-JP", "fr-FR", "ru-RU"],
             "auto",
@@ -411,6 +419,7 @@ fn sanitize_clawkit_settings_value(settings: &mut Value) {
         );
         sanitize_bool(general, "restoreLastConversation", false);
         sanitize_bool(general, "rememberConversationFilters", true);
+        sanitize_bool(general, "showSystemConversations", false);
         sanitize_bool(general, "autoCheckUpdates", true);
         sanitize_bool(general, "confirmDestructiveActions", true);
     }
@@ -2848,6 +2857,7 @@ pub fn run() {
             gateway_proxy::gateway_update_status,
             gateway_proxy::gateway_cron_list,
             gateway_proxy::gateway_cron_runs,
+            gateway_proxy::gateway_cron_get,
             gateway_proxy::gateway_cron_add,
             gateway_proxy::gateway_cron_run,
             gateway_proxy::gateway_cron_update,

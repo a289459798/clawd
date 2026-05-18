@@ -1,4 +1,5 @@
 export type DefaultConversationMode = "focus" | "conversation";
+export type ConversationAutoScrollMode = "nearBottom" | "always" | "manual";
 export type ClawKitLanguage = "auto" | "zh-CN" | "zh-TW" | "en-US" | "ja-JP" | "fr-FR" | "ru-RU";
 export type SendShortcut = "enterToSend" | "modEnterToSend";
 export type ClawKitTheme = "system" | "dark" | "light";
@@ -7,10 +8,12 @@ export type MessageWidth = "normal" | "wide";
 
 export type GeneralSettings = {
   defaultConversationMode: DefaultConversationMode;
+  conversationAutoScrollMode: ConversationAutoScrollMode;
   language: ClawKitLanguage;
   sendShortcut: SendShortcut;
   restoreLastConversation: boolean;
   rememberConversationFilters: boolean;
+  showSystemConversations: boolean;
   autoCheckUpdates: boolean;
   confirmDestructiveActions: boolean;
 } & Record<string, unknown>;

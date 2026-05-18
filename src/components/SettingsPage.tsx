@@ -348,6 +348,18 @@ export function SettingsPage({
                 disabled={disabled}
                 onChange={(value) => updateGeneral("defaultConversationMode", value)}
               />
+              <SegmentedRow
+                title={t("settings.general.autoScrollMode")}
+                description={t("settings.general.autoScrollMode.description")}
+                value={settings.general.conversationAutoScrollMode}
+                choices={[
+                  { value: "nearBottom", label: t("settings.option.autoScrollNearBottom") },
+                  { value: "always", label: t("settings.option.autoScrollAlways") },
+                  { value: "manual", label: t("settings.option.autoScrollManual") },
+                ]}
+                disabled={disabled}
+                onChange={(value) => updateGeneral("conversationAutoScrollMode", value)}
+              />
               <SelectRow
                 title={t("settings.general.language")}
                 description={t("settings.general.language.description")}
@@ -385,6 +397,13 @@ export function SettingsPage({
                 checked={settings.general.rememberConversationFilters}
                 disabled={disabled}
                 onChange={(value) => updateGeneral("rememberConversationFilters", value)}
+              />
+              <ToggleRow
+                title={t("settings.general.showSystemConversations")}
+                description={t("settings.general.showSystemConversations.description")}
+                checked={settings.general.showSystemConversations}
+                disabled={disabled}
+                onChange={(value) => updateGeneral("showSystemConversations", value)}
               />
               <ToggleRow
                 title={t("settings.general.autoCheck")}

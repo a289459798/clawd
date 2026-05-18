@@ -4,6 +4,7 @@ import type {
   ClawKitLanguage,
   ClawKitSettings,
   ClawKitTheme,
+  ConversationAutoScrollMode,
   DefaultConversationMode,
   GeneralSettings,
   MessageWidth,
@@ -16,10 +17,12 @@ export const DEFAULT_CLAWKIT_SETTINGS: ClawKitSettings = {
   version: 1,
   general: {
     defaultConversationMode: "focus",
+    conversationAutoScrollMode: "nearBottom",
     language: "auto",
     sendShortcut: "enterToSend",
     restoreLastConversation: false,
     rememberConversationFilters: true,
+    showSystemConversations: false,
     autoCheckUpdates: true,
     confirmDestructiveActions: true,
   },
@@ -74,6 +77,11 @@ function mergeGeneral(raw: Record<string, unknown>): GeneralSettings {
       ["focus", "conversation"],
       DEFAULT_CLAWKIT_SETTINGS.general.defaultConversationMode,
     ),
+    conversationAutoScrollMode: enumValue<ConversationAutoScrollMode>(
+      raw.conversationAutoScrollMode,
+      ["nearBottom", "always", "manual"],
+      DEFAULT_CLAWKIT_SETTINGS.general.conversationAutoScrollMode,
+    ),
     language: enumValue<ClawKitLanguage>(
       raw.language,
       ["auto", "zh-CN", "zh-TW", "en-US", "ja-JP", "fr-FR", "ru-RU"],
@@ -91,6 +99,10 @@ function mergeGeneral(raw: Record<string, unknown>): GeneralSettings {
     rememberConversationFilters: boolValue(
       raw.rememberConversationFilters,
       DEFAULT_CLAWKIT_SETTINGS.general.rememberConversationFilters,
+    ),
+    showSystemConversations: boolValue(
+      raw.showSystemConversations,
+      DEFAULT_CLAWKIT_SETTINGS.general.showSystemConversations,
     ),
     autoCheckUpdates: boolValue(raw.autoCheckUpdates, DEFAULT_CLAWKIT_SETTINGS.general.autoCheckUpdates),
     confirmDestructiveActions: boolValue(

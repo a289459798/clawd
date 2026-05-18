@@ -1407,6 +1407,7 @@ function App() {
     conversationSearch,
     conversationRuntimeFilter,
     conversationSort,
+    showSystemConversations: clawKitSettings.general.showSystemConversations,
   });
 
   useEffect(() => {
@@ -1733,7 +1734,10 @@ function App() {
     };
   }, [activeConversationId, bootstrapStep]);
 
-  const { aiResponseScrollRef, shouldStickToBottomRef, showJumpToBottom, setShowJumpToBottom } = useConversationAutoScroll(activeConversation);
+  const { aiResponseScrollRef, shouldStickToBottomRef, showJumpToBottom, setShowJumpToBottom } = useConversationAutoScroll(
+    activeConversation,
+    clawKitSettings.general.conversationAutoScrollMode,
+  );
 
   const handleComposerFiles = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -2135,11 +2139,13 @@ function App() {
               onOpenConversation={openConversationDetail}
               onCollapse={() => setShowResourceSidebar(false)}
               onExpand={() => setShowResourceSidebar(true)}
+              showSystemConversations={clawKitSettings.general.showSystemConversations}
             />
 
             <ConversationWorkspace
               t={t}
               defaultDisplayMode={clawKitSettings.general.defaultConversationMode}
+              autoScrollMode={clawKitSettings.general.conversationAutoScrollMode}
               sendShortcut={clawKitSettings.general.sendShortcut}
               visibleConversationCount={visibleConversations.length}
               conversationFiltersActive={conversationFiltersActive}

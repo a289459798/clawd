@@ -1,6 +1,10 @@
 import type { Agent } from "../types/app";
 import type { Conversation } from "../types/conversation";
 
+export type VisibleConversationOptions = {
+  showSystemConversations?: boolean;
+};
+
 export function conversationMatchesSessionKey(conversation: Conversation, sessionKey: string | null | undefined) {
   if (!sessionKey) return false;
   if (conversation.id === sessionKey) return true;
@@ -19,11 +23,24 @@ export function findConversationByGatewaySessionKey(agents: Agent[], sessionKey:
   return null;
 }
 
-export const getVisibleConversations = (agents: Agent[]) => {
+export function isSystemAutoConversation(conversation: Conversation) {
+  const ids = [conversation.id, ...(conversation.alternateSessionKeys ?? [])].map((value) => value.toLowerCase());
+  if (ids.some((value) => /(^|:)cron(?=[:\-]|$)/u.test(value) || /(^|:)dream(?:ing)?(?=[:\-]|$)/u.test(value) || /(^|:)heartbeat(?=[:\-]|$)/u.test(value))) {
+    return true;
+  }
+  const channel = conversation.channel?.trim().toLowerCase();
+  if (channel === "cron" || channel === "dream" || channel === "dreaming" || channel === "heartbeat") {
+    return true;
+  }
+  const title = conversation.title.trim().toLowerCase();
+  return /^cron\b/u.test(title) || /^dream(?:ing)?\b/u.test(title) || /^heartbeat\b/u.test(title);
+}
+
+export const getVisibleConversations = (agents: Agent[], options: VisibleConversationOptions = {}) => {
   return agents
     .flatMap((agent) =>
       agent.conversations
-        .filter((conversation) => conversation.visible)
+        .filter((conversation) => conversation.visible && (options.showSystemConversations || !isSystemAutoConversation(conversation)))
         .map((conversation) => ({
           ...conversation,
           agentId: agent.id,

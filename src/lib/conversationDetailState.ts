@@ -44,7 +44,7 @@ export function getConversationDetailState(messages: PreviewMessage[], lastRole?
   const hasRenderableContent = assistantSlice.some((m) => {
     const hasText = (m.text ?? "").replace(STREAMING_PREFIX, "").trim().length > 0;
     const hasRenderableParts = (m.parts ?? []).some(
-      (part) => part.kind === "text" || part.kind === "image" || part.kind === "file" || part.kind === "tool_call",
+      (part) => part.kind === "text" || part.kind === "image" || part.kind === "file" || part.kind === "tool_call" || part.kind === "rich",
     );
     return hasText || hasRenderableParts;
   });

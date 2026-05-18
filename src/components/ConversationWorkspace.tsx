@@ -8,7 +8,7 @@ import { isConversationRunning } from "../lib/conversationRunState";
 import { ensureSelectedModelOption } from "../lib/modelOptions";
 import type { ComposerAttachment, ModelOption, QueuedComposerMessage } from "../types/app";
 import type { Conversation } from "../types/conversation";
-import type { SendShortcut } from "../types/settings";
+import type { ConversationAutoScrollMode, SendShortcut } from "../types/settings";
 
 type TranslateFn = (key: string) => string;
 const tt = (t: TranslateFn, key: string, fallback: string) => {
@@ -26,6 +26,7 @@ type ConversationWorkspaceProps = {
   t: TranslateFn;
   activeConversation: Conversation | null;
   defaultDisplayMode: "focus" | "conversation";
+  autoScrollMode: ConversationAutoScrollMode;
   sendShortcut: SendShortcut;
   visibleConversationCount: number;
   conversationFiltersActive: boolean;
@@ -90,6 +91,7 @@ export function ConversationWorkspace({
   t,
   activeConversation,
   defaultDisplayMode,
+  autoScrollMode,
   sendShortcut,
   visibleConversationCount,
   conversationFiltersActive,
@@ -262,6 +264,7 @@ export function ConversationWorkspace({
             onTranscriptScrollAwayFromBottom={(away) => setTranscriptScrollCompact(away)}
             showJumpToBottom={showJumpToBottom}
             displayMode={detailDisplayMode}
+            autoScrollMode={autoScrollMode}
             onDisplayModeChange={handleDisplayModeChange}
             onJumpToBottom={() => {
               const container = aiResponseScrollRef.current;

@@ -157,6 +157,29 @@ export function parseCronListPayload(payload: unknown): {
   return { jobs, deliveryPreviews, total };
 }
 
+export function parseCronJobPayload(payload: unknown): CronJobRow | null {
+  if (!payload || typeof payload !== "object") return null;
+  const row = payload as Record<string, unknown>;
+  if (typeof row.id !== "string") return null;
+  return {
+    id: row.id,
+    name: typeof row.name === "string" ? row.name : undefined,
+    description: typeof row.description === "string" ? row.description : undefined,
+    agentId: typeof row.agentId === "string" ? row.agentId : undefined,
+    enabled: typeof row.enabled === "boolean" ? row.enabled : undefined,
+    schedule: row.schedule,
+    sessionTarget: typeof row.sessionTarget === "string" ? row.sessionTarget : undefined,
+    wakeMode: typeof row.wakeMode === "string" ? row.wakeMode : undefined,
+    payload: row.payload,
+    sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : undefined,
+    delivery:
+      row.delivery && typeof row.delivery === "object"
+        ? (row.delivery as CronJobRow["delivery"])
+        : undefined,
+    state: row.state && typeof row.state === "object" ? normalizeCronJobState(row.state) : undefined,
+  };
+}
+
 function normalizeCronJobState(input: unknown): CronJobRow["state"] {
   if (!input || typeof input !== "object") return undefined;
   const row = input as Record<string, unknown>;

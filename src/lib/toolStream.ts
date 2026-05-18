@@ -144,6 +144,7 @@ const normalizePartForContentKey = (part: MessagePart) => {
   if (part.kind === "tool_call") return { kind: part.kind, tool: part.tool, args: part.args ?? "" };
   if (part.kind === "tool_result") return { kind: part.kind, tool: part.tool ?? "", text: part.text ?? "" };
   if (part.kind === "image") return { kind: part.kind, data: part.data, mime_type: part.mime_type ?? "", alt: part.alt ?? "" };
+  if (part.kind === "rich") return { kind: part.kind, type: part.type ?? "", title: part.title ?? "", text: part.text ?? "" };
   return { kind: part.kind, name: part.name, path: part.path ?? "", mime_type: part.mime_type ?? "", size: part.size ?? 0 };
 };
 

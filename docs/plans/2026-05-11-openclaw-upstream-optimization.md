@@ -76,19 +76,22 @@
 - **上游**：Gateway protocol 要求 v4 clients，并流式发送显式 `deltaText` / `replace` frame。
 - **目标**：更新 `GatewayChatEvent` / `GatewayMessage` 类型与 `useGatewayChat` 合并逻辑；优先使用 Gateway 提供的 `deltaText` / `replace` 语义，避免把 replace 当 append。
 - **验收要点**：长回复、工具后续回复、final reconciliation 均不重复、不丢字、不倒退；旧 Gateway payload 仍可 fallback。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已在 `GatewayChatEvent` 中补充 `deltaText` / `replace`，`useGatewayChat` 优先按 v4 显式 delta 语义追加或替换；旧 payload 继续回退到 cumulative `message` 合并逻辑。
 
 ### 0.2 推荐 OpenClaw 版本提升到 `2026.5.12`
 
 - **上游**：npm `latest` 已是 `2026.5.12`；GitHub `v2026.5.12` 为 stable。
 - **目标**：把 ClawKit 的推荐版本提示更新到 `2026.5.12`；zip 技能安装最低版本常量可继续代表“首个支持版本”，不要误用为推荐版本。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已将 `RECOMMENDED_OPENCLAW_CLI_VERSION` 提升到 `2026.5.12`，并保留 `MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD = 2026.5.10` 作为功能最低版本。
 
 ### 0.3 Rich-only / presentation 回复不丢失
 
 - **上游**：`2026.5.12` 修复 rich presentation、interactive controls、button-only replies 在 WebChat/TUI 的投递与镜像。
 - **目标**：ClawKit 消息流识别结构化 content / presentation / media-only assistant 消息；即使文本为空，也保留可渲染块或至少展示可读占位。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已增加 `rich` 消息 part，presentation / button / interactive / card 等结构化内容不会被丢弃；对话里至少展示可读的本地化占位，并保留 title/text 摘要。
 
 ---
 
@@ -106,7 +109,8 @@
   - 「Agent 说明」落地前先核对 OpenClaw Gateway 是否支持 create/update 携带说明字段；若不支持，应在创建成功后走 `agents.files.*` 可编辑身份文件 API 写入说明文件，而不是往 `agents.create` 塞 schema 不接受的字段。
   - 模板应是通用预设，不把某个行业做成唯一入口；图片里的宠物医院模板可作为示例模板组或后续行业包。
 - **验收要点**：选择模板后字段自动填充且可编辑；空白创建路径仍可用；深色/浅色均可读；创建失败时不丢用户已填写的说明。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已新增 `src/lib/agentTemplates.ts`、`AgentCreateDialog` 模板区和「Agent 说明」字段；创建成功后通过 agent files API 写入 `AGENTS.md`，避免向 `agents.create` 传入 OpenClaw schema 不接受的字段。
 
 ### 1.2 新建定时任务：傻瓜式向导 + 常用模板
 
@@ -122,19 +126,22 @@
   - 编辑已有高级 cron 任务时不要丢失原始配置；无法映射成卡片的 schedule 应进入高级模式并展示可读说明。
   - 文案、按钮、错误、aria-label 全部接入 i18n；错误信息避免只说 “cron invalid”，要告诉用户该改哪个时间字段。
 - **验收要点**：新手可不接触 cron 完成创建；高级用户仍能编辑 cron 表达式；模板套用后所有字段可再修改；保存后列表可通过 `cron.list` / `cron.get` reconciliation。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已新增 `src/lib/cronTemplates.ts` 和三步式 `CronEditDialog` 创建流程；默认使用“任务 / 时间 / 确认”向导，高级 cron、投递方式和 Webhook 配置放入折叠区，保存仍转换为 Gateway 接受的 cron payload。
 
 ### 1.3 Gateway `cron.get` 与定时页一致性
 
 - **上游**：`cron.get`、`openclaw cron get <id>`。
 - **目标**：编辑/展开前拉取单条 canonical 任务；可选「复制 CLI 调试命令」。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已新增 Tauri command `gateway_cron_get`，编辑任务前先调用 Gateway `cron.get` 拉取 canonical job，再转换为编辑草稿；失败时保留在列表页并展示可读错误。
 
 ### 1.4 对话页 auto-scroll 模式
 
 - **上游**：Control UI/WebChat 新增持久化 auto-scroll mode：near-bottom、always follow、manual/new messages。
 - **目标**：ConversationDetail 增加轻量模式选择，并持久化到本地偏好；流式输出、工具输出和历史 reconciliation 均遵守该偏好。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已新增本地设置 `conversationAutoScrollMode`（接近底部时跟随 / 始终跟随 / 手动查看），并让流式回复、工具输出和历史刷新遵守该偏好。
 
 ### 1.5 技能页：Zip 安装闭环（不仅设置开关）
 
@@ -161,7 +168,8 @@
 
 - **上游**：`openclaw models auth login --provider openai` 默认 ChatGPT/Codex 账号；`--method api-key` 为显式 API Key。
 - **目标**：模型页文案或可复制命令块，避免用户误以为只有 API Key 一条路。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：模型页在 OpenAI provider 下新增登录方式说明；默认提供“用 ChatGPT/Codex 账号登录”按钮，API Key 作为次要入口，不向普通用户暴露 CLI 命令。
 
 ### 1.9 会话模型：退役 Gemini 3 Pro Preview → 3.1 的一行引导
 
@@ -262,17 +270,17 @@
 
 | 优先级 | 条目 | 状态 |
 |--------|------|------|
-| P0 | 0.1 Gateway v4 `deltaText` / `replace` | `[ ]` |
-| P0 | 0.2 推荐版本提升到 `2026.5.12` | `[ ]` |
-| P0 | 0.3 Rich-only / presentation 回复 | `[ ]` |
-| P1 | 1.1 新建 Agent 模板 + 说明字段 | `[ ]` |
-| P1 | 1.2 新建定时任务傻瓜式向导 | `[ ]` |
-| P1 | 1.3 `cron.get` | `[ ]` |
-| P1 | 1.4 Auto-scroll 模式 | `[ ]` |
+| P0 | 0.1 Gateway v4 `deltaText` / `replace` | `[x]` |
+| P0 | 0.2 推荐版本提升到 `2026.5.12` | `[x]` |
+| P0 | 0.3 Rich-only / presentation 回复 | `[x]` |
+| P1 | 1.1 新建 Agent 模板 + 说明字段 | `[x]` |
+| P1 | 1.2 新建定时任务傻瓜式向导 | `[x]` |
+| P1 | 1.3 `cron.get` | `[x]` |
+| P1 | 1.4 Auto-scroll 模式 | `[x]` |
 | P1 | 1.5 技能 Zip 安装闭环 | `[ ]` |
 | P1 | 1.6 `parentSessionKey` / `spawn-child` 侧栏树 | `[ ]` |
 | P1 | 1.7 `isHeartbeat` 展示 | `[ ]` |
-| P1 | 1.8 OpenAI 登录路径文案 | `[ ]` |
+| P1 | 1.8 OpenAI 登录路径文案 | `[x]` |
 | P1 | 1.9 Gemini 旧 id 引导 | `[ ]` |
 | P1 | 1.10 `localService` 状态提示 | `[ ]` |
 | P2 | 2.1–2.7 见上文 | 多为 `[ ]` |

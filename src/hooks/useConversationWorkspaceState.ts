@@ -16,6 +16,7 @@ export function useConversationWorkspaceState({
   conversationSearch,
   conversationRuntimeFilter,
   conversationSort,
+  showSystemConversations,
 }: {
   agents: Agent[];
   activeConversationId: string | null;
@@ -24,8 +25,12 @@ export function useConversationWorkspaceState({
   conversationSearch: string;
   conversationRuntimeFilter: string;
   conversationSort: ConversationSort;
+  showSystemConversations: boolean;
 }) {
-  const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
+  const visibleConversations = useMemo(
+    () => getVisibleConversations(agents, { showSystemConversations }),
+    [agents, showSystemConversations],
+  );
   const deferredConversationSearch = useDeferredValue(conversationSearch);
 
   const conversationRuntimeOptions = useMemo(() => {

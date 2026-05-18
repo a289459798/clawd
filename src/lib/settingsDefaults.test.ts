@@ -20,6 +20,8 @@ describe("mergeClawKitSettings", () => {
     expect(settings.general.language).toBe("en-US");
     expect(settings.general.sendShortcut).toBe("enterToSend");
     expect(settings.general.defaultConversationMode).toBe("focus");
+    expect(settings.general.conversationAutoScrollMode).toBe("nearBottom");
+    expect(settings.general.showSystemConversations).toBe(false);
     expect(settings.appearance.theme).toBe("light");
     expect(settings.notifications.conversationFinished).toBe(true);
   });
@@ -45,9 +47,11 @@ describe("mergeClawKitSettings", () => {
       version: "bad",
       general: {
         defaultConversationMode: "immersive",
+        conversationAutoScrollMode: "teleport",
         language: "es-ES",
         sendShortcut: "spaceToSend",
         restoreLastConversation: "yes",
+        showSystemConversations: "yes",
       },
       appearance: {
         theme: "blue",
@@ -60,9 +64,11 @@ describe("mergeClawKitSettings", () => {
 
     expect(settings.version).toBe(1);
     expect(settings.general.defaultConversationMode).toBe("focus");
+    expect(settings.general.conversationAutoScrollMode).toBe("nearBottom");
     expect(settings.general.language).toBe("auto");
     expect(settings.general.sendShortcut).toBe("enterToSend");
     expect(settings.general.restoreLastConversation).toBe(false);
+    expect(settings.general.showSystemConversations).toBe(false);
     expect(settings.appearance.theme).toBe("system");
     expect(settings.appearance.fontSize).toBe(15);
     expect(settings.appearance.density).toBe("comfortable");

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Agent } from "../types/app";
+import { isSystemAutoConversation } from "../lib/conversationSelectors";
 import { Icon, IconNames } from "./Icon";
 type TranslateFn = (key: string) => string;
 const tt = (t: TranslateFn, key: string, fallback: string) => {
@@ -19,6 +20,7 @@ type ResourceSidebarProps = {
   onCollapse: () => void;
   onExpand: () => void;
   visible: boolean;
+  showSystemConversations: boolean;
   t: TranslateFn;
 };
 
@@ -34,6 +36,7 @@ export function ResourceSidebar({
   onCollapse,
   onExpand,
   visible,
+  showSystemConversations,
   t,
 }: ResourceSidebarProps) {
   const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
@@ -64,8 +67,11 @@ export function ResourceSidebar({
         {agents.map((agent) => {
           const isCollapsed = collapsedAgentIds.has(agent.id);
           const showsAll = expandedAgentIds.has(agent.id);
-          const visibleConversations = showsAll ? agent.conversations : agent.conversations.slice(0, 5);
-          const hiddenCount = Math.max(0, agent.conversations.length - visibleConversations.length);
+          const displayConversations = showSystemConversations
+            ? agent.conversations
+            : agent.conversations.filter((conversation) => !isSystemAutoConversation(conversation));
+          const visibleConversations = showsAll ? displayConversations : displayConversations.slice(0, 5);
+          const hiddenCount = Math.max(0, displayConversations.length - visibleConversations.length);
           return (
             <section className="agent-group flat" key={agent.id}>
               <div
@@ -170,7 +176,7 @@ export function ResourceSidebar({
                     >
                       {tt(t, "common.showMore", "Show more")} {hiddenCount}
                     </button>
-                  ) : showsAll && agent.conversations.length > 5 ? (
+                  ) : showsAll && displayConversations.length > 5 ? (
                     <button
                       className="conversation-tree-more"
                       type="button"

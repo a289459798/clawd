@@ -1,6 +1,13 @@
 import type { MessagePart } from "../types/conversation";
 import type { GatewayMessage } from "../types/gateway";
 
+type GatewayDeltaCarrier = {
+  deltaText?: unknown;
+  replace?: unknown;
+  data?: unknown;
+  message?: unknown;
+};
+
 export function extractUsageFromGatewayMessage(message?: GatewayMessage | null) {
   return {
     input_tokens: message?.usage?.input,
@@ -29,6 +36,27 @@ function basenameFromPath(path: string) {
 
 function safeNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function booleanValue(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+export function extractGatewayDeltaFrame(frame?: GatewayDeltaCarrier | null) {
+  const data = recordValue(frame?.data);
+  const message = recordValue(frame?.message);
+  return {
+    deltaText: stringValue(frame?.deltaText) ?? stringValue(data?.deltaText) ?? stringValue(message?.deltaText),
+    replace: booleanValue(frame?.replace) ?? booleanValue(data?.replace) ?? booleanValue(message?.replace) ?? false,
+  };
 }
 
 function splitTextMediaAttachmentParts(text: string): MessagePart[] {
@@ -167,6 +195,14 @@ export function mapGatewayContentToParts(message?: GatewayMessage | null): Messa
           path,
           mime_type: part.mimeType ?? part.mime_type,
           size: safeNumber(part.size),
+        }];
+      }
+      if (part.type === "presentation" || part.type === "button" || part.type === "buttons" || part.type === "control" || part.type === "interactive" || part.type === "card" || part.type === "rich") {
+        return [{
+          kind: "rich",
+          type: part.type,
+          title: part.title ?? part.label ?? part.name,
+          text: part.text,
         }];
       }
       return [];

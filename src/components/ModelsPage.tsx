@@ -112,6 +112,11 @@ function providerSupportsOAuth(provider: string, authStatus: GatewayModelAuthSta
   return Boolean(auth?.profiles.some((profile) => profile.type === "oauth"));
 }
 
+function isOpenAiProvider(provider: string) {
+  const normalized = normalize(provider);
+  return normalized === "openai" || normalized === "openai-codex" || normalized.includes("openai");
+}
+
 function isProviderConfigured(provider: string, authStatus: GatewayModelAuthStatusResult | null) {
   const auth = authStatus?.providers.find((item) => normalize(item.provider) === normalize(provider));
   return Boolean(auth && (auth.status === "ok" || auth.status === "static"));
@@ -350,6 +355,33 @@ export function ModelsPage({
                   ) : null}
                 </div>
               </div>
+
+              {isOpenAiProvider(activeProviderGroup.provider) ? (
+                <div className="model-provider-guidance">
+                  <div>
+                    <strong>{tt(t, "models.openaiLoginGuideTitle", "OpenAI sign-in options")}</strong>
+                    <p>{tt(t, "models.openaiLoginGuideDescription", "OAuth uses your ChatGPT/Codex account by default. Use API key only when you explicitly want key-based access.")}</p>
+                  </div>
+                  <div className="model-provider-guidance-actions">
+                    <button
+                      type="button"
+                      className="ghost-link-button primary-action"
+                      onClick={() => onAuthProvider(activeProviderGroup.provider, false)}
+                      disabled={actionBusy}
+                    >
+                      {tt(t, "models.openaiLoginWithAccount", "Sign in with ChatGPT/Codex")}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-link-button"
+                      onClick={() => setProviderDraft({ provider: activeProviderGroup.provider, apiKey: "", baseUrl: "" })}
+                      disabled={actionBusy}
+                    >
+                      {tt(t, "models.openaiUseApiKey", "Use API Key instead")}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               {authStatus && activeAuthProvider ? (
                 <div className="model-auth-profiles" aria-label={tt(t, "models.authProfilesAria", "Gateway auth profiles")}>

@@ -6,7 +6,7 @@ import { patchConversation } from "../lib/agentsSnapshot";
 import { formatTokenCount } from "../lib/appFormatters";
 import { conversationMatchesSessionKey, findConversationByGatewaySessionKey } from "../lib/conversationSelectors";
 import { mapGatewayToolStreamToPart } from "../lib/toolStream";
-import { extractTextFromGatewayMessage, extractUsageFromGatewayMessage, isInternalOpenClawMessage, mapGatewayContentToParts, mergeStreamingParts } from "../lib/gatewayMessages";
+import { extractGatewayDeltaFrame, extractTextFromGatewayMessage, extractUsageFromGatewayMessage, isInternalOpenClawMessage, mapGatewayContentToParts, mergeStreamingParts } from "../lib/gatewayMessages";
 
 interface UseGatewayChatProps {
   enabled: boolean;
@@ -183,7 +183,8 @@ export function useGatewayChat({
           if (chat.state === "delta") {
             if (isTerminalRunEvent(chat.sessionKey, eventRunId)) return;
             if (isInternalOpenClawMessage(chat.message)) return;
-            const deltaText = extractTextFromGatewayMessage(chat.message);
+            const deltaFrame = extractGatewayDeltaFrame(chat);
+            const deltaText = deltaFrame.deltaText ?? extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
             if (!deltaText && deltaParts.length === 0) return;
             
@@ -204,8 +205,13 @@ export function useGatewayChat({
                   if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
                     const previousText = last.text.replace(streamingMarker, "");
-                    const incomingText = textFromParts(deltaParts) || deltaText;
-                    const nextText = mergeStreamingText(previousText, incomingText);
+                    const incomingText = deltaFrame.deltaText ?? (textFromParts(deltaParts) || deltaText);
+                    const snapshotText = textFromParts(deltaParts) || extractTextFromGatewayMessage(chat.message);
+                    const nextText = deltaFrame.replace
+                      ? incomingText || snapshotText
+                      : deltaFrame.deltaText !== undefined
+                        ? `${previousText}${incomingText}`
+                        : mergeStreamingText(previousText, incomingText);
                     const nonTextParts = mergeStreamingParts(
                       (last.parts ?? []).filter((part) => part.kind !== "text"),
                       deltaParts.filter((part) => part.kind !== "text"),
@@ -226,7 +232,7 @@ export function useGatewayChat({
                       cache_write_tokens: usage.cache_write_tokens ?? last.cache_write_tokens,
                     };
                   } else if (deltaParts.length > 0 || deltaText) {
-                    const incomingText = textFromParts(deltaParts) || deltaText;
+                    const incomingText = deltaFrame.deltaText ?? (textFromParts(deltaParts) || deltaText);
                     const nonTextParts = deltaParts.filter((part) => part.kind !== "text");
                     const initialParts: MessagePart[] = incomingText ? [{ kind: "text", text: incomingText }, ...nonTextParts] : nonTextParts;
                     const initialText = initialParts
@@ -319,11 +325,11 @@ export function useGatewayChat({
                     const usage = extractUsageFromGatewayMessage(chat.message);
                     const fallbackText = last.text.replace(/^__streaming__(?:[^_]+__)?/, "");
                     const hasExistingToolMessages = nextMessages.some((message, index) => index !== lastIndex && hasToolParts(message.parts ?? []));
-                    const finalTextOnlyParts = finalParts.filter((part) => part.kind === "text" || part.kind === "image");
+                    const finalRenderableParts = finalParts.filter((part) => part.kind !== "tool_call" && part.kind !== "tool_result");
                     const mergedFinalParts = finalParts.length > 0 && !hasExistingToolMessages
                       ? mergeStreamingParts([], finalParts, "")
-                      : finalTextOnlyParts.length > 0
-                        ? mergeStreamingParts([], finalTextOnlyParts, "")
+                      : finalRenderableParts.length > 0
+                        ? mergeStreamingParts([], finalRenderableParts, "")
                         : [{ kind: "text" as const, text: finalText || fallbackText }];
                     const renderedFinalText = mergedFinalParts
                       .flatMap((part) => part.kind === "text" ? [part.text] : [])
@@ -343,11 +349,11 @@ export function useGatewayChat({
                     };
                   } else if (finalText || finalParts.length > 0) {
                     const hasExistingToolMessages = nextMessages.some((message) => hasToolParts(message.parts ?? []));
-                    const finalTextOnlyParts = finalParts.filter((part) => part.kind === "text" || part.kind === "image");
+                    const finalRenderableParts = finalParts.filter((part) => part.kind !== "tool_call" && part.kind !== "tool_result");
                     const appendedParts: MessagePart[] = finalParts.length > 0 && !hasExistingToolMessages
                       ? mergeStreamingParts([], finalParts, "")
-                      : finalTextOnlyParts.length > 0
-                        ? mergeStreamingParts([], finalTextOnlyParts, "")
+                      : finalRenderableParts.length > 0
+                        ? mergeStreamingParts([], finalRenderableParts, "")
                         : [{ kind: "text", text: finalText }];
                     nextMessages.push({ 
                       role: "assistant", 

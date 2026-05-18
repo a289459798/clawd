@@ -5,7 +5,8 @@ export type MessagePart =
   | { kind: "tool_call"; tool: string; args?: string }
   | { kind: "tool_result"; tool?: string; text?: string }
   | { kind: "image"; mime_type?: string; data: string; alt?: string }
-  | { kind: "file"; mime_type?: string; name: string; size?: number; path?: string };
+  | { kind: "file"; mime_type?: string; name: string; size?: number; path?: string }
+  | { kind: "rich"; type?: string; title?: string; text?: string };
 
 export type PreviewMessage = {
   role?: string;

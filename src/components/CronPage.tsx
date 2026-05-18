@@ -4,6 +4,7 @@ import {
   describeCronDeliveryLine,
   formatCronSchedule,
   formatCronTimestamp,
+  parseCronJobPayload,
   parseCronListPayload,
   parseCronRunsPayload,
   scheduleAtOf,
@@ -175,9 +176,9 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
     }
   };
 
-  const openEdit = (job: CronJobRow) => {
+  const makeEditDraft = (job: CronJobRow): CronEditDraft => {
     const sendMode = resolveCronSendMode(job);
-    setEditDraft({
+    return {
       id: job.id,
       name: job.name ?? job.id,
       description: job.description ?? "",
@@ -192,7 +193,21 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
       deliveryChannel: job.delivery?.channel ?? "",
       deliveryTo: job.delivery?.to ?? "",
       agentId: job.agentId ?? "",
-    });
+    };
+  };
+
+  const openEdit = async (job: CronJobRow) => {
+    setBusyJobId(job.id);
+    setError(null);
+    try {
+      const raw = await invoke<unknown>("gateway_cron_get", { params: { id: job.id } });
+      const canonical = parseCronJobPayload(raw);
+      setEditDraft(makeEditDraft(canonical ?? job));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : tt(t, "cron.getFailed", "Failed to load the latest cron job before editing."));
+    } finally {
+      setBusyJobId(null);
+    }
   };
 
   const openCreate = () => {
@@ -280,7 +295,7 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
             onToggleRuns={() => void toggleRuns(job.id)}
             onOpenSessionKey={onOpenSessionKey}
             onRun={() => void runJob(job)}
-            onEdit={() => openEdit(job)}
+            onEdit={() => void openEdit(job)}
             onToggleEnabled={() => void updateJob(job.id, { enabled: job.enabled === false })}
             onDelete={() => void removeJob(job)}
             t={t}

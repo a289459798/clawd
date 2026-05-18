@@ -208,6 +208,8 @@ pub struct GatewayChatEventPayload {
     pub state: Option<String>,
     pub session_key: Option<String>,
     pub run_id: Option<String>,
+    pub delta_text: Option<String>,
+    pub replace: Option<bool>,
     pub message: Option<Value>,
     pub stream: Option<String>,
     pub data: Option<Value>,
@@ -556,6 +558,13 @@ fn unix_now_ms() -> Option<u64> {
         .map(|d| d.as_millis() as u64)
 }
 
+fn gateway_debug_logs_enabled() -> bool {
+    matches!(
+        std::env::var("CLAWKIT_GATEWAY_DEBUG").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
 fn send_gateway_frame(socket: &mut WsStream, frame: Value) -> Result<(), String> {
     socket
         .send(Message::Text(frame.to_string().into()))
@@ -731,7 +740,9 @@ fn gateway_event_loop(
                         }
 
                         if let Some(p) = pending.remove(id) {
-                            eprintln!("[clawkit gateway] rpc response id={} frame={}", id, value);
+                            if gateway_debug_logs_enabled() {
+                                eprintln!("[clawkit gateway] rpc response id={} frame={}", id, value);
+                            }
                             let ok = value.get("ok").and_then(Value::as_bool).unwrap_or(false);
                             if ok {
                                 let result = value
@@ -780,7 +791,9 @@ fn handle_message(app: &AppHandle, value: Value) {
     if value.get("type").and_then(Value::as_str) == Some("event")
         && value.get("event").and_then(Value::as_str) == Some("chat")
     {
-        eprintln!("[clawkit gateway] received chat event: {:?}", value);
+        if gateway_debug_logs_enabled() {
+            eprintln!("[clawkit gateway] received chat event: {:?}", value);
+        }
         let payload = value.get("payload").cloned().unwrap_or(json!({}));
         let evt = GatewayChatEventPayload {
             event_type: payload
@@ -799,6 +812,11 @@ fn handle_message(app: &AppHandle, value: Value) {
                 .get("runId")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            delta_text: payload
+                .get("deltaText")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            replace: payload.get("replace").and_then(Value::as_bool),
             message: payload.get("message").cloned(),
             stream: payload
                 .get("stream")
@@ -824,7 +842,9 @@ fn handle_message(app: &AppHandle, value: Value) {
         let _ = app.emit("clawkit://session-message", payload);
     }
     // Log all other events too for debugging
-    else if value.get("type").and_then(Value::as_str) == Some("event") {
+    else if value.get("type").and_then(Value::as_str) == Some("event")
+        && gateway_debug_logs_enabled()
+    {
         eprintln!("[clawkit gateway] received other event: {:?}", value);
     }
 }
@@ -854,10 +874,15 @@ pub async fn gateway_connect(
         }
     }
 
-    let config = read_gateway_client_config()?;
-    let token = config.token.clone();
-    let socket = connect_gateway_socket(&config)?;
-    let device_identity = load_or_create_device_identity()?;
+    let (socket, token, device_identity) = tauri::async_runtime::spawn_blocking(move || {
+        let config = read_gateway_client_config()?;
+        let token = config.token.clone();
+        let socket = connect_gateway_socket(&config)?;
+        let device_identity = load_or_create_device_identity()?;
+        Ok::<_, String>((socket, token, device_identity))
+    })
+    .await
+    .map_err(|error| format!("gateway connect task failed: {error}"))??;
     let (tx, rx) = std::sync::mpsc::channel::<RpcRequest>();
 
     let connect_waiter = Arc::new(PendingRpc::new());
@@ -1093,6 +1118,17 @@ pub async fn gateway_cron_runs(
     tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.runs", params))
         .await
         .map_err(|error| format!("cron.runs task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_cron_get(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: Value,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "cron.get", params))
+        .await
+        .map_err(|error| format!("cron.get task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1473,10 +1509,9 @@ pub fn gateway_chat_history(
     Ok(GatewayHistoryResult { messages })
 }
 
-#[tauri::command]
-pub fn gateway_chat_send(
+fn gateway_chat_send_impl(
     app: AppHandle,
-    state: tauri::State<Arc<GatewayProxyState>>,
+    state: Arc<GatewayProxyState>,
     params: GatewaySendParams,
 ) -> Result<Value, String> {
     let req_id = format!("clawkit-{}", state.next_id.fetch_add(1, Ordering::SeqCst));
@@ -1500,10 +1535,12 @@ pub fn gateway_chat_send(
         })
         .collect();
 
-    eprintln!(
-        "[clawkit gateway] sending chat message: session={}, message={:?}",
-        params.session_key, params.message
-    );
+    if gateway_debug_logs_enabled() {
+        eprintln!(
+            "[clawkit gateway] sending chat message: session={}, message={:?}",
+            params.session_key, params.message
+        );
+    }
     let mut chat_params = serde_json::Map::new();
     chat_params.insert("sessionKey".to_string(), json!(params.session_key));
     chat_params.insert("message".to_string(), json!(params.message));
@@ -1511,7 +1548,9 @@ pub fn gateway_chat_send(
     chat_params.insert("idempotencyKey".to_string(), json!(params.idempotency_key));
     chat_params.insert("attachments".to_string(), json!(attachment_payload));
     let result = send_rpc(&state, "chat.send", Value::Object(chat_params))?;
-    eprintln!("[clawkit gateway] chat.send result: {:?}", result);
+    if gateway_debug_logs_enabled() {
+        eprintln!("[clawkit gateway] chat.send result: {:?}", result);
+    }
 
     let _ = app.emit(
         "clawkit://gateway-send-ack",
@@ -1525,24 +1564,41 @@ pub fn gateway_chat_send(
 }
 
 #[tauri::command]
-pub fn gateway_chat_abort(
-    state: tauri::State<Arc<GatewayProxyState>>,
-    session_key: String,
-    run_id: Option<String>,
+pub async fn gateway_chat_send(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: GatewaySendParams,
 ) -> Result<Value, String> {
-    send_rpc(
-        &state,
-        "chat.abort",
-        json!({
-            "sessionKey": session_key,
-            "runId": run_id,
-        }),
-    )
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || gateway_chat_send_impl(app, state, params))
+        .await
+        .map_err(|error| format!("chat.send task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_sessions_create(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_chat_abort(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    session_key: String,
+    run_id: Option<String>,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(
+            &state,
+            "chat.abort",
+            json!({
+                "sessionKey": session_key,
+                "runId": run_id,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| format!("chat.abort task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_sessions_create(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     params: GatewayCreateSessionParams,
 ) -> Result<Value, String> {
     let mut json_params = serde_json::Map::new();
@@ -1560,7 +1616,12 @@ pub fn gateway_sessions_create(
         json_params.insert("message".to_string(), json!(message));
     }
 
-    send_rpc(&state, "sessions.create", Value::Object(json_params))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "sessions.create", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("sessions.create task failed: {error}"))?
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1585,8 +1646,8 @@ pub struct GatewaySessionKeyParams {
 }
 
 #[tauri::command]
-pub fn gateway_sessions_patch(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_sessions_patch(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     params: GatewaySessionsPatchParams,
 ) -> Result<Value, String> {
     let mut json_params = serde_json::Map::new();
@@ -1611,7 +1672,12 @@ pub fn gateway_sessions_patch(
         json_params.insert("label".to_string(), json!(label));
     }
 
-    send_rpc(&state, "sessions.patch", Value::Object(json_params))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "sessions.patch", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("sessions.patch task failed: {error}"))?
 }
 
 #[tauri::command]

@@ -435,7 +435,8 @@ export type GatewayPart =
   | { type: "toolcall" | "toolCall"; name?: string; arguments?: unknown }
   | { type: "toolresult" | "toolResult"; name?: string; text?: string }
   | { type: "image" | "input_image" | "image_url"; data?: string; url?: string; mimeType?: string; mime_type?: string; text?: string; alt?: string; image_url?: { url?: string } }
-  | { type: "file" | "attachment" | "input_file"; path?: string; url?: string; fileName?: string; filename?: string; name?: string; mimeType?: string; mime_type?: string; size?: number; text?: string };
+  | { type: "file" | "attachment" | "input_file"; path?: string; url?: string; fileName?: string; filename?: string; name?: string; mimeType?: string; mime_type?: string; size?: number; text?: string }
+  | { type: "presentation" | "button" | "buttons" | "control" | "interactive" | "card" | "rich"; title?: string; text?: string; label?: string; name?: string };
 
 export type GatewayUsage = {
   input?: number;
@@ -457,6 +458,8 @@ export type GatewayMessage = {
   senderLabel?: string;
   toolCallId?: string;
   toolName?: string;
+  deltaText?: string;
+  replace?: boolean;
   isError?: boolean;
   errorMessage?: string;
 };
@@ -467,6 +470,8 @@ export type GatewayChatEvent = {
   stream?: "tool" | "lifecycle" | "compaction" | "fallback" | string;
   sessionKey?: string;
   runId?: string;
+  deltaText?: string;
+  replace?: boolean;
   message?: GatewayMessage;
   data?: Record<string, unknown>;
   errorMessage?: string;

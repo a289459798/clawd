@@ -14,13 +14,14 @@ describe("openClawVersion", () => {
 
   it("orders minor segments numerically", () => {
     expect(compareOpenClawCalendarCoreVersion("2026.5.9", "2026.5.10")).toBeLessThan(0);
-    expect(compareOpenClawCalendarCoreVersion("2026.5.11", RECOMMENDED_OPENCLAW_CLI_VERSION)).toBeGreaterThan(0);
+    expect(compareOpenClawCalendarCoreVersion("2026.5.13", RECOMMENDED_OPENCLAW_CLI_VERSION)).toBeGreaterThan(0);
   });
 
   it("detects below recommended", () => {
     expect(isOpenClawCliBelowRecommended("2026.5.7")).toBe(true);
-    expect(isOpenClawCliBelowRecommended("2026.5.10")).toBe(false);
-    expect(isOpenClawCliBelowRecommended("2026.5.10-beta.1")).toBe(false);
+    expect(isOpenClawCliBelowRecommended("2026.5.10")).toBe(true);
+    expect(isOpenClawCliBelowRecommended("2026.5.12")).toBe(false);
+    expect(isOpenClawCliBelowRecommended("2026.5.12-beta.1")).toBe(false);
     expect(isOpenClawCliBelowRecommended(undefined)).toBe(false);
   });
 

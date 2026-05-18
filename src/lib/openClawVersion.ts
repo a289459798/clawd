@@ -1,5 +1,5 @@
-/** Calendar-style OpenClaw CLI builds (e.g. 2026.5.10); ignores prerelease suffix after `-`. */
-export const RECOMMENDED_OPENCLAW_CLI_VERSION = "2026.5.10";
+/** Calendar-style OpenClaw CLI builds (e.g. 2026.5.12); ignores prerelease suffix after `-`. */
+export const RECOMMENDED_OPENCLAW_CLI_VERSION = "2026.5.12";
 
 /** First upstream release that documents `skills.install.allowUploadedArchives` (zip skill installs via Gateway). */
 export const MIN_OPENCLAW_CLI_VERSION_SKILL_ZIP_UPLOAD = "2026.5.10";

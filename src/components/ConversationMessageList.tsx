@@ -288,6 +288,24 @@ function StructuredMessageContent({
           <span className="message-file-meta">{[part.mime_type, formatFileSize(part.size)].filter(Boolean).join(" · ")}</span>
         </button>,
       );
+    } else if (part.kind === "rich") {
+      const labelKey = part.type === "presentation"
+        ? "conversation.presentationContent"
+        : part.type === "button" || part.type === "buttons" || part.type === "control" || part.type === "interactive"
+          ? "conversation.interactiveContent"
+          : "conversation.structuredContent";
+      const labelFallback = part.type === "presentation"
+        ? "Presentation content"
+        : part.type === "button" || part.type === "buttons" || part.type === "control" || part.type === "interactive"
+          ? "Interactive content"
+          : "Structured content";
+      elements.push(
+        <div className={`message-rich-card ${imageVariant}`} key={`${conversationId}-rich-${i}`}>
+          <span className="message-rich-type">{tt(t, labelKey, labelFallback)}</span>
+          {part.title ? <strong className="message-rich-title">{part.title}</strong> : null}
+          {part.text ? <span className="message-rich-text">{part.text}</span> : null}
+        </div>,
+      );
     }
   }
   flushToolTimeline();
