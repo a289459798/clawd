@@ -1,5 +1,6 @@
 import type { Conversation } from "../types/conversation";
 import type { NotificationSettings } from "../types/settings";
+import { isConversationRunning } from "./conversationRunState";
 
 type CompletionNotificationParams = {
   previous: Conversation | null;
@@ -28,7 +29,7 @@ function isTerminalConversation(conversation: Conversation) {
 }
 
 function wasRunning(conversation: Conversation | null) {
-  return Boolean(conversation?.runtime?.activeRunId) || conversation?.status === "working";
+  return isConversationRunning(conversation);
 }
 
 function classifyTerminal(conversation: Conversation): "success" | "failure" | "stopped" | null {

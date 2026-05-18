@@ -5,6 +5,7 @@ import {
   parseHealthPluginErrors,
 } from "./pluginPackagingDiagnostics";
 import { resolveChannelHealthHint, resolveChannelOperationalDegraded } from "./channelHealth";
+import { isConversationRunning } from "./conversationRunState";
 import { resolveGatewayChannelStatusIds } from "./gatewayChannelStatusIds";
 import type { Agent, ChannelConnection, ClawKitBootstrapStatus, PluginRepairCard, Skill } from "../types/app";
 import type { Conversation } from "../types/conversation";
@@ -147,8 +148,7 @@ function resolvePetLastUserMessage(conversation: Conversation | null): string | 
 
 function conversationHasActivePetReply(conversation: Conversation, now: number) {
   if (
-    conversation.runtime?.activeRunId
-    || conversation.status === "working"
+    isConversationRunning(conversation)
     || PET_ACTIVE_EVENT_TYPES.has((conversation.latestEventType ?? "").toLowerCase())
   ) return true;
   const completedAt = normalizePetTimestamp(conversation.runtime?.lastTerminalAt ?? conversation.updatedAt);
@@ -164,10 +164,8 @@ export function buildPetContext(agents: Agent[], conversation: Conversation | nu
     .map((item) => {
       const reply = resolvePetLastReply(item);
       const eventType = (item.latestEventType ?? "").toLowerCase();
-      const activeByRuntime = Boolean(item.runtime?.activeRunId);
-      const activeByStatus = item.status === "working";
       const activeByEventType = PET_ACTIVE_EVENT_TYPES.has(eventType);
-      const isActive = activeByRuntime || activeByStatus || activeByEventType;
+      const isActive = isConversationRunning(item) || activeByEventType;
       const toolProgress = resolvePetToolProgress(item);
       return {
         conversationId: item.id,

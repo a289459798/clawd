@@ -2,6 +2,8 @@
 
 > Last updated: 2026-05-06 — statuses synced with clawkit implementation (batch + 「重复操作反馈」).
 
+**增量 backlog（约 2026.5.10 线之后、含优先级与 `[ ]`/`[x]` 标识）**：见 [`2026-05-11-openclaw-upstream-optimization.md`](./2026-05-11-openclaw-upstream-optimization.md)。
+
 This checklist is based on OpenClaw changelog items after 2026.4.24 from:
 
 - `/Users/zhangzy/Workspace/nodejs/clawdbot/CHANGELOG.md`
@@ -124,15 +126,15 @@ Scope: only track items that make sense for clawkit as a local desktop workbench
 
 - [x] Add Gateway process uptime to status surfaces.
   Source: `Status: show compact Gateway process uptime and host system uptime`.
-  Notes: OpenClaw 抽屉展示「Gateway 运行时长」，基于 WS `hello-ok.snapshot.uptimeMs`（见 `clawdbot/docs/gateway/index.md`）与本机时间推算。**主机系统 uptime** 仅在完整 `openclaw status` CLI 路径中汇总，当前 Gateway WS 未暴露给 clawkit，故未在 UI 显示。
+  Notes: OpenClaw 信息弹层展示「Gateway 运行时长」，基于 WS `hello-ok.snapshot.uptimeMs`（见 `clawdbot/docs/gateway/index.md`）与本机时间推算。**主机系统 uptime** 仅在完整 `openclaw status` CLI 路径中汇总，当前 Gateway WS 未暴露给 clawkit，故未在 UI 显示。
 
 - [x] Add recent restart handoffs to Gateway status.
   Source: `Gateway/status: show recent supervisor restart handoffs`.
-  Notes: 调用 Gateway RPC `update.status` 的 `sentinel`（见 `clawdbot/docs/gateway/protocol.md`），以白话一行展示在 OpenClaw 抽屉；覆盖更新触发的重启记录而非全部 supervisor 事件。
+  Notes: 调用 Gateway RPC `update.status` 的 `sentinel`（见 `clawdbot/docs/gateway/protocol.md`），以白话一行展示在 OpenClaw 信息弹层；覆盖更新触发的重启记录而非全部 supervisor 事件。
 
 - [x] Add dashboard/render diagnostics for slow UI frames.
   Source: `Control UI/performance: record browser long animation frame or long task entries`.
-  Notes: OpenClaw 抽屉内可折叠「渲染诊断」：`PerformanceObserver` 采集 LoAF / Long Task（就绪后即订阅，面板用于查看与清空）；不支持时在文案中标明。
+  Notes: OpenClaw 信息弹层内可折叠「渲染诊断」：`PerformanceObserver` 采集 LoAF / Long Task（就绪后即订阅，面板用于查看与清空）；不支持时在文案中标明。
 
 - [x] Keep slow Gateway/page calls async with local loading states.
   Source: Gateway/performance/startup and existing clawkit async page rules.
@@ -173,4 +175,3 @@ Scope: only track items that make sense for clawkit as a local desktop workbench
 - Channel-specific routing fixes that are fully backend-owned and do not change Gateway UI/RPC surfaces.
 - iOS app build hygiene, StoreKit receipt changes, Watch/Widget source hygiene.
 - Provider backend fixes that only change model inference internals and expose no UI surface.
-

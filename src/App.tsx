@@ -9,7 +9,7 @@ import { AgentCreateDialog } from "./components/AgentCreateDialog";
 import { AgentFilesDialog } from "./components/AgentFilesDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
-import { OpenClawInfoDrawer } from "./components/OpenClawInfoDrawer";
+import { OpenClawInfoModal } from "./components/OpenClawInfoModal";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
 import { conversationMatchesSessionKey, findConversationById } from "./lib/conversationSelectors";
@@ -34,6 +34,8 @@ import { parseSenderMeta } from "./lib/messageMeta";
 import { canonicalizeModelRef } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
+import { isConversationRunning } from "./lib/conversationRunState";
+import { AGENT_DESCRIPTION_FILE } from "./lib/agentTemplates";
 import {
   applyPluginHealthToChannels,
   mapGatewaySkills,
@@ -571,7 +573,7 @@ function App() {
         if (aid) transcriptSourceOfTruthIds.add(aid);
         for (const agent of currentAgentSnapshots) {
           for (const conversation of agent.conversations) {
-            if (conversation.runtime?.activeRunId) transcriptSourceOfTruthIds.add(conversation.id);
+            if (isConversationRunning(conversation)) transcriptSourceOfTruthIds.add(conversation.id);
           }
         }
         setAgents(mergeGatewaySessionRowsIntoAgents(currentAgentSnapshots, rows, { transcriptSourceOfTruthIds }));
@@ -1012,7 +1014,7 @@ function App() {
     if (aid) transcriptSourceOfTruthIds.add(aid);
     for (const agent of agentsRef.current) {
       for (const conversation of agent.conversations) {
-        if (conversation.runtime?.activeRunId) transcriptSourceOfTruthIds.add(conversation.id);
+        if (isConversationRunning(conversation)) transcriptSourceOfTruthIds.add(conversation.id);
       }
     }
     setAgents(mergeGatewaySessionRowsIntoAgents(agentsRef.current, rows, { transcriptSourceOfTruthIds }));
@@ -1221,10 +1223,16 @@ function App() {
 
   const toggleOpenClawInfo = useCallback(() => {
     setOpenClawInfoOpen((current) => !current);
-    if (!openClawInfoOpen) {
-      void refreshOpenClawStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!openClawInfoOpen) return;
+    const raf = window.requestAnimationFrame(() => {
+      // Keep first paint responsive: render the modal first, then refresh runtime info.
+      void refreshOpenClawStatus({ skipGatewayRefresh: true });
       void refreshOpenClawCliStatus();
-    }
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [openClawInfoOpen, refreshOpenClawCliStatus, refreshOpenClawStatus]);
 
   useEffect(() => {
@@ -1329,7 +1337,7 @@ function App() {
     }
   }, [refreshGatewayConnections, refreshWeixinPluginStatus]);
 
-  const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string }) => {
+  const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string; description?: string }) => {
     setAgentCreating(true);
     setAgentCreateError(null);
     try {
@@ -1344,6 +1352,15 @@ function App() {
       if (params.name.trim() && params.name.trim() !== result.name) {
         await invoke<GatewayAgentsUpdateResult>("gateway_agents_update", {
           params: { agentId: result.agentId, name: params.name.trim() },
+        });
+      }
+      if (params.description?.trim()) {
+        await invoke("gateway_agents_files_set", {
+          params: {
+            agentId: result.agentId,
+            name: AGENT_DESCRIPTION_FILE,
+            content: params.description.trim(),
+          },
         });
       }
       await refreshGatewaySnapshot({ priorityAgentId: result.agentId });
@@ -1729,9 +1746,7 @@ function App() {
   }, []);
 
   const activeQueuedMessages = activeConversationId ? queuedMessagesByConversation[activeConversationId] ?? [] : [];
-  const activeConversationSending =
-    activeConversation?.status === "working" ||
-    Boolean(activeConversation?.runtime?.activeRunId);
+  const activeConversationSending = isConversationRunning(activeConversation);
   const activeSendError = activeConversationId ? sendErrorsByConversation[activeConversationId] ?? null : null;
   const sessionOverrideResetEnabled = useMemo(
     () => Boolean(activeConversationId && !activeConversationId.startsWith("draft-") && !activeConversation?.isDraft),
@@ -2261,6 +2276,7 @@ function App() {
           <Suspense fallback={lazyPageFallback}>
             <CronPage
               gatewayConnected={gatewayConnected}
+              agents={agents.map((agent) => ({ id: agent.id, name: agent.name }))}
               onOpenSessionKey={handleOpenCronSessionKey}
               t={t}
             />
@@ -2306,7 +2322,7 @@ function App() {
         ) : null}
       </div>
 
-      <OpenClawInfoDrawer
+      <OpenClawInfoModal
         open={openClawInfoOpen}
         t={t}
         gatewayConnected={gatewayConnected}

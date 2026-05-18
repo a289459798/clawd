@@ -4308,7 +4308,11 @@ svg.nav-iconfont {
 }
 
 .agent-create-dialog {
-  width: min(520px, 100%);
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .agent-files-dialog {
@@ -4319,6 +4323,7 @@ svg.nav-iconfont {
 }
 
 .agent-create-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -4339,10 +4344,83 @@ svg.nav-iconfont {
   font-size: 0.78rem;
 }
 
+.agent-create-body {
+  min-height: 0;
+  overflow: auto;
+}
+
 .agent-create-form {
   display: grid;
   gap: 14px;
   padding: 18px 20px;
+}
+
+.agent-template-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.agent-template-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-template-head strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.agent-template-head span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-align: right;
+}
+
+.agent-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agent-template-card {
+  min-height: 96px;
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--control-bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-template-card:hover,
+.agent-template-card.active {
+  border-color: color-mix(in srgb, var(--green) 42%, var(--border));
+  background: color-mix(in srgb, var(--green) 8%, var(--control-bg));
+}
+
+.agent-template-card > span {
+  font-size: 1.1rem;
+}
+
+.agent-template-card strong {
+  font-size: 0.84rem;
+}
+
+.agent-template-card small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .agent-create-form label {
@@ -4373,14 +4451,27 @@ svg.nav-iconfont {
 
 .agent-create-form input,
 .agent-create-form select,
+.agent-create-form textarea,
 .channel-config-body input {
-  height: 36px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--control-bg);
   color: var(--text);
-  padding: 0 11px;
   outline: none;
+}
+
+.agent-create-form input,
+.agent-create-form select,
+.channel-config-body input {
+  height: 36px;
+  padding: 0 11px;
+}
+
+.agent-create-form textarea {
+  min-height: 156px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .workspace-picker-row {
@@ -4395,6 +4486,7 @@ svg.nav-iconfont {
 
 .agent-create-form input:focus,
 .agent-create-form select:focus,
+.agent-create-form textarea:focus,
 .channel-config-body input:focus {
   border-color: color-mix(in srgb, var(--green) 34%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 8%, transparent);
@@ -4572,6 +4664,7 @@ svg.nav-iconfont {
 }
 
 .agent-create-actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
@@ -5109,7 +5202,7 @@ svg.nav-iconfont {
 
 .models-toolbar input,
 .models-toolbar select,
-.model-config-drawer input {
+.model-config-modal input {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border);
@@ -5500,21 +5593,26 @@ svg.nav-iconfont {
   inset: 0;
   z-index: 75;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
   background: rgba(0, 0, 0, 0.34);
+  overflow: auto;
 }
 
 .app-shell[data-theme="light"] .model-config-backdrop {
   background: rgba(20, 31, 43, 0.28);
 }
 
-.model-config-drawer {
-  width: min(380px, 92vw);
-  height: 100%;
+.model-config-modal {
+  width: min(420px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
   padding: 16px;
   background: var(--panel);
-  border-left: 1px solid var(--border);
-  box-shadow: -18px 0 42px rgba(0, 0, 0, 0.34);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -5537,7 +5635,7 @@ svg.nav-iconfont {
 }
 
 .model-config-head span,
-.model-config-drawer label span {
+.model-config-modal label span {
   color: var(--muted);
   font-size: 0.76rem;
 }
@@ -5554,12 +5652,12 @@ svg.nav-iconfont {
   line-height: 1;
 }
 
-.model-config-drawer label {
+.model-config-modal label {
   display: grid;
   gap: 6px;
 }
 
-.model-config-drawer input {
+.model-config-modal input {
   height: 34px;
   padding: 0 10px;
 }
@@ -6475,16 +6573,19 @@ svg.nav-iconfont {
   position: fixed;
   inset: 0;
   z-index: 69;
-  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.34);
+  overflow: auto;
 }
 
-.openclaw-info-drawer {
-  position: absolute;
-  left: 58px;
-  bottom: 14px;
+.openclaw-info-modal {
+  position: relative;
   z-index: 70;
-  width: min(320px, calc(100vw - 84px));
-  max-height: min(520px, calc(100vh - 28px));
+  width: min(480px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
   overflow: auto;
   padding: 12px;
   border: 1px solid rgba(255, 255, 255, 0.09);
@@ -6497,46 +6598,25 @@ svg.nav-iconfont {
   gap: 10px;
 }
 
-.openclaw-info-drawer::before {
-  content: "";
-  position: absolute;
-  left: -7px;
-  bottom: 16px;
-  width: 12px;
-  height: 12px;
-  border-left: 1px solid rgba(255, 255, 255, 0.09);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
-  background: rgba(18, 18, 18, 0.98);
-  transform: rotate(45deg);
-}
-
 .openclaw-info-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.openclaw-info-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.openclaw-info-status div {
+.openclaw-info-head > div {
   display: grid;
-  gap: 3px;
   min-width: 0;
+  gap: 3px;
 }
 
-.openclaw-info-status strong {
+.openclaw-info-head strong {
   color: rgba(255, 255, 255, 0.92);
-  font-size: 0.88rem;
+  font-size: 0.98rem;
 }
 
-.openclaw-info-status div span {
-  max-width: 190px;
+.openclaw-info-head span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6544,74 +6624,95 @@ svg.nav-iconfont {
   font-size: 0.74rem;
 }
 
-.openclaw-info-status > span:last-child {
-  margin-left: auto;
-  color: rgba(255, 255, 255, 0.46);
+.openclaw-status-card,
+.openclaw-simple-section,
+.openclaw-advanced-details {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.openclaw-status-card {
+  display: grid;
+  gap: 10px;
+}
+
+.openclaw-status-card.connected {
+  border-color: color-mix(in srgb, var(--green) 22%, transparent);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.openclaw-status-card.disconnected {
+  border-color: color-mix(in srgb, var(--yellow) 24%, transparent);
+  background: color-mix(in srgb, var(--yellow) 8%, transparent);
+}
+
+.openclaw-status-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.openclaw-status-main strong {
+  color: var(--text);
+  font-size: 0.94rem;
+}
+
+.openclaw-status-main p,
+.openclaw-status-main small,
+.openclaw-update-suggestion,
+.openclaw-message-list p {
+  margin: 4px 0 0;
+  color: var(--muted);
   font-size: 0.78rem;
-  text-align: right;
+  line-height: 1.45;
 }
 
-.openclaw-connect-switch {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border: 0;
-  background: transparent;
-  padding: 0;
+.openclaw-status-main small {
+  display: block;
+  color: var(--text-soft);
 }
 
-.openclaw-connect-switch input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
+.openclaw-update-suggestion {
+  margin: 0;
 }
 
-.openclaw-connect-switch span {
-  width: 34px;
-  height: 18px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
-  position: relative;
-  transition: background 160ms ease;
+.openclaw-primary-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: 8px;
 }
 
-.openclaw-connect-switch span::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.72);
-  transition: transform 160ms ease, background 160ms ease;
+.openclaw-message-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 24%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--yellow) 8%, transparent);
 }
 
-.openclaw-connect-switch input:checked + span {
-  background: rgba(82, 242, 197, 0.28);
+.openclaw-message-list p {
+  margin: 0;
+  word-break: break-word;
 }
 
-.openclaw-connect-switch input:checked + span::after {
-  transform: translateX(16px);
-  background: #52f2c5;
+.openclaw-simple-section {
+  display: grid;
+  gap: 8px;
 }
 
-.openclaw-connect-switch.busy {
-  cursor: wait;
-  opacity: 0.72;
-}
-
-.openclaw-connect-switch:disabled {
-  cursor: wait;
+.openclaw-simple-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.82rem;
 }
 
 .openclaw-info-metrics {
   display: grid;
   gap: 8px;
-  padding: 10px 0 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .openclaw-info-metrics div {
@@ -6637,11 +6738,49 @@ svg.nav-iconfont {
 
 .openclaw-restart-sentinel-hint {
   margin: 0;
-  padding: 0 0 4px;
   color: rgba(255, 255, 255, 0.52);
   font-size: 0.74rem;
   line-height: 1.45;
   word-break: break-word;
+}
+
+.openclaw-advanced-details {
+  color: var(--muted);
+}
+
+.openclaw-advanced-details > summary {
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  font-weight: 600;
+  list-style: none;
+}
+
+.openclaw-advanced-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.openclaw-advanced-details > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: 7px;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  vertical-align: middle;
+  transition: transform 0.15s ease;
+}
+
+.openclaw-advanced-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.openclaw-advanced-details > .openclaw-update-panel,
+.openclaw-advanced-details > .openclaw-restart-sentinel-hint,
+.openclaw-advanced-details > .openclaw-ui-diagnostics {
+  margin-top: 10px;
 }
 
 .openclaw-ui-diagnostics {
@@ -6801,7 +6940,8 @@ svg.nav-iconfont {
 
 .openclaw-update-button {
   width: 100%;
-  height: 30px;
+  min-height: 34px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6811,6 +6951,17 @@ svg.nav-iconfont {
   color: var(--green);
   cursor: pointer;
   font-size: 0.78rem;
+}
+
+.openclaw-update-button.primary {
+  background: var(--green);
+  color: #06271d;
+  border-color: var(--green);
+  font-weight: 700;
+}
+
+.openclaw-update-button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--green) 88%, white);
 }
 
 .openclaw-update-button:hover:not(:disabled) {
@@ -6854,15 +7005,10 @@ svg.nav-iconfont {
   border: 1px solid var(--border);
 }
 
-.openclaw-info-actions {
-  display: flex;
-  justify-content: stretch;
-  gap: 8px;
-}
-
 .openclaw-home-button {
   width: 100%;
-  height: 32px;
+  min-height: 34px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8056,32 +8202,38 @@ svg.nav-iconfont {
   inset: 0;
   z-index: 78;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
   background: rgba(0, 0, 0, 0.48);
+  overflow: auto;
 }
 
 .app-shell[data-theme="light"] .cron-edit-backdrop {
   background: rgba(20, 31, 43, 0.3);
 }
 
-.cron-edit-drawer {
-  width: min(520px, calc(100vw - 28px));
-  height: 100%;
-  overflow: auto;
+.cron-edit-modal {
+  width: min(720px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px;
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 12px;
   background: var(--panel);
-  box-shadow: -18px 0 42px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
 }
 
 .cron-edit-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
 }
 
 .cron-edit-head > div {
@@ -8113,29 +8265,211 @@ svg.nav-iconfont {
   cursor: pointer;
 }
 
-.cron-edit-drawer label,
+.cron-step-tabs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.cron-step-tabs button {
+  min-width: 0;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--control-bg);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.cron-step-tabs button span {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 12%, var(--control-bg));
+  color: var(--green);
+  font-weight: 700;
+}
+
+.cron-step-tabs button.active {
+  border-color: color-mix(in srgb, var(--green) 42%, var(--border));
+  background: color-mix(in srgb, var(--green) 9%, var(--control-bg));
+  color: var(--text);
+}
+
+.cron-edit-body {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.cron-step-pane {
+  display: grid;
+  gap: 12px;
+}
+
+.cron-edit-modal label,
 .cron-edit-section {
   display: grid;
   gap: 6px;
 }
 
-.cron-edit-drawer label > span,
-.cron-edit-section > strong {
+.cron-edit-modal label > span,
+.cron-edit-section > strong,
+.cron-edit-section > summary {
   color: var(--text-soft);
   font-size: 0.78rem;
 }
 
-.cron-edit-drawer input,
-.cron-edit-drawer select {
+.cron-edit-modal label > small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.cron-edit-modal input,
+.cron-edit-modal select,
+.cron-edit-modal textarea {
   width: 100%;
   min-width: 0;
-  height: 34px;
-  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--control-bg);
   color: var(--text);
   outline: none;
+}
+
+.cron-edit-modal input,
+.cron-edit-modal select {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.cron-edit-modal textarea {
+  min-height: 112px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.cron-template-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.cron-template-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cron-template-head strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.cron-template-head span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-align: right;
+}
+
+.cron-template-grid,
+.cron-schedule-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cron-template-card,
+.cron-schedule-cards button {
+  min-height: 86px;
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--control-bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cron-template-card:hover,
+.cron-schedule-cards button:hover,
+.cron-schedule-cards button.active {
+  border-color: color-mix(in srgb, var(--green) 42%, var(--border));
+  background: color-mix(in srgb, var(--green) 8%, var(--control-bg));
+}
+
+.cron-template-card > span {
+  font-size: 1.1rem;
+}
+
+.cron-template-card strong,
+.cron-schedule-cards strong {
+  font-size: 0.84rem;
+}
+
+.cron-template-card small,
+.cron-schedule-cards small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.cron-edit-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-edit-step > span {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--green);
+  color: #06271d;
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+
+.cron-edit-step strong {
+  color: var(--text);
+  font-size: 0.94rem;
+}
+
+.cron-preview-line {
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 18%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--green) 7%, transparent);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .cron-edit-checkbox {
@@ -8155,12 +8489,25 @@ svg.nav-iconfont {
   border-top: 1px solid var(--border);
 }
 
+.cron-edit-section > summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+
+.cron-edit-section > summary::-webkit-details-marker {
+  display: none;
+}
+
 .cron-edit-actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: auto;
-  padding-top: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
 }
 
 select:not([multiple]),
@@ -8335,14 +8682,14 @@ select:not([multiple]) option,
 .app-shell[data-theme="light"] .cron-help-strip,
 .app-shell[data-theme="light"] .cron-job-card,
 .app-shell[data-theme="light"] .cron-runs-panel,
-.app-shell[data-theme="light"] .cron-edit-drawer,
+.app-shell[data-theme="light"] .cron-edit-modal,
 .app-shell[data-theme="light"] .pet-detail-panel,
 .app-shell[data-theme="light"] .pets-list-panel,
 .app-shell[data-theme="light"] .pet-row,
 .app-shell[data-theme="light"] .agent-create-dialog,
 .app-shell[data-theme="light"] .modal,
 .app-shell[data-theme="light"] .session-action-popover,
-.app-shell[data-theme="light"] .openclaw-info-drawer,
+.app-shell[data-theme="light"] .openclaw-info-modal,
 .app-shell[data-theme="light"] .channel-config-dialog {
   background: var(--panel);
   color: var(--text);
@@ -8502,7 +8849,7 @@ select:not([multiple]) option,
   .cron-job-session,
   .cron-job-last-run,
   .cron-edit-head span,
-  .cron-edit-drawer label > span,
+  .cron-edit-modal label > span,
   .cron-edit-section > strong,
   .path-text,
   .pet-row-main span,
@@ -8527,8 +8874,8 @@ select:not([multiple]) option,
   .model-search-input,
   .conversation-list-toolbar input,
   .search-input,
-  .cron-edit-drawer input,
-  .cron-edit-drawer select,
+  .cron-edit-modal input,
+  .cron-edit-modal select,
   .channel-config-body input,
   .channel-config-body select
 ) {
@@ -8798,22 +9145,17 @@ select:not([multiple]) option,
   .history-sidepanel,
   .conversation-composer.focused,
   .thinking-indicator-fixed,
-  .model-config-drawer,
-  .cron-edit-drawer,
+  .model-config-modal,
+  .cron-edit-modal,
   .agent-create-dialog,
   .agent-files-dialog,
   .channel-config-dialog,
-  .openclaw-info-drawer
+  .openclaw-info-modal
 ) {
   background: var(--panel);
   color: var(--text);
   border-color: var(--border);
   box-shadow: 0 18px 46px rgba(20, 31, 43, 0.12);
-}
-
-.app-shell[data-theme="light"] .openclaw-info-drawer::before {
-  background: var(--panel);
-  border-color: var(--border);
 }
 
 .app-shell[data-theme="light"] :is(
@@ -8847,7 +9189,9 @@ select:not([multiple]) option,
   .agent-create-header h2,
   .agent-file-editor-head strong,
   .agent-create-guidance strong,
-  .openclaw-info-status strong,
+  .openclaw-info-head strong,
+  .openclaw-status-main strong,
+  .openclaw-simple-section h3,
   .openclaw-info-metrics strong,
   .openclaw-update-row strong,
   .openclaw-info-grid strong,
@@ -8898,7 +9242,7 @@ select:not([multiple]) option,
   .cron-run-no-session,
   .cron-edit-head span,
   .model-config-head span,
-  .model-config-drawer label span,
+  .model-config-modal label span,
   .agent-create-form label span,
   .channel-config-body label span,
   .agent-file-tab span,
@@ -8908,8 +9252,12 @@ select:not([multiple]) option,
   .agent-create-guidance p,
   .agent-create-field-notes span,
   .channel-config-note,
-  .openclaw-info-status div span,
-  .openclaw-info-status > span:last-child,
+  .openclaw-info-head span,
+  .openclaw-status-main p,
+  .openclaw-status-main small,
+  .openclaw-update-suggestion,
+  .openclaw-message-list p,
+  .openclaw-advanced-details,
   .openclaw-info-metrics span,
   .openclaw-restart-sentinel-hint,
   .openclaw-ui-diagnostics,
@@ -8938,6 +9286,13 @@ select:not([multiple]) option,
   .top-user-image-card,
   .top-user-file-card,
   .cron-run-row,
+  .agent-template-panel,
+  .cron-template-panel,
+  .cron-preview-line,
+  .openclaw-status-card,
+  .openclaw-simple-section,
+  .openclaw-advanced-details,
+  .openclaw-message-list,
   .openclaw-update-panel,
   .openclaw-info-grid,
   .openclaw-info-list,
@@ -8985,13 +9340,15 @@ select:not([multiple]) option,
   .conversation-list-toolbar input,
   .models-toolbar input,
   .models-toolbar select,
-  .model-config-drawer input,
+  .model-config-modal input,
   .agent-create-form input,
   .agent-create-form select,
+  .agent-create-form textarea,
   .agent-file-editor textarea,
   .channel-config-body input,
-  .cron-edit-drawer input,
-  .cron-edit-drawer select
+  .cron-edit-modal input,
+  .cron-edit-modal select,
+  .cron-edit-modal textarea
 ) {
   background: #ffffff;
   color: var(--text);

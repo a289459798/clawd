@@ -1,4 +1,5 @@
 import { formatTokenCount } from "./appFormatters";
+import { isConversationRunning } from "./conversationRunState";
 import { isInternalOpenClawMessage } from "./gatewayMessages";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./toolStream";
 import type { Conversation, ConversationAgentRuntime, ConversationRuntime, PreviewMessage } from "../types/conversation";
@@ -8,11 +9,15 @@ import type { Agent, BuildAgentsOptions, ModelOption } from "../types/app";
 const COMPLETED_RECENT_WINDOW_MS = 10 * 60 * 1000;
 const SNAPSHOT_ACTIVE_GRACE_MS = 30 * 1000;
 const STALE_RUNNING_WINDOW_MS = 6 * 60 * 60 * 1000;
+const FORCE_IDLE_RUNNING_WINDOW_MS = 5 * 60 * 1000;
 
 export const deriveConversationStatus = (runtime?: ConversationRuntime) => {
   const now = Date.now();
   if (runtime?.activeRunId) {
     const lastActiveAt = runtime.lastEventAt ?? runtime.activeStartedAt;
+    if (lastActiveAt && now - lastActiveAt > FORCE_IDLE_RUNNING_WINDOW_MS) {
+      return "idle" as const;
+    }
     if (lastActiveAt && now - lastActiveAt > STALE_RUNNING_WINDOW_MS) {
       return "stopped" as const;
     }
@@ -125,7 +130,7 @@ export const patchConversation = (conversation: Conversation, updater: (conversa
 
 export function hasActiveAgentRun(agents: Agent[]) {
   return agents.some((agent) =>
-    agent.conversations.some((conversation) => Boolean(conversation.runtime?.activeRunId)),
+    agent.conversations.some((conversation) => isConversationRunning(conversation)),
   );
 }
 

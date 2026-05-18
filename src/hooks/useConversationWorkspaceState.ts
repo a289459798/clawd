@@ -1,4 +1,5 @@
 import { useDeferredValue, useMemo } from "react";
+import { isConversationRunning } from "../lib/conversationRunState";
 import { findConversationById, getVisibleConversations } from "../lib/conversationSelectors";
 import type { Agent } from "../types/app";
 import type { Conversation } from "../types/conversation";
@@ -58,7 +59,7 @@ export function useConversationWorkspaceState({
       if (selectedConversationIds.has(conversation.id) || openedConversationIds[conversation.id]) {
         return true;
       }
-      if (conversation.isDraft || conversation.status === "working") {
+      if (conversation.isDraft || isConversationRunning(conversation)) {
         return true;
       }
       return typeof conversation.updatedAt === "number" && now - conversation.updatedAt <= RECENT_CONVERSATION_WINDOW_MS;

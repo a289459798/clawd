@@ -441,7 +441,7 @@ export function ModelsPage({
       {providerDraft ? (
         <div className="model-config-backdrop" role="dialog" aria-modal="true">
           <form
-            className="model-config-drawer"
+            className="model-config-modal"
             onSubmit={(event) => {
               event.preventDefault();
               onSaveProviderConfig(providerDraft);
@@ -476,7 +476,7 @@ export function ModelsPage({
       {modelDraft ? (
         <div className="model-config-backdrop" role="dialog" aria-modal="true">
           <form
-            className="model-config-drawer"
+            className="model-config-modal"
             onSubmit={(event) => {
               event.preventDefault();
               onSaveModelConfig(modelDraft);

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { OpenClawSnapshot } from "../types/gateway";
 import type { Agent, Skill, ChannelConnection } from "../types/app";
 import { buildAgentsFromSnapshot } from "../lib/agentsSnapshot";
+import { isConversationRunning } from "../lib/conversationRunState";
 
 interface UseGatewayRealtimeProps {
   enabled: boolean;
@@ -38,7 +39,7 @@ export function useGatewayRealtime({
 
         // Skip updating if there's an active run in progress
         const hasActiveRun = currentAgentSnapshots.some((agent) =>
-          agent.conversations.some((conv) => conv.runtime?.activeRunId),
+          agent.conversations.some((conv) => isConversationRunning(conv)),
         );
         if (hasActiveRun) return;
 

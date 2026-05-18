@@ -3,6 +3,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getLatestUserMessage } from "../lib/conversationDetailState";
+import { isConversationRunning } from "../lib/conversationRunState";
 import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
 import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
@@ -295,7 +296,7 @@ export function ConversationDetail({
               <span>{tt(t, "conversation.copySessionId", "Copy session ID")}</span>
               <small>{tt(t, "conversation.copySessionIdHint", "For troubleshooting or locating this session in CLI")}</small>
             </button>
-            {activeConversation.status === "working" || activeConversation.runtime?.activeRunId ? (
+            {isConversationRunning(activeConversation) ? (
               <button
                 type="button"
                 onClick={() => void onAbortSession?.()}

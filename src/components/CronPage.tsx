@@ -14,10 +14,12 @@ import {
   type CronJobRow,
   type CronRunRow,
 } from "../lib/cronGateway";
+import { CRON_TEMPLATES } from "../lib/cronTemplates";
 
 type CronPageProps = {
   gatewayConnected: boolean;
   t: (key: string) => string;
+  agents?: Array<{ id: string; name?: string }>;
   /** Navigate to chat tab and focus session key */
   onOpenSessionKey: (sessionKey: string) => void;
 };
@@ -40,7 +42,15 @@ type CronEditDraft = {
   sendMode: "notify" | "silent" | "isolated" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
+  agentId: string;
 };
+
+function defaultAtLocalValue() {
+  const next = new Date(Date.now() + 60 * 60_000);
+  next.setMinutes(0, 0, 0);
+  const local = new Date(next.getTime() - next.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
 
 function formatRunTs(ts: number): string {
   try {
@@ -50,7 +60,7 @@ function formatRunTs(ts: number): string {
   }
 }
 
-export function CronPage({ gatewayConnected, onOpenSessionKey, t }: CronPageProps) {
+export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }: CronPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [listPayload, setListPayload] = useState<unknown>(null);
@@ -181,6 +191,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey, t }: CronPageProp
       sendMode,
       deliveryChannel: job.delivery?.channel ?? "",
       deliveryTo: job.delivery?.to ?? "",
+      agentId: job.agentId ?? "",
     });
   };
 
@@ -194,10 +205,11 @@ export function CronPage({ gatewayConnected, onOpenSessionKey, t }: CronPageProp
       cronExpr: "0 9 * * *",
       cronTz: "Asia/Shanghai",
       everyMinutes: "60",
-      atLocal: "",
+      atLocal: defaultAtLocalValue(),
       sendMode: "notify",
       deliveryChannel: "",
       deliveryTo: "",
+      agentId: "",
     });
   };
 
@@ -282,6 +294,7 @@ export function CronPage({ gatewayConnected, onOpenSessionKey, t }: CronPageProp
           onChange={setEditDraft}
           onCancel={() => setEditDraft(null)}
           onSubmit={() => void saveEditDraft(editDraft)}
+          agents={agents}
           t={t}
         />
       ) : null}
@@ -299,6 +312,7 @@ function buildCronPatchFromDraft(draft: CronEditDraft, requirePayload: boolean, 
     name,
     description: draft.description.trim(),
     enabled: draft.enabled,
+    agentId: draft.agentId.trim() || null,
   };
   const payloadText = draft.payloadText.trim();
   if (requirePayload && !payloadText) {
@@ -404,6 +418,37 @@ function describeCronSendMode(job: CronJobRow, deliveryText: string, t: (key: st
   if (mode === "silent") return tt(t, "cron.send.silent", "Silent · Run without notification");
   if (mode === "isolated") return tt(t, "cron.send.isolated", "Isolated session · Run in own session");
   return tt(t, "cron.send.webhook", "Webhook · Send result to URL");
+}
+
+function describeDraftSchedule(draft: CronEditDraft, agents: Array<{ id: string; name?: string }>, t: (key: string) => string): string {
+  const selectedAgent = agents.find((agent) => agent.id === draft.agentId);
+  const actor = selectedAgent?.name || selectedAgent?.id || tt(t, "cron.defaultAgent", "default agent");
+  const task = draft.name.trim() || tt(t, "cron.unnamedTask", "this task");
+  if (draft.scheduleKind === "every") {
+    const minutes = Number(draft.everyMinutes);
+    const interval = Number.isFinite(minutes) && minutes > 0
+      ? `${Math.round(minutes)} ${tt(t, "cron.minutes", "minutes")}`
+      : tt(t, "cron.interval", "interval");
+    return tt(t, "cron.preview.every", "Every {{interval}}, {{agent}} runs: {{task}}")
+      .replace("{{interval}}", interval)
+      .replace("{{agent}}", actor)
+      .replace("{{task}}", task);
+  }
+  if (draft.scheduleKind === "at") {
+    return tt(t, "cron.preview.at", "At {{time}}, {{agent}} runs: {{task}}")
+      .replace("{{time}}", draft.atLocal || tt(t, "common.time", "time"))
+      .replace("{{agent}}", actor)
+      .replace("{{task}}", task);
+  }
+  const label = draft.cronExpr.trim() === "0 9 * * 1"
+    ? tt(t, "cron.simple.weekly", "Weekly")
+    : draft.cronExpr.trim() === "0 9 * * *"
+      ? tt(t, "cron.simple.daily", "Daily")
+      : draft.cronExpr.trim();
+  return tt(t, "cron.preview.cron", "{{schedule}}, {{agent}} runs: {{task}}")
+    .replace("{{schedule}}", label || tt(t, "cron.schedule", "Schedule"))
+    .replace("{{agent}}", actor)
+    .replace("{{task}}", task);
 }
 
 function CronJobCard({
@@ -538,6 +583,7 @@ function CronEditDialog({
   onChange,
   onCancel,
   onSubmit,
+  agents,
   t,
 }: {
   draft: CronEditDraft;
@@ -545,16 +591,55 @@ function CronEditDialog({
   onChange: (draft: CronEditDraft) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  agents: Array<{ id: string; name?: string }>;
   t: (key: string) => string;
 }) {
+  const [createStep, setCreateStep] = useState<1 | 2 | 3>(1);
+  useEffect(() => {
+    setCreateStep(1);
+  }, [draft.id]);
   const patch = <K extends keyof CronEditDraft>(key: K, value: CronEditDraft[K]) => {
     onChange({ ...draft, [key]: value });
   };
+  const applyTemplate = (templateId: string) => {
+    const template = CRON_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) return;
+    onChange({
+      ...draft,
+      name: tt(t, template.nameKey, ""),
+      description: tt(t, template.summaryKey, ""),
+      payloadText: tt(t, template.payloadKey, ""),
+      scheduleKind: template.scheduleKind,
+      cronExpr: template.cronExpr ?? draft.cronExpr,
+      everyMinutes: template.everyMinutes ?? draft.everyMinutes,
+      atLocal: draft.atLocal || defaultAtLocalValue(),
+      sendMode: "notify",
+    });
+  };
+  const chooseSchedule = (kind: "daily" | "weekly" | "every" | "at") => {
+    if (kind === "daily") {
+      onChange({ ...draft, scheduleKind: "cron", cronExpr: "0 9 * * *", cronTz: draft.cronTz || "Asia/Shanghai" });
+      return;
+    }
+    if (kind === "weekly") {
+      onChange({ ...draft, scheduleKind: "cron", cronExpr: "0 9 * * 1", cronTz: draft.cronTz || "Asia/Shanghai" });
+      return;
+    }
+    if (kind === "every") {
+      onChange({ ...draft, scheduleKind: "every", everyMinutes: draft.everyMinutes || "60" });
+      return;
+    }
+    onChange({ ...draft, scheduleKind: "at", atLocal: draft.atLocal || defaultAtLocalValue() });
+  };
+  const schedulePreview = describeDraftSchedule(draft, agents, t);
+  const isCreate = !draft.id;
+  const showStep = (step: 1 | 2 | 3) => !isCreate || createStep === step;
+  const canGoNextFromStep1 = draft.name.trim().length > 0 && draft.payloadText.trim().length > 0;
 
   return (
     <div className="cron-edit-backdrop" role="dialog" aria-modal="true">
       <form
-        className="cron-edit-drawer"
+        className="cron-edit-modal"
         onSubmit={(event) => {
           event.preventDefault();
           onSubmit();
@@ -568,93 +653,210 @@ function CronEditDialog({
           <button type="button" onClick={onCancel} aria-label={tt(t, "common.close", "Close")} title={tt(t, "common.close", "Close")}>×</button>
         </div>
 
-        <label>
-          <span>{tt(t, "common.name", "Name")}</span>
-          <input value={draft.name} onChange={(event) => patch("name", event.target.value)} />
-        </label>
-        <label>
-          <span>{tt(t, "common.description", "Description")}</span>
-          <input value={draft.description} onChange={(event) => patch("description", event.target.value)} />
-        </label>
-        <label>
-          <span>{tt(t, "cron.payload", "Job content")}</span>
-          <input value={draft.payloadText} onChange={(event) => patch("payloadText", event.target.value)} placeholder={tt(t, "cron.payloadPlaceholder", "Text injected into OpenClaw when triggered")} />
-        </label>
-        <label className="cron-edit-checkbox">
-          <input type="checkbox" checked={draft.enabled} onChange={(event) => patch("enabled", event.target.checked)} />
-          <span>{tt(t, "cron.enableJob", "Enable job")}</span>
-        </label>
+        {isCreate ? (
+          <div className="cron-step-tabs" aria-label={tt(t, "cron.steps", "Task creation steps")}>
+            {[1, 2, 3].map((step) => (
+              <button
+                key={step}
+                className={createStep === step ? "active" : ""}
+                type="button"
+                onClick={() => setCreateStep(step as 1 | 2 | 3)}
+              >
+                <span>{step}</span>
+                {step === 1 ? tt(t, "cron.step.short.what", "Task") : step === 2 ? tt(t, "cron.step.short.when", "Schedule") : tt(t, "cron.step.short.confirm", "Confirm")}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
-        <div className="cron-edit-section">
-          <strong>{tt(t, "cron.schedule", "Schedule")}</strong>
-          <label>
-            <span>{tt(t, "common.type", "Type")}</span>
-            <select value={draft.scheduleKind} onChange={(event) => patch("scheduleKind", event.target.value as CronEditDraft["scheduleKind"])}>
-              <option value="cron">{tt(t, "cron.type.cron", "Cron expression")}</option>
-              <option value="every">{tt(t, "cron.type.every", "Fixed interval")}</option>
-              <option value="at">{tt(t, "cron.type.at", "Specific time")}</option>
-            </select>
-          </label>
-          {draft.scheduleKind === "cron" ? (
-            <>
-              <label>
-                <span>Cron</span>
-                <input value={draft.cronExpr} onChange={(event) => patch("cronExpr", event.target.value)} placeholder="0 9 * * *" />
-              </label>
-              <label>
-                <span>{tt(t, "common.timezone", "Timezone")}</span>
-                <input value={draft.cronTz} onChange={(event) => patch("cronTz", event.target.value)} placeholder="Asia/Shanghai" />
-              </label>
-            </>
-          ) : null}
-          {draft.scheduleKind === "every" ? (
-            <label>
-              <span>{tt(t, "cron.intervalMinutes", "Interval minutes")}</span>
-              <input type="number" min="1" value={draft.everyMinutes} onChange={(event) => patch("everyMinutes", event.target.value)} />
-            </label>
-          ) : null}
-          {draft.scheduleKind === "at" ? (
-            <label>
-              <span>{tt(t, "common.time", "Time")}</span>
-              <input type="datetime-local" value={draft.atLocal} onChange={(event) => patch("atLocal", event.target.value)} />
-            </label>
-          ) : null}
-        </div>
+        <div className="cron-edit-body">
+          {showStep(1) ? (
+            <div className="cron-step-pane">
+              {!draft.id ? (
+                <section className="cron-template-panel" aria-labelledby="cron-template-title">
+                  <div className="cron-template-head">
+                    <strong id="cron-template-title">{tt(t, "cron.templates.title", "Common task templates")}</strong>
+                    <span>{tt(t, "cron.templates.hint", "Pick one to fill the task, then edit it.")}</span>
+                  </div>
+                  <div className="cron-template-grid">
+                    {CRON_TEMPLATES.map((template) => (
+                      <button key={template.id} className="cron-template-card" type="button" onClick={() => applyTemplate(template.id)}>
+                        <span aria-hidden="true">{template.emoji}</span>
+                        <strong>{tt(t, template.nameKey, "")}</strong>
+                        <small>{tt(t, template.summaryKey, "")}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
-        <div className="cron-edit-section">
-          <strong>{tt(t, "cron.sendMode", "Send mode")}</strong>
-          <label>
-            <span>{tt(t, "cron.resultDelivery", "Result delivery")}</span>
-            <select value={draft.sendMode} onChange={(event) => patch("sendMode", event.target.value as CronEditDraft["sendMode"])}>
-              <option value="notify">{tt(t, "cron.sendOption.notify", "Notify: send result to chat")}</option>
-              <option value="silent">{tt(t, "cron.sendOption.silent", "Silent: no runtime notification")}</option>
-              <option value="isolated">{tt(t, "cron.sendOption.isolated", "Isolated session: run in own session")}</option>
-              <option value="webhook">{tt(t, "cron.sendOption.webhook", "Webhook: send to URL")}</option>
-            </select>
-          </label>
-          {draft.sendMode === "notify" ? (
-            <>
+              <div className="cron-edit-step">
+                <span>1</span>
+                <strong>{tt(t, "cron.step.what", "What should this task do?")}</strong>
+              </div>
               <label>
-                <span>{tt(t, "common.channel", "Channel")}</span>
-                <input value={draft.deliveryChannel} onChange={(event) => patch("deliveryChannel", event.target.value)} placeholder="last / telegram / slack" />
+                <span>{tt(t, "cron.taskName", "Task name")}</span>
+                <input value={draft.name} onChange={(event) => patch("name", event.target.value)} placeholder={tt(t, "cron.taskNamePlaceholder", "e.g. Daily email check")} />
               </label>
               <label>
-                <span>{tt(t, "common.target", "Target")}</span>
-                <input value={draft.deliveryTo} onChange={(event) => patch("deliveryTo", event.target.value)} placeholder={tt(t, "cron.targetPlaceholder", "Leave empty to use default context")} />
+                <span>{tt(t, "common.description", "Description")}</span>
+                <input value={draft.description} onChange={(event) => patch("description", event.target.value)} />
               </label>
-            </>
+              <label>
+                <span>{tt(t, "cron.payload", "What should AI do?")}</span>
+                <textarea value={draft.payloadText} onChange={(event) => patch("payloadText", event.target.value)} placeholder={tt(t, "cron.payloadPlaceholder", "Tell AI what to do, like: Check whether there are important emails today and summarize them for me.")} rows={5} />
+              </label>
+            </div>
           ) : null}
-          {draft.sendMode === "webhook" ? (
-            <label>
-              <span>Webhook URL</span>
-              <input value={draft.deliveryTo} onChange={(event) => patch("deliveryTo", event.target.value)} placeholder="https://example.com/hook" />
-            </label>
+
+          {showStep(2) ? (
+            <div className="cron-step-pane">
+              <label>
+                <span>{tt(t, "cron.agent", "Who should do it?")}</span>
+                <select value={draft.agentId} onChange={(event) => patch("agentId", event.target.value)}>
+                  <option value="">{tt(t, "cron.useDefaultAgent", "Use default agent")}</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>
+                  ))}
+                </select>
+                <small>{tt(t, "cron.agentHint", "Not sure? Keep the default.")}</small>
+              </label>
+              <div className="cron-edit-step">
+                <span>2</span>
+                <strong>{tt(t, "cron.step.when", "When should it run?")}</strong>
+              </div>
+              <div className="cron-schedule-cards">
+                <button className={draft.scheduleKind === "cron" && draft.cronExpr === "0 9 * * *" ? "active" : ""} type="button" onClick={() => chooseSchedule("daily")}>
+                  <strong>{tt(t, "cron.simple.daily", "Daily")}</strong>
+                  <small>{tt(t, "cron.simple.dailyHint", "Run once every day")}</small>
+                </button>
+                <button className={draft.scheduleKind === "cron" && draft.cronExpr === "0 9 * * 1" ? "active" : ""} type="button" onClick={() => chooseSchedule("weekly")}>
+                  <strong>{tt(t, "cron.simple.weekly", "Weekly")}</strong>
+                  <small>{tt(t, "cron.simple.weeklyHint", "Run every Monday")}</small>
+                </button>
+                <button className={draft.scheduleKind === "every" ? "active" : ""} type="button" onClick={() => chooseSchedule("every")}>
+                  <strong>{tt(t, "cron.simple.every", "Every few hours")}</strong>
+                  <small>{tt(t, "cron.simple.everyHint", "Repeat at a fixed interval")}</small>
+                </button>
+                <button className={draft.scheduleKind === "at" ? "active" : ""} type="button" onClick={() => chooseSchedule("at")}>
+                  <strong>{tt(t, "cron.simple.once", "Specific time")}</strong>
+                  <small>{tt(t, "cron.simple.onceHint", "Run once at a chosen time")}</small>
+                </button>
+              </div>
+              {draft.scheduleKind === "every" ? (
+                <label>
+                  <span>{tt(t, "cron.intervalMinutes", "Interval minutes")}</span>
+                  <input type="number" min="1" value={draft.everyMinutes} onChange={(event) => patch("everyMinutes", event.target.value)} />
+                </label>
+              ) : null}
+              {draft.scheduleKind === "at" ? (
+                <label>
+                  <span>{tt(t, "common.time", "Time")}</span>
+                  <input type="datetime-local" value={draft.atLocal} onChange={(event) => patch("atLocal", event.target.value)} />
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+
+          {showStep(3) ? (
+            <div className="cron-step-pane">
+              <div className="cron-edit-step">
+                <span>3</span>
+                <strong>{tt(t, "cron.step.confirm", "Confirm and create")}</strong>
+              </div>
+              <div className="cron-preview-line">
+                {tt(t, "cron.previewPrefix", "Preview")}: {schedulePreview}
+              </div>
+              <details className="cron-edit-section">
+                <summary>{tt(t, "cron.advanced", "Advanced options")}</summary>
+                <label className="cron-edit-checkbox">
+                  <input type="checkbox" checked={draft.enabled} onChange={(event) => patch("enabled", event.target.checked)} />
+                  <span>{tt(t, "cron.enableJob", "Enable job")}</span>
+                </label>
+                <label>
+                  <span>{tt(t, "common.type", "Type")}</span>
+                  <select value={draft.scheduleKind} onChange={(event) => patch("scheduleKind", event.target.value as CronEditDraft["scheduleKind"])}>
+                    <option value="cron">{tt(t, "cron.type.cron", "Cron expression")}</option>
+                    <option value="every">{tt(t, "cron.type.every", "Fixed interval")}</option>
+                    <option value="at">{tt(t, "cron.type.at", "Specific time")}</option>
+                  </select>
+                </label>
+                {draft.scheduleKind === "cron" ? (
+                  <>
+                    <label>
+                      <span>{tt(t, "cron.expression", "Cron expression")}</span>
+                      <input value={draft.cronExpr} onChange={(event) => patch("cronExpr", event.target.value)} placeholder="0 9 * * *" />
+                    </label>
+                    <label>
+                      <span>{tt(t, "common.timezone", "Timezone")}</span>
+                      <input value={draft.cronTz} onChange={(event) => patch("cronTz", event.target.value)} placeholder="Asia/Shanghai" />
+                    </label>
+                  </>
+                ) : null}
+                {draft.scheduleKind === "every" ? (
+                  <label>
+                    <span>{tt(t, "cron.intervalMinutes", "Interval minutes")}</span>
+                    <input type="number" min="1" value={draft.everyMinutes} onChange={(event) => patch("everyMinutes", event.target.value)} />
+                  </label>
+                ) : null}
+                {draft.scheduleKind === "at" ? (
+                  <label>
+                    <span>{tt(t, "common.time", "Time")}</span>
+                    <input type="datetime-local" value={draft.atLocal} onChange={(event) => patch("atLocal", event.target.value)} />
+                  </label>
+                ) : null}
+              </details>
+
+              <details className="cron-edit-section">
+                <summary>{tt(t, "cron.deliveryAdvanced", "Result delivery")}</summary>
+                <label>
+                  <span>{tt(t, "cron.resultDelivery", "Result delivery")}</span>
+                  <select value={draft.sendMode} onChange={(event) => patch("sendMode", event.target.value as CronEditDraft["sendMode"])}>
+                    <option value="notify">{tt(t, "cron.sendOption.notify", "Notify: send result to chat")}</option>
+                    <option value="silent">{tt(t, "cron.sendOption.silent", "Silent: no runtime notification")}</option>
+                    <option value="isolated">{tt(t, "cron.sendOption.isolated", "Isolated session: run in own session")}</option>
+                    <option value="webhook">{tt(t, "cron.sendOption.webhook", "Webhook: send to URL")}</option>
+                  </select>
+                </label>
+                {draft.sendMode === "notify" ? (
+                  <>
+                    <label>
+                      <span>{tt(t, "common.channel", "Channel")}</span>
+                      <input value={draft.deliveryChannel} onChange={(event) => patch("deliveryChannel", event.target.value)} placeholder={tt(t, "cron.deliveryChannelPlaceholder", "last / telegram / slack")} />
+                    </label>
+                    <label>
+                      <span>{tt(t, "common.target", "Target")}</span>
+                      <input value={draft.deliveryTo} onChange={(event) => patch("deliveryTo", event.target.value)} placeholder={tt(t, "cron.targetPlaceholder", "Leave empty to use default context")} />
+                    </label>
+                  </>
+                ) : null}
+                {draft.sendMode === "webhook" ? (
+                  <label>
+                    <span>{tt(t, "cron.webhookUrl", "Webhook URL")}</span>
+                    <input value={draft.deliveryTo} onChange={(event) => patch("deliveryTo", event.target.value)} placeholder="https://example.com/hook" />
+                  </label>
+                ) : null}
+              </details>
+            </div>
           ) : null}
         </div>
 
         <div className="cron-edit-actions">
-          <button className="ghost-link-button" type="button" onClick={onCancel}>{tt(t, "common.cancel", "Cancel")}</button>
-          <button className="ghost-link-button primary-action" type="submit" disabled={busy}>{busy ? tt(t, "common.saving", "Saving") : tt(t, "common.save", "Save")}</button>
+          <button className="ghost-link-button" type="button" onClick={isCreate && createStep > 1 ? () => setCreateStep((current) => (current === 3 ? 2 : 1)) : onCancel}>
+            {isCreate && createStep > 1 ? tt(t, "common.back", "Back") : tt(t, "common.cancel", "Cancel")}
+          </button>
+          {isCreate && createStep < 3 ? (
+            <button
+              className="ghost-link-button primary-action"
+              type="button"
+              disabled={createStep === 1 && !canGoNextFromStep1}
+              onClick={() => setCreateStep((current) => (current === 1 ? 2 : 3))}
+            >
+              {tt(t, "common.next", "Next")}
+            </button>
+          ) : (
+            <button className="ghost-link-button primary-action" type="submit" disabled={busy}>{busy ? tt(t, "common.saving", "Saving") : tt(t, "common.save", "Save")}</button>
+          )}
         </div>
       </form>
     </div>

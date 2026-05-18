@@ -31,7 +31,7 @@ export function useOpenClawRuntime({
     }
   }, []);
 
-  const refreshOpenClawStatus = useCallback(async () => {
+  const refreshOpenClawStatus = useCallback(async (options?: { skipGatewayRefresh?: boolean }) => {
     try {
       await invoke("gateway_connect");
       const [status, updateStatus, configResult] = await Promise.all([
@@ -43,11 +43,15 @@ export function useOpenClawRuntime({
       setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult?.config));
       setOpenClawConfigDefaultModelLoaded(true);
       setGatewayUpdateRestartSentinel(updateStatus?.sentinel ?? null);
-      await refreshGatewayStatus();
+      if (!options?.skipGatewayRefresh) {
+        await refreshGatewayStatus();
+      }
     } catch (error) {
       console.warn("Failed to load OpenClaw runtime status", error);
       setGatewayUpdateRestartSentinel(null);
-      await refreshGatewayStatus();
+      if (!options?.skipGatewayRefresh) {
+        await refreshGatewayStatus();
+      }
     }
   }, [refreshGatewayStatus]);
 

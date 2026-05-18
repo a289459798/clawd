@@ -4,6 +4,7 @@ import { ConversationDetail } from "./ConversationDetail";
 import { ConversationList } from "./ConversationList";
 import { FocusAssistantMessageList, FullConversationMessageList } from "./ConversationMessageList";
 import { getConversationDetailState } from "../lib/conversationDetailState";
+import { isConversationRunning } from "../lib/conversationRunState";
 import { ensureSelectedModelOption } from "../lib/modelOptions";
 import type { ComposerAttachment, ModelOption, QueuedComposerMessage } from "../types/app";
 import type { Conversation } from "../types/conversation";
@@ -170,7 +171,7 @@ export function ConversationWorkspace({
       activeConversation.lastRole,
       false,
     );
-    const shouldShowInProgress = activeConversation.runtime?.activeRunId || (!gatewayError && detailState.isWaitingReply) || detailState.isStillStreaming;
+    const shouldShowInProgress = isConversationRunning(activeConversation) || (!gatewayError && detailState.isWaitingReply) || detailState.isStillStreaming;
     if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">{tt(t, "conversation.emptyReply", "No reply content yet")}</p>;
 
     return (
@@ -210,7 +211,7 @@ export function ConversationWorkspace({
       activeConversation.lastRole,
       true,
     );
-    const shouldShowInProgress = activeConversation.runtime?.activeRunId || (!gatewayError && detailState.isStillStreaming);
+    const shouldShowInProgress = isConversationRunning(activeConversation) || (!gatewayError && detailState.isStillStreaming);
     if (!detailState.hasRenderableContent && !shouldShowInProgress) return <p className="ai-empty-hint">{tt(t, "conversation.emptyConversation", "No conversation content yet")}</p>;
 
     return (
