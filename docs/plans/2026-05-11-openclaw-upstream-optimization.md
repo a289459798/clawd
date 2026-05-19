@@ -3,7 +3,7 @@
 > 创建日期：2026-05-11  
 > 依据：OpenClaw `CHANGELOG.md`（尤其 `## Unreleased`）、本地 `clawdbot` 仓库对照、ClawKit 当前实现扫描。  
 > 范围：ClawKit 作为 **Gateway 客户端 + 配置壳**，不平行实现通道/自动化内核。
-> 版本基线：`openclaw@latest` 当前为 `2026.5.12`（GitHub `v2026.5.12` stable，npm `latest`）。本文后续按 `2026.5.12` 正式版规划；`2026.5.14-beta.*` 仅作为观察项，不进入默认排期。
+> 版本基线：`openclaw@latest` 当前已推进到 `2026.5.18`（GitHub `v2026.5.18` Latest）。本文以 `2026.5.12` 已落地能力为基础，追加 `2026.5.14` ~ `2026.5.18` 对 ClawKit 有产品价值的优化项。
 
 与 **2026-04-24 之后通用 changelog 跟进** 重叠的条目，仍以主清单为准：
 
@@ -33,6 +33,31 @@
 | **P1** | 与上游新 RPC/新配置强相关，对工作台日常价值高；建议优先排期。 |
 | **P2** | 依赖上游 RPC 稳定性或仅部分用户需要；有清晰价值后再做。 |
 | **P3** | 文案/排障/高级配置展示为主，或随上游版本自然满足。 |
+
+---
+
+## 2026.5.18 追加影响摘要
+
+### ClawKit 应主动跟进
+
+- 普通用户体验：OpenClaw Mac app 已把 Settings 做成缓存导航、紧凑卡片和稳定间距；ClawKit 设置页应减少每次切换时的 config/schema/channel 重拉，做到先开页面 shell，再局部刷新。
+- 发送性能：OpenClaw 文档明确模型和 thinking picker 是 `sessions.patch` 持久化会话 override，不应在每次 `chat.send` 前无条件 patch。ClawKit 应改为“选择即保存；发送只等待同 session 的 pending patch”。
+- 长会话性能：`chat.history` 是 bounded response，且上游会省略超大 rows；ClawKit 应做分段历史加载，打开会话先加载最近窗口，向上滚动或点击再加载更早消息。
+- Gateway readiness：5.18 优化了 startup overlap 和 update-check 延后；ClawKit 应把 Gateway 状态拆成“进程启动 / ready / sidecar/channel 状态”，避免一个全局 loading 掩盖真实进度。
+- 版本检测：OpenClaw 5.18 依赖链要求 Node.js 22.19；ClawKit 安装/升级引导应检查 Node 版本并给普通用户可执行的修复入口。
+- Cron 运行追踪：5.17/5.18 增强 `cron.run --wait` 与 `cron.runs --run-id`；ClawKit 的“立即运行”应按本次 `runId` 展示状态，而不是刷新整页 runs 猜测。
+- Rich / presentation 能力：5.18 增强 message presentation capability 与 rich controls；ClawKit 需要继续保留结构化 assistant 内容，平台不支持时展示 fallback 文本。
+- OAuth / QR 登录：admin-http-rpc 可启动并等待 Web QR login；ClawKit 后续可把登录做成“点按钮 -> 浏览器/二维码 -> 自动完成”，避免复制命令。
+- Browser 工具：`blockedByDialog` 可提示网页弹窗阻塞；ClawKit 工具卡片应把这类状态翻译成普通用户能理解的提示。
+- 诊断：Gateway restart trace / performance trace 可支持 ClawKit 的慢调用诊断面板；普通用户看简短状态，开发者可展开慢点。
+
+### 优先产品收益
+
+- 发送消息更快：模型/thinking 不变时跳过 `sessions.patch`，避免 3~4 秒发送前等待。
+- 打开会话更快：历史分段加载，长对话不阻塞主界面。
+- 设置更像桌面软件：缓存导航和局部 loading，避免切页卡死。
+- 安装/升级更少踩坑：Node/OpenClaw/Gateway readiness 提前检查。
+- 授权更傻瓜化：减少复制命令和终端概念。
 
 ---
 
@@ -93,6 +118,55 @@
 - **状态**：`[x]`
 - **完成说明**：已增加 `rich` 消息 part，presentation / button / interactive / card 等结构化内容不会被丢弃；对话里至少展示可读的本地化占位，并保留 title/text 摘要。
 
+### 0.4 发送前 `sessions.patch` 去重与选择即保存
+
+- **上游**：OpenClaw WebChat 文档说明模型和 thinking picker 通过 `sessions.patch` 保存为 session override；发送时只需等待同 session 未完成 patch。
+- **用户价值**：避免每次发送都等待慢 `sessions.patch`，尤其是在 Gateway/模型目录较慢时减少 3~4 秒卡顿。
+- **目标**：
+  - 模型或 thinking 下拉选择变化时立即保存到 Gateway。
+  - 发送时只等待当前 session 的 pending patch；如果没有 pending 且本地状态一致，不再 patch。
+  - 发送前保留兜底比较，防止外部修改或本地状态漂移导致错误模型发送。
+- **风险与处理**：
+  - 本地状态可能漂移：会话切换、重连、terminal event 后通过 `sessions.list` reconciliation 修正。
+  - 模型别名可能不一致：比较前使用 `canonicalizeModelRef` 和 provider-aware normalization。
+  - thinking 的继承语义不同于显式 `off`：短期沿用现有 `off` 控件；后续拆成 `inherit/off/level`。
+  - patch 失败：回滚 UI，并给普通用户可读错误。
+- **验收要点**：模型未变时发送不出现 `send.sessions_patch` 慢日志；模型刚切换后立即发送会等待该 patch 完成；patch 失败不让 UI 停留在未生效的选择。
+- **状态**：`[x]`
+- **完成说明**：已实现模型/thinking 选择即保存，按 session 串行 pending patch；发送时仅等待当前 session 未完成 patch，并保留发送前兜底 diff，未变化时跳过 `sessions.patch`。
+
+### 0.5 `chat.history` 轻量窗口与手动加载更多
+
+- **上游**：OpenClaw `chat.history` 是 bounded response；Control UI 请求使用有限 `limit` 和 `maxChars`，避免超大历史阻塞 UI。当前 Gateway 未暴露 cursor 分页，主要支持按 `limit` 返回最近窗口。
+- **用户价值**：打开长会话时先显示最近内容，避免一次性拉取/渲染过大历史；需要查看更早内容时再主动加载。
+- **目标**：
+  - 打开会话默认只请求最近窗口。
+  - 请求携带 `maxChars`，避免单条超大消息拖慢渲染。
+  - 当最近窗口可能不完整时，在对话顶部提供“加载更早消息”，按更大的窗口重新拉取并合并。
+- **风险与处理**：
+  - Gateway 暂无 cursor：先使用 `80 → 200 → 500` 的窗口递增，不伪造真正分页。
+  - 运行中的会话不能被短窗口覆盖：继续使用当前 optimistic-tail merge 策略。
+- **验收要点**：首次打开长会话只请求 80 条和 `maxChars=4000`；点击加载更多后提升窗口；构建与 Rust 检查通过。
+- **状态**：`[x]`
+- **完成说明**：已让 `gateway_chat_history` 透传 `maxChars`，前端默认窗口为 80 条，并在详情页提供按 200/500 递增的“加载更早消息”入口。
+
+### 0.6 `sessions.changed` 列表刷新合并
+
+- **用户价值**：Gateway 连续发会话变化事件时，ClawKit 不应并发刷新多次会话树，避免对话列表和资源侧栏卡顿。
+- **目标**：
+  - 保留现有 debounce。
+  - 如果一次刷新尚未完成，后续事件只标记 pending，当前刷新完成后最多补跑一次。
+  - `sessions.list` reconciliation 统一慢调用打点，便于定位 Gateway 或前端瓶颈。
+- **状态**：`[x]`
+- **完成说明**：已将 `sessions.changed` 刷新改为单飞合并策略，并为 `mergeSessionsListFromGateway` 增加 `sessions.merge.*` perf 日志。
+
+### 0.7 对话模式显示消息时间
+
+- **用户价值**：用户查看完整对话时能知道每条消息发生时间，方便定位运行、工具调用和历史上下文。
+- **目标**：在 conversation 模式下为用户和 assistant 消息显示轻量时间戳；focus 模式保持简洁。
+- **状态**：`[x]`
+- **完成说明**：`FullConversationMessageList` 已在每条消息下展示本地化日期/时间，并适配深色和浅色主题。
+
 ---
 
 ## P1：建议优先
@@ -148,21 +222,31 @@
 - **上游**：`allowUploadedArchives` 开启后，可信客户端可经 Gateway 安装 zip 技能。
 - **Gateway 流程**：`skills.upload.begin` → `skills.upload.chunk` → `skills.upload.commit` → `skills.install { source: "upload" }`。
 - **目标**：`SkillsPage`（或等价入口）提供选 zip → 分片上传 → commit → install → 进度/错误文案；与版本门槛、`skills.install.allowUploadedArchives` 开关联动禁用。
-- **状态**：`[ ]`  
+- **状态**：`[x]`
+- **完成说明**：技能页已新增「从 zip 安装技能」入口，选择 zip 后自动计算 sha256、分片上传、commit 并通过 `skills.install { source: "upload" }` 安装；若未打开 `allowUploadedArchives`，展示普通用户可理解的设置引导。
 - **验收要点**：安装前展示代码安装风险确认；失败时区分「开关未启用」「校验失败」「安装失败」；不要绕过 Gateway 直接解压写技能目录。
 
 ### 1.6 侧栏会话树：`parentSessionKey` / `spawn-child` 嵌套展示
 
 - **上游**：Control UI 对子代理会话的树形/前缀展示；`2026.5.12` 修正 ACP spawn-child kind 与 runtime metadata。
 - **目标**：利用 `sessions.list` 中 `parentSessionKey` / `childSessions` / `kind` / `agentRuntime`（类型已部分存在于 `src/types/gateway.ts`）折叠或缩进子会话，并显示 runtime/source 小标签。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：已将 `parentSessionKey` / `childSessions` / `kind` 映射到本地 conversation 模型；资源侧栏按父子关系缩进展示子会话，并保留 runtime 与 token 标签。
+
+### 1.6.1 Cron 立即运行：按 `runId` 精确追踪本次运行
+
+- **上游**：`openclaw cron run <job-id>` 返回 `runId`，`openclaw cron runs --id <job-id> --run-id <run-id>` 可查询本次运行记录。
+- **用户价值**：普通用户点击“运行”后能马上知道任务已加入队列、是否已开始，以及对应的本次运行记录；不需要理解后台调度，也不用在整页历史里猜哪条是刚才触发的。
+- **目标**：`CronPage` 调用 `gateway_cron_run` 后读取返回的 `runId`，随后用 `gateway_cron_runs` 带 `runId` 查询；任务卡片内展示“已加入队列 / 已开始 / 暂未生成记录 / 失败”的局部状态。
+- **状态**：`[x]`
+- **完成说明**：已在 `CronPage` 增加本次运行提示与 `runId` 查询路径，`CronRunRow` 补充 `runId` 字段；查询结果会合并到当前任务的运行记录中，不再只靠刷新最近 25 条记录猜测。
 
 ### 1.7 实时事件：区分 `isHeartbeat`（若 payload 已下发）
 
 - **上游**：agent 事件可选 `isHeartbeat`。
 - **目标**：会话状态或活动摘要中区分「定时心跳」与「用户触发生成」。
-- **状态**：`[ ]`  
-- **前置**：确认当前 WebSocket/事件订阅是否已包含该字段。
+- **状态**：`[x]`
+- **完成说明**：`GatewayChatEvent` 已补充 `isHeartbeat`，流式、工具、final/error 事件会写入 `runtime.lastEventIsHeartbeat`；资源侧栏在对应会话上显示「心跳」标签，帮助普通用户区分系统自动触发和手动对话。
 
 ### 1.8 模型页：OpenAI Provider 登录路径说明（Codex/ChatGPT 默认 vs API Key）
 
@@ -175,7 +259,8 @@
 
 - **上游**：多处将旧 id 规范到 `google/gemini-3.1-pro-preview`。
 - **目标**：当会话当前模型仍为旧 id 时，Composer 或详情条展示简短迁移提示（链文档或 `sessions.patch` 引导）。
-- **状态**：`[ ]`
+- **状态**：`[x]`
+- **完成说明**：Composer 检测到 `google/gemini-3-pro-preview` / `gemini-3-pro-preview` 时显示迁移提示；若模型列表中已有 `google/gemini-3.1-pro-preview`，提供一键切换并复用现有 `onModelChange` / `sessions.patch` 保存链路。
 
 ### 1.10 本地模型 provider `localService` 状态提示
 
@@ -277,11 +362,12 @@
 | P1 | 1.2 新建定时任务傻瓜式向导 | `[x]` |
 | P1 | 1.3 `cron.get` | `[x]` |
 | P1 | 1.4 Auto-scroll 模式 | `[x]` |
-| P1 | 1.5 技能 Zip 安装闭环 | `[ ]` |
-| P1 | 1.6 `parentSessionKey` / `spawn-child` 侧栏树 | `[ ]` |
-| P1 | 1.7 `isHeartbeat` 展示 | `[ ]` |
+| P1 | 1.5 技能 Zip 安装闭环 | `[x]` |
+| P1 | 1.6 `parentSessionKey` / `spawn-child` 侧栏树 | `[x]` |
+| P1 | 1.6.1 Cron `runId` 精确追踪 | `[x]` |
+| P1 | 1.7 `isHeartbeat` 展示 | `[x]` |
 | P1 | 1.8 OpenAI 登录路径文案 | `[x]` |
-| P1 | 1.9 Gemini 旧 id 引导 | `[ ]` |
+| P1 | 1.9 Gemini 旧 id 引导 | `[x]` |
 | P1 | 1.10 `localService` 状态提示 | `[ ]` |
 | P2 | 2.1–2.7 见上文 | 多为 `[ ]` |
 | P3 | 3.1–3.4 见上文 | 多为 `[ ]` |

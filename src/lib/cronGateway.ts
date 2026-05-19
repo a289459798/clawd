@@ -23,7 +23,15 @@ export type CronJobRow = {
 
 export type CronDeliveryPreviewRow = { label?: string; detail?: string };
 
-export function formatCronSchedule(schedule: unknown): string {
+type TranslateFn = (key: string) => string;
+
+const tt = (t: TranslateFn | undefined, key: string, fallback: string) => {
+  if (!t) return fallback;
+  const value = t(key);
+  return value === key ? fallback : value;
+};
+
+export function formatCronSchedule(schedule: unknown, t?: TranslateFn): string {
   if (!schedule || typeof schedule !== "object") return "-";
   const s = schedule as Record<string, unknown>;
   if (s.kind === "cron" && typeof s.expr === "string") {
@@ -32,12 +40,12 @@ export function formatCronSchedule(schedule: unknown): string {
   }
   if (s.kind === "every" && typeof s.everyMs === "number") {
     const ms = s.everyMs;
-    if (ms >= 86_400_000) return `每 ${Math.round(ms / 86_400_000)} 天`;
-    if (ms >= 3_600_000) return `每 ${Math.round(ms / 3_600_000)} 小时`;
-    if (ms >= 60_000) return `每 ${Math.round(ms / 60_000)} 分钟`;
-    return `每 ${Math.round(ms / 1000)} 秒`;
+    if (ms >= 86_400_000) return tt(t, "cron.schedule.everyDays", "Every {{count}} days").replace("{{count}}", String(Math.round(ms / 86_400_000)));
+    if (ms >= 3_600_000) return tt(t, "cron.schedule.everyHours", "Every {{count}} hours").replace("{{count}}", String(Math.round(ms / 3_600_000)));
+    if (ms >= 60_000) return tt(t, "cron.schedule.everyMinutes", "Every {{count}} minutes").replace("{{count}}", String(Math.round(ms / 60_000)));
+    return tt(t, "cron.schedule.everySeconds", "Every {{count}} seconds").replace("{{count}}", String(Math.round(ms / 1000)));
   }
-  if (s.kind === "at" && typeof s.at === "string") return `定时 ${s.at}`;
+  if (s.kind === "at" && typeof s.at === "string") return tt(t, "cron.schedule.at", "At {{time}}").replace("{{time}}", s.at);
   return "-";
 }
 
@@ -84,26 +92,30 @@ export function scheduleEveryMinutesOf(schedule: unknown): string {
 export function describeCronDeliveryLine(
   job: CronJobRow,
   preview?: CronDeliveryPreviewRow | null,
+  t?: TranslateFn,
 ): { text: string; noDelivery: boolean } {
   const mode = job.delivery?.mode;
   if (mode === "none") {
-    return { text: "不投递（仅执行任务）", noDelivery: true };
+    return { text: tt(t, "cron.delivery.none", "No delivery (run only)"), noDelivery: true };
   }
   if (preview?.label && preview.label !== "not requested") {
     return { text: preview.label, noDelivery: false };
   }
   if (preview?.label === "not requested" || preview?.detail === "not requested") {
-    return { text: "不投递（仅执行任务）", noDelivery: true };
+    return { text: tt(t, "cron.delivery.none", "No delivery (run only)"), noDelivery: true };
   }
   if (mode === "announce") {
-    const ch = job.delivery?.channel ?? "默认通道";
+    const ch = job.delivery?.channel ?? tt(t, "cron.delivery.defaultChannel", "default channel");
     const to = job.delivery?.to;
-    return { text: to ? `投递 · ${ch} → ${to}` : `投递 · ${ch}`, noDelivery: false };
+    const text = to
+      ? tt(t, "cron.delivery.announceTo", "Deliver · {{channel}} -> {{target}}").replace("{{channel}}", ch).replace("{{target}}", to)
+      : tt(t, "cron.delivery.announce", "Deliver · {{channel}}").replace("{{channel}}", ch);
+    return { text, noDelivery: false };
   }
   if (mode === "webhook") {
-    return { text: "投递 · webhook", noDelivery: false };
+    return { text: tt(t, "cron.delivery.webhook", "Deliver · webhook"), noDelivery: false };
   }
-  return { text: "投递方式未指定", noDelivery: false };
+  return { text: tt(t, "cron.delivery.unspecified", "Delivery not specified"), noDelivery: false };
 }
 
 export function parseCronListPayload(payload: unknown): {
@@ -195,6 +207,7 @@ function normalizeCronJobState(input: unknown): CronJobRow["state"] {
 
 export type CronRunRow = {
   ts: number;
+  runId?: string;
   jobId?: string;
   status?: string;
   sessionKey?: string;
@@ -212,6 +225,7 @@ export function parseCronRunsPayload(payload: unknown): CronRunRow[] {
     if (typeof row.ts !== "number") continue;
     out.push({
       ts: row.ts,
+      runId: typeof row.runId === "string" ? row.runId : undefined,
       jobId: typeof row.jobId === "string" ? row.jobId : undefined,
       status: typeof row.status === "string" ? row.status : undefined,
       sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : undefined,

@@ -24,6 +24,8 @@ type ConversationDetailProps = {
   resetUserExpanded: () => void;
   conversationMessageList: React.ReactNode;
   gatewayError: string | null;
+  historyLoading?: boolean;
+  historyCanLoadMore?: boolean;
   aiResponseScrollRef: React.RefObject<HTMLDivElement | null>;
   /** Called when user scrolls transcript substantially above bottom (away=true) or back near bottom (false). */
   onTranscriptScrollAwayFromBottom?: (away: boolean) => void;
@@ -35,6 +37,7 @@ type ConversationDetailProps = {
   autoScrollMode: ConversationAutoScrollMode;
   onDisplayModeChange: (mode: "focus" | "conversation") => void;
   onJumpToBottom: () => void;
+  onLoadMoreHistory?: (conversationId: string) => Promise<void> | void;
   onUpdateTitle?: (conversationId: string, newTitle: string) => Promise<void>;
   sessionActionBusy?: string | null;
   sessionActionError?: string | null;
@@ -79,6 +82,8 @@ export function ConversationDetail({
   resetUserExpanded,
   conversationMessageList,
   gatewayError,
+  historyLoading,
+  historyCanLoadMore,
   aiResponseScrollRef,
   onTranscriptScrollAwayFromBottom,
   parseSenderMeta,
@@ -89,6 +94,7 @@ export function ConversationDetail({
   autoScrollMode,
   onDisplayModeChange,
   onJumpToBottom,
+  onLoadMoreHistory,
   onUpdateTitle,
   sessionActionBusy,
   sessionActionError,
@@ -468,6 +474,16 @@ export function ConversationDetail({
                 onTranscriptScrollAwayFromBottom(distanceFromBottom > thresholdPx);
               }}
             >
+              {historyCanLoadMore ? (
+                <button
+                  className="conversation-load-earlier-button"
+                  type="button"
+                  disabled={historyLoading}
+                  onClick={() => void onLoadMoreHistory?.(activeConversation.id)}
+                >
+                  {historyLoading ? tt(t, "conversation.loadingEarlier", "Loading earlier messages...") : tt(t, "conversation.loadEarlier", "Load earlier messages")}
+                </button>
+              ) : null}
               {conversationMessageList}
               {gatewayError ? (
                 <div className="conversation-bottom-error" role="alert">

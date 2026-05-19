@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { Icon, IconNames } from "./Icon";
 import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { shouldSubmitComposer } from "../lib/composerShortcut";
+import { findGemini31ProPreviewOption, GEMINI_31_PRO_PREVIEW_MODEL, isDeprecatedGemini3ProPreview } from "../lib/modelOptions";
 import type { SendShortcut } from "../types/settings";
 
 type TranslateFn = (key: string) => string;
@@ -97,6 +98,8 @@ export function ConversationComposer({
 }: ConversationComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resolvedThinkingOptions = thinkingOptions?.length ? thinkingOptions : FALLBACK_THINKING_OPTIONS;
+  const gemini31Option = findGemini31ProPreviewOption(modelOptions);
+  const showDeprecatedGeminiHint = isDeprecatedGemini3ProPreview(model);
 
   return (
     <div className={`conversation-composer ${focused ? "focused" : ""} ${transcriptScrollCompact ? "scroll-away" : ""}`}>
@@ -116,6 +119,20 @@ export function ConversationComposer({
           </>
         ) : null}
       </p>
+      {showDeprecatedGeminiHint ? (
+        <div className="composer-model-warning" role="status">
+          <span>
+            {tt(t, "composer.deprecatedGeminiHint", "This conversation is using an older Gemini preview model. Switch to Gemini 3.1 Pro Preview for better compatibility.")}
+          </span>
+          {gemini31Option ? (
+            <button type="button" className="composer-inline-action" onClick={() => onModelChange(gemini31Option.value)}>
+              {tt(t, "composer.switchGemini31", "Switch now")}
+            </button>
+          ) : (
+            <code>{GEMINI_31_PRO_PREVIEW_MODEL}</code>
+          )}
+        </div>
+      ) : null}
       <div
         className="composer-input-wrap"
         tabIndex={-1}

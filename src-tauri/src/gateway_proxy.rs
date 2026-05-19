@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
@@ -63,6 +63,7 @@ pub struct GatewaySendParams {
 pub struct GatewayHistoryParams {
     pub session_key: String,
     pub limit: Option<u32>,
+    pub max_chars: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -139,6 +140,42 @@ pub struct GatewaySkillsStatusParams {
 pub struct GatewaySkillsUpdateParams {
     pub skill_key: String,
     pub enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySkillsUploadBeginParams {
+    pub kind: String,
+    pub slug: String,
+    pub size_bytes: u64,
+    pub sha256: Option<String>,
+    pub force: Option<bool>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySkillsUploadChunkParams {
+    pub upload_id: String,
+    pub offset: u64,
+    pub data_base64: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySkillsUploadCommitParams {
+    pub upload_id: String,
+    pub sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySkillsInstallUploadParams {
+    pub upload_id: String,
+    pub slug: String,
+    pub force: Option<bool>,
+    pub sha256: Option<String>,
+    pub timeout_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -992,6 +1029,7 @@ pub async fn gateway_connect(
 }
 
 fn send_rpc(state: &GatewayProxyState, method: &str, params: Value) -> Result<Value, String> {
+    let started_at = Instant::now();
     {
         let c = state.connected.lock().unwrap();
         if !*c {
@@ -1017,7 +1055,12 @@ fn send_rpc(state: &GatewayProxyState, method: &str, params: Value) -> Result<Va
         }
     }
 
-    pending.wait(15000)
+    let result = pending.wait(15000);
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if gateway_debug_logs_enabled() || elapsed_ms >= 700 {
+        eprintln!("[clawkit perf] rpc {method}: {elapsed_ms}ms");
+    }
+    result
 }
 
 #[tauri::command]
@@ -1072,18 +1115,26 @@ pub async fn gateway_config_get(
 }
 
 #[tauri::command]
-pub fn gateway_openclaw_status(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_openclaw_status(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
 ) -> Result<Value, String> {
-    send_rpc(&state, "status", json!({}))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "status", json!({})))
+        .await
+        .map_err(|error| format!("status task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_health(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_health(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     probe: Option<bool>,
 ) -> Result<Value, String> {
-    send_rpc(&state, "health", json!({ "probe": probe.unwrap_or(false) }))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "health", json!({ "probe": probe.unwrap_or(false) }))
+    })
+    .await
+    .map_err(|error| format!("health task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1176,8 +1227,13 @@ pub async fn gateway_cron_remove(
 }
 
 #[tauri::command]
-pub fn gateway_agents_list(state: tauri::State<Arc<GatewayProxyState>>) -> Result<Value, String> {
-    send_rpc(&state, "agents.list", json!({}))
+pub async fn gateway_agents_list(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || send_rpc(&state, "agents.list", json!({})))
+        .await
+        .map_err(|error| format!("agents.list task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1291,6 +1347,97 @@ pub async fn gateway_skills_update(
 }
 
 #[tauri::command]
+pub async fn gateway_skills_upload_begin(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: GatewaySkillsUploadBeginParams,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut json_params = serde_json::Map::new();
+        json_params.insert("kind".to_string(), json!(params.kind));
+        json_params.insert("slug".to_string(), json!(params.slug));
+        json_params.insert("sizeBytes".to_string(), json!(params.size_bytes));
+        if let Some(sha256) = params.sha256 {
+            json_params.insert("sha256".to_string(), json!(sha256));
+        }
+        if let Some(force) = params.force {
+            json_params.insert("force".to_string(), json!(force));
+        }
+        if let Some(idempotency_key) = params.idempotency_key {
+            json_params.insert("idempotencyKey".to_string(), json!(idempotency_key));
+        }
+        send_rpc(&state, "skills.upload.begin", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("skills.upload.begin task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_skills_upload_chunk(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: GatewaySkillsUploadChunkParams,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(
+            &state,
+            "skills.upload.chunk",
+            json!({
+                "uploadId": params.upload_id,
+                "offset": params.offset,
+                "dataBase64": params.data_base64,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| format!("skills.upload.chunk task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_skills_upload_commit(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: GatewaySkillsUploadCommitParams,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut json_params = serde_json::Map::new();
+        json_params.insert("uploadId".to_string(), json!(params.upload_id));
+        if let Some(sha256) = params.sha256 {
+            json_params.insert("sha256".to_string(), json!(sha256));
+        }
+        send_rpc(&state, "skills.upload.commit", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("skills.upload.commit task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn gateway_skills_install_upload(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
+    params: GatewaySkillsInstallUploadParams,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut json_params = serde_json::Map::new();
+        json_params.insert("source".to_string(), json!("upload"));
+        json_params.insert("uploadId".to_string(), json!(params.upload_id));
+        json_params.insert("slug".to_string(), json!(params.slug));
+        if let Some(force) = params.force {
+            json_params.insert("force".to_string(), json!(force));
+        }
+        if let Some(sha256) = params.sha256 {
+            json_params.insert("sha256".to_string(), json!(sha256));
+        }
+        if let Some(timeout_ms) = params.timeout_ms {
+            json_params.insert("timeoutMs".to_string(), json!(timeout_ms));
+        }
+        send_rpc(&state, "skills.install", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("skills.install upload task failed: {error}"))?
+}
+
+#[tauri::command]
 pub async fn gateway_channels_status(
     state: tauri::State<'_, Arc<GatewayProxyState>>,
     params: GatewayChannelsStatusParams,
@@ -1388,8 +1535,8 @@ pub async fn gateway_sessions_usage(
 }
 
 #[tauri::command]
-pub fn gateway_sessions_list(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_sessions_list(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     params: GatewaySessionsListParams,
 ) -> Result<Value, String> {
     let mut json_params = serde_json::Map::new();
@@ -1429,12 +1576,17 @@ pub fn gateway_sessions_list(
     if let Some(search) = params.search {
         json_params.insert("search".to_string(), json!(search));
     }
-    send_rpc(&state, "sessions.list", Value::Object(json_params))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "sessions.list", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("sessions.list task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_sessions_preview(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_sessions_preview(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     params: GatewaySessionsPreviewParams,
 ) -> Result<Value, String> {
     let mut json_params = serde_json::Map::new();
@@ -1445,60 +1597,96 @@ pub fn gateway_sessions_preview(
     if let Some(max_chars) = params.max_chars {
         json_params.insert("maxChars".to_string(), json!(max_chars));
     }
-    send_rpc(&state, "sessions.preview", Value::Object(json_params))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "sessions.preview", Value::Object(json_params))
+    })
+    .await
+    .map_err(|error| format!("sessions.preview task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_sessions_subscribe(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_sessions_subscribe(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
 ) -> Result<Value, String> {
-    send_rpc(&state, "sessions.subscribe", json!({}))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "sessions.subscribe", json!({}))
+    })
+    .await
+    .map_err(|error| format!("sessions.subscribe task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_sessions_unsubscribe(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_sessions_unsubscribe(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
 ) -> Result<Value, String> {
-    send_rpc(&state, "sessions.unsubscribe", json!({}))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(&state, "sessions.unsubscribe", json!({}))
+    })
+    .await
+    .map_err(|error| format!("sessions.unsubscribe task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_session_messages_subscribe(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_session_messages_subscribe(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     session_key: String,
 ) -> Result<Value, String> {
-    send_rpc(
-        &state,
-        "sessions.messages.subscribe",
-        json!({ "key": session_key }),
-    )
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(
+            &state,
+            "sessions.messages.subscribe",
+            json!({ "key": session_key }),
+        )
+    })
+    .await
+    .map_err(|error| format!("sessions.messages.subscribe task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_session_messages_unsubscribe(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_session_messages_unsubscribe(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     session_key: String,
 ) -> Result<Value, String> {
-    send_rpc(
-        &state,
-        "sessions.messages.unsubscribe",
-        json!({ "key": session_key }),
-    )
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        send_rpc(
+            &state,
+            "sessions.messages.unsubscribe",
+            json!({ "key": session_key }),
+        )
+    })
+    .await
+    .map_err(|error| format!("sessions.messages.unsubscribe task failed: {error}"))?
 }
 
 #[tauri::command]
-pub fn gateway_chat_history(
-    state: tauri::State<Arc<GatewayProxyState>>,
+pub async fn gateway_chat_history(
+    state: tauri::State<'_, Arc<GatewayProxyState>>,
     params: GatewayHistoryParams,
 ) -> Result<GatewayHistoryResult, String> {
-    let result = send_rpc(
-        &state,
-        "chat.history",
-        json!({
+    let state = state.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut request = json!({
             "sessionKey": params.session_key,
             "limit": params.limit.unwrap_or(200),
-        }),
-    )?;
+        });
+        if let Some(max_chars) = params.max_chars {
+            if let Some(object) = request.as_object_mut() {
+                object.insert("maxChars".to_string(), json!(max_chars));
+            }
+        }
+        send_rpc(
+            &state,
+            "chat.history",
+            request,
+        )
+    })
+    .await
+    .map_err(|error| format!("chat.history task failed: {error}"))??;
 
     let messages = result
         .get("messages")

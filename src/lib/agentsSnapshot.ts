@@ -181,6 +181,9 @@ export function buildAgentsFromSnapshot(
           alternateSessionKeys,
           title: displayTitle,
           channel: session.channel,
+          parentSessionKey: session.parent_session_key,
+          childSessionKeys: session.child_sessions,
+          sessionKind: session.session_kind,
           status: deriveConversationStatus(runtime),
           lastMessage: (() => {
             const hasToolCalls = latestAssistantMessage?.parts?.some((p) => p.kind === "tool_call");
@@ -343,6 +346,9 @@ export function mergeGatewaySessionRowsIntoAgents(
           ...conversation,
           title: mergedTitle,
           channel: row.channel ?? row.lastChannel ?? conversation.channel,
+          parentSessionKey: row.parentSessionKey ?? conversation.parentSessionKey,
+          childSessionKeys: row.childSessions ?? conversation.childSessionKeys,
+          sessionKind: row.kind ?? conversation.sessionKind,
           model: row.model ?? conversation.model,
           thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
           thinkingOptions: row.thinkingLevels?.map((level) => ({
@@ -372,6 +378,9 @@ export function mergeGatewaySessionRowsIntoAgents(
           ...conversation,
           title: mergedTitle,
           channel: row.channel ?? row.lastChannel ?? conversation.channel,
+          parentSessionKey: row.parentSessionKey ?? conversation.parentSessionKey,
+          childSessionKeys: row.childSessions ?? conversation.childSessionKeys,
+          sessionKind: row.kind ?? conversation.sessionKind,
           model: row.model ?? conversation.model,
           thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
           thinkingOptions: row.thinkingLevels?.map((level) => ({
@@ -395,6 +404,9 @@ export function mergeGatewaySessionRowsIntoAgents(
         ...conversation,
         title: mergedTitle,
         channel: row.channel ?? row.lastChannel ?? conversation.channel,
+        parentSessionKey: row.parentSessionKey ?? conversation.parentSessionKey,
+        childSessionKeys: row.childSessions ?? conversation.childSessionKeys,
+        sessionKind: row.kind ?? conversation.sessionKind,
         model: row.model ?? conversation.model,
         thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
         thinkingOptions: row.thinkingLevels?.map((level) => ({

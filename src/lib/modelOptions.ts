@@ -3,6 +3,24 @@ import type { ModelOption } from "../types/app";
 
 export const normalizeModelKey = (value: string) => value.trim().toLowerCase();
 
+const DEPRECATED_GEMINI_3_PRO_PREVIEW_KEYS = new Set([
+  "google/gemini-3-pro-preview",
+  "gemini-3-pro-preview",
+]);
+
+export const GEMINI_31_PRO_PREVIEW_MODEL = "google/gemini-3.1-pro-preview";
+
+export const isDeprecatedGemini3ProPreview = (value: string) =>
+  DEPRECATED_GEMINI_3_PRO_PREVIEW_KEYS.has(normalizeModelKey(value));
+
+export const findGemini31ProPreviewOption = (options: ModelOption[]) =>
+  options.find((option) => normalizeModelKey(option.value) === normalizeModelKey(GEMINI_31_PRO_PREVIEW_MODEL));
+
+export const isUnconfiguredModelRef = (value: string) => {
+  const normalized = normalizeModelKey(value);
+  return !normalized || normalized === "未配置" || normalized === "not configured";
+};
+
 export const qualifyModelId = (id: string, provider?: string) => {
   const trimmedId = id.trim();
   const trimmedProvider = provider?.trim();
@@ -69,7 +87,7 @@ export const ensureSelectedModelOption = (options: ModelOption[], selectedModel:
 
 export const canonicalizeModelRef = (value: string, options: ModelOption[], provider?: string) => {
   const selected = value.trim();
-  if (!selected || selected === "未配置") return selected;
+  if (isUnconfiguredModelRef(selected)) return selected;
   const selectedKey = normalizeModelKey(selected);
   const exact = options.find((option) => normalizeModelKey(option.value) === selectedKey);
   if (exact) return exact.value;

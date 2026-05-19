@@ -43,6 +43,7 @@ type SettingsPageProps = {
   onUpdateOpenClaw: () => void;
   onNavigate: (nav: "models" | "connections") => void;
   patchOpenClawConfig: (patch: unknown) => Promise<void>;
+  initialSection?: SettingsSection;
 };
 
 const sections: Array<{ key: SettingsSection; labelKey: string; descriptionKey: string }> = [
@@ -236,6 +237,7 @@ export function SettingsPage({
   onUpdateOpenClaw,
   onNavigate,
   patchOpenClawConfig,
+  initialSection,
 }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -243,6 +245,12 @@ export function SettingsPage({
   const [allowUploadedArchives, setAllowUploadedArchives] = useState(false);
   const [allowUploadedArchivesLoaded, setAllowUploadedArchivesLoaded] = useState(false);
   const [skillsConfigError, setSkillsConfigError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialSection) {
+      setActiveSection(initialSection);
+    }
+  }, [initialSection]);
 
   useEffect(() => {
     if (activeSection !== "openclaw" || !gatewayConnected) return;

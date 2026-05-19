@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelOptions, canonicalizeModelRef, ensureSelectedModelOption } from "./modelOptions";
+import { buildModelOptions, canonicalizeModelRef, ensureSelectedModelOption, findGemini31ProPreviewOption, isDeprecatedGemini3ProPreview } from "./modelOptions";
 
 describe("buildModelOptions", () => {
   it("uses Gateway model key before composing provider/id", () => {
@@ -95,5 +95,20 @@ describe("ensureSelectedModelOption", () => {
       { value: "kimi-k2.5", label: "当前: kimi-k2.5" },
       { value: "moonshot/kimi-k2.5", label: "Kimi K2.5 · moonshot" },
     ]);
+  });
+});
+
+describe("Gemini preview migration helpers", () => {
+  it("detects deprecated Gemini 3 Pro preview ids", () => {
+    expect(isDeprecatedGemini3ProPreview("google/gemini-3-pro-preview")).toBe(true);
+    expect(isDeprecatedGemini3ProPreview("gemini-3-pro-preview")).toBe(true);
+    expect(isDeprecatedGemini3ProPreview("google/gemini-3.1-pro-preview")).toBe(false);
+  });
+
+  it("finds the configured Gemini 3.1 Pro Preview option", () => {
+    expect(findGemini31ProPreviewOption([
+      { value: "moonshot/kimi-k2.5", label: "Kimi" },
+      { value: "google/gemini-3.1-pro-preview", label: "Gemini 3.1" },
+    ])).toEqual({ value: "google/gemini-3.1-pro-preview", label: "Gemini 3.1" });
   });
 });

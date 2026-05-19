@@ -41,6 +41,18 @@ export function useGatewayChat({
   const activeRunIdRef = useRef(activeRunId);
   const gatewayEventUnlistenRef = useRef<null | (() => void)>(null);
   const terminalRunKeysRef = useRef<Set<string>>(new Set());
+  const pendingTextDeltaRef = useRef<Map<string, {
+    sessionKey: string;
+    runId?: string | null;
+    text: string;
+    timestamp: number;
+    lastTime: string;
+    message?: GatewayChatEvent["message"];
+    isHeartbeat?: boolean;
+    currentConversation: boolean;
+    currentRun: boolean;
+  }>>(new Map());
+  const pendingTextDeltaTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -51,6 +63,18 @@ export function useGatewayChat({
   }, [activeRunId]);
 
   const hasToolParts = (parts: MessagePart[]) => parts.some((part) => part.kind === "tool_call" || part.kind === "tool_result");
+  const isToolOnlyAssistantMessage = (message: { role?: string; parts?: MessagePart[] }) => {
+    const parts = message.parts ?? [];
+    return message.role?.toLowerCase() === "assistant"
+      && parts.length > 0
+      && parts.every((part) => part.kind === "tool_call" || part.kind === "tool_result");
+  };
+  const isTextOnlyAssistantMessage = (message: { role?: string; text?: string; parts?: MessagePart[] }) => {
+    if (message.role?.toLowerCase() !== "assistant") return false;
+    const text = (message.text ?? "").replace(/^__streaming__(?:[^_]+__)?/, "").trim();
+    const parts = message.parts ?? [];
+    return Boolean(text) && (parts.length === 0 || parts.every((part) => part.kind === "text"));
+  };
   const textFromParts = (parts: MessagePart[]) => parts.flatMap((part) => part.kind === "text" ? [part.text] : []).join("");
   const mergeStreamingText = (previousText: string, incomingText: string) => {
     if (!incomingText) return previousText;
@@ -92,6 +116,117 @@ export function useGatewayChat({
     const key = runKey(sessionKey, runId);
     return Boolean(key && terminalRunKeysRef.current.has(key));
   };
+  const applyBufferedTextDeltas = () => {
+    if (pendingTextDeltaTimerRef.current !== null) {
+      window.clearTimeout(pendingTextDeltaTimerRef.current);
+      pendingTextDeltaTimerRef.current = null;
+    }
+    const buffered = Array.from(pendingTextDeltaRef.current.values());
+    pendingTextDeltaRef.current.clear();
+    if (buffered.length === 0) return;
+
+    onAgentsChange((current) => current.map((agent) => ({
+      ...agent,
+      conversations: agent.conversations.map((conversation) => {
+        const item = buffered.find((delta) => conversationMatchesSessionKey(conversation, delta.sessionKey));
+        if (!item) return conversation;
+        return patchConversation(conversation, (currentConversation) => {
+          const nextMessages = [...(currentConversation.previewMessages ?? [])];
+          const effectiveRunId = item.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${item.timestamp}`;
+          const streamingMarker = `__streaming__${effectiveRunId}__`;
+          const existingStreamingIndex = nextMessages.findIndex((message) =>
+            message.role?.toLowerCase() === "assistant" && message.text.startsWith(streamingMarker),
+          );
+          const fallbackStreamingIndex = existingStreamingIndex >= 0
+            ? existingStreamingIndex
+            : findLastMessageIndex(nextMessages, (message) =>
+                message.role?.toLowerCase() === "assistant" && /^__streaming__(?:[^_]+__)?/.test(message.text),
+              );
+          const lastIndex = fallbackStreamingIndex >= 0 ? fallbackStreamingIndex : nextMessages.length - 1;
+          const last = nextMessages[lastIndex];
+          const usage = extractUsageFromGatewayMessage(item.message);
+
+          if (last?.role === "assistant" && /^__streaming__(?:[^_]+__)?/.test(last.text)) {
+            const previousMarker = last.text.match(/^__streaming__(?:[^_]+__)?/)?.[0] ?? streamingMarker;
+            const previousText = last.text.replace(/^__streaming__(?:[^_]+__)?/, "");
+            const nextText = mergeStreamingText(previousText, item.text);
+            const nonTextParts = (last.parts ?? []).filter((part) => part.kind !== "text");
+            nextMessages[lastIndex] = {
+              ...last,
+              text: `${previousMarker}${nextText}`,
+              parts: [{ kind: "text", text: nextText }, ...nonTextParts],
+              model: item.message?.model ?? last.model,
+              provider: item.message?.provider ?? last.provider,
+              api: item.message?.api ?? last.api,
+              timestamp: item.timestamp,
+              input_tokens: usage.input_tokens ?? last.input_tokens,
+              output_tokens: usage.output_tokens ?? last.output_tokens,
+              cache_read_tokens: usage.cache_read_tokens ?? last.cache_read_tokens,
+              cache_write_tokens: usage.cache_write_tokens ?? last.cache_write_tokens,
+            };
+          } else {
+            nextMessages.push({
+              role: "assistant",
+              text: `${streamingMarker}${item.text}`,
+              parts: [{ kind: "text", text: item.text }],
+              model: item.message?.model,
+              provider: item.message?.provider,
+              api: item.message?.api,
+              timestamp: item.timestamp,
+              ...usage,
+            });
+          }
+
+          const latestPreview = nextMessages[nextMessages.length - 1];
+          const latestRenderedText = latestPreview?.text?.replace(streamingMarker, "") || item.text;
+          return {
+            ...currentConversation,
+            lastRole: "assistant",
+            latestEventType: "assistant_stream",
+            lastMessage: latestRenderedText || currentConversation.lastMessage,
+            previewMessages: nextMessages,
+            updatedAt: item.timestamp,
+            lastTime: item.lastTime,
+            runtime: {
+              ...currentConversation.runtime,
+              activeRunId: effectiveRunId,
+              activeStartedAt: currentConversation.runtime?.activeStartedAt ?? item.timestamp,
+              lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt ?? item.timestamp,
+              lastEventAt: item.timestamp,
+              lastEventIsHeartbeat: item.isHeartbeat,
+            },
+          };
+        });
+      }),
+    })));
+
+    if (buffered.some((delta) => delta.currentConversation && delta.currentRun)) {
+      onSendingChange(true);
+    }
+  };
+  const queueTextDelta = (item: {
+    sessionKey: string;
+    runId?: string | null;
+    text: string;
+    timestamp: number;
+    lastTime: string;
+    message?: GatewayChatEvent["message"];
+    isHeartbeat?: boolean;
+    currentConversation: boolean;
+    currentRun: boolean;
+  }) => {
+    const key = `${item.sessionKey}:${item.runId ?? activeRunIdRef.current ?? "run"}`;
+    const existing = pendingTextDeltaRef.current.get(key);
+    pendingTextDeltaRef.current.set(key, {
+      ...item,
+      text: existing ? mergeStreamingText(existing.text, item.text) : item.text,
+      currentConversation: item.currentConversation || Boolean(existing?.currentConversation),
+      currentRun: item.currentRun || Boolean(existing?.currentRun),
+    });
+    if (pendingTextDeltaTimerRef.current === null) {
+      pendingTextDeltaTimerRef.current = window.setTimeout(applyBufferedTextDeltas, 50);
+    }
+  };
 
   useEffect(() => {
     if (!enabled) return;
@@ -114,9 +249,10 @@ export function useGatewayChat({
             && matchedConversation.id === activeConversationIdRef.current,
           );
           const isCurrentRun = !chat.runId || !activeRunIdRef.current || chat.runId === activeRunIdRef.current;
-          const eventTimestamp = chat.message?.timestamp ?? Date.now();
-          const eventLastTime = new Date(eventTimestamp).toLocaleString("zh-CN");
-          const eventRunId = chat.runId ?? activeRunIdRef.current;
+            const eventTimestamp = chat.message?.timestamp ?? Date.now();
+            const eventLastTime = new Date(eventTimestamp).toLocaleString("zh-CN");
+            const eventRunId = chat.runId ?? activeRunIdRef.current;
+            const isHeartbeatEvent = chat.isHeartbeat === true;
 
           // Tool stream handling
           if (chat.stream === "tool") {
@@ -131,12 +267,14 @@ export function useGatewayChat({
               conversations: agent.conversations.map((conversation) => {
                 if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
-                  const nextMessages = [...(currentConversation.previewMessages ?? [])];
+                  let nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const toolKey = `${toolRunId}:${toolName}`;
                   const existingIndex = nextMessages.findIndex((message) =>
                     message.role?.toLowerCase() === "assistant"
-                    && message.text === toolKey
-                    && (message.parts ?? []).some((part) => part.kind === "tool_call" && part.tool === toolName),
+                    && (message.parts ?? []).some((part) =>
+                      (part.kind === "tool_call" && part.tool === toolName)
+                      || (part.kind === "tool_result" && part.tool === toolName),
+                    ),
                   );
                   if (existingIndex >= 0) {
                     const existing = nextMessages[existingIndex];
@@ -167,6 +305,7 @@ export function useGatewayChat({
                       activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
                       lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt ?? eventTimestamp,
                       lastEventAt: eventTimestamp,
+                      lastEventIsHeartbeat: isHeartbeatEvent,
                     },
                   };
                 });
@@ -182,8 +321,23 @@ export function useGatewayChat({
           // Delta stream handling
           if (chat.state === "delta") {
             if (isTerminalRunEvent(chat.sessionKey, eventRunId)) return;
-            if (isInternalOpenClawMessage(chat.message)) return;
             const deltaFrame = extractGatewayDeltaFrame(chat);
+            if (deltaFrame.deltaText === undefined && isInternalOpenClawMessage(chat.message)) return;
+            if (deltaFrame.deltaText !== undefined && !deltaFrame.replace) {
+              if (!deltaFrame.deltaText) return;
+              queueTextDelta({
+                sessionKey: chat.sessionKey,
+                runId: chat.runId,
+                text: deltaFrame.deltaText,
+                timestamp: eventTimestamp,
+                lastTime: eventLastTime,
+                message: chat.message,
+                isHeartbeat: isHeartbeatEvent,
+                currentConversation: isCurrentConversation,
+                currentRun: isCurrentRun,
+              });
+              return;
+            }
             const deltaText = deltaFrame.deltaText ?? extractTextFromGatewayMessage(chat.message);
             const deltaParts = mapGatewayContentToParts(chat.message);
             if (!deltaText && deltaParts.length === 0) return;
@@ -193,18 +347,24 @@ export function useGatewayChat({
               conversations: agent.conversations.map((conversation) => {
                 if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
-                  const nextMessages = [...(currentConversation.previewMessages ?? [])];
+                  let nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
                   const streamingMarker = `__streaming__${effectiveRunId}__`;
                   const existingStreamingIndex = nextMessages.findIndex((message) =>
                     message.role?.toLowerCase() === "assistant" && message.text.startsWith(streamingMarker),
                   );
-                  const lastIndex = existingStreamingIndex >= 0 ? existingStreamingIndex : nextMessages.length - 1;
+                  const fallbackStreamingIndex = existingStreamingIndex >= 0
+                    ? existingStreamingIndex
+                    : findLastMessageIndex(nextMessages, (message) =>
+                        message.role?.toLowerCase() === "assistant" && /^__streaming__(?:[^_]+__)?/.test(message.text),
+                      );
+                  const lastIndex = fallbackStreamingIndex >= 0 ? fallbackStreamingIndex : nextMessages.length - 1;
                   const last = nextMessages[lastIndex];
                   
-                  if (last?.role === "assistant" && last.text.startsWith(streamingMarker)) {
+                  if (last?.role === "assistant" && /^__streaming__(?:[^_]+__)?/.test(last.text)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
-                    const previousText = last.text.replace(streamingMarker, "");
+                    const previousMarker = last.text.match(/^__streaming__(?:[^_]+__)?/)?.[0] ?? streamingMarker;
+                    const previousText = last.text.replace(/^__streaming__(?:[^_]+__)?/, "");
                     const incomingText = deltaFrame.deltaText ?? (textFromParts(deltaParts) || deltaText);
                     const snapshotText = textFromParts(deltaParts) || extractTextFromGatewayMessage(chat.message);
                     const nextText = deltaFrame.replace
@@ -220,7 +380,7 @@ export function useGatewayChat({
                     const mergedParts = nextText ? [{ kind: "text" as const, text: nextText }, ...nonTextParts] : nonTextParts;
                     nextMessages[lastIndex] = {
                       ...last,
-                      text: `${streamingMarker}${nextText}`,
+                      text: `${previousMarker}${nextText}`,
                       parts: mergedParts.length > 0 ? mergedParts : [{ kind: "text", text: nextText }],
                       model: chat.message?.model ?? last.model,
                       provider: chat.message?.provider ?? last.provider,
@@ -267,6 +427,7 @@ export function useGatewayChat({
                       activeStartedAt: currentConversation.runtime?.activeStartedAt ?? eventTimestamp,
                       lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt ?? eventTimestamp,
                       lastEventAt: eventTimestamp,
+                      lastEventIsHeartbeat: isHeartbeatEvent,
                     },
                   };
                 });
@@ -281,6 +442,7 @@ export function useGatewayChat({
 
           // Final/Aborted handling
           if (chat.state === "final" || chat.state === "aborted") {
+            applyBufferedTextDeltas();
             if (isInternalOpenClawMessage(chat.message)) {
               return;
             }
@@ -300,7 +462,7 @@ export function useGatewayChat({
               conversations: agent.conversations.map((conversation) => {
                 if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => {
-                  const nextMessages = [...(currentConversation.previewMessages ?? [])];
+                  let nextMessages = [...(currentConversation.previewMessages ?? [])];
                   const effectiveRunId = chat.runId ?? currentConversation.runtime?.activeRunId ?? activeRunIdRef.current ?? `run-${eventTimestamp}`;
                   const streamingMarker = `__streaming__${effectiveRunId}__`;
                   const existingStreamingIndex = nextMessages.findIndex((message) =>
@@ -320,8 +482,44 @@ export function useGatewayChat({
                       });
                   const lastIndex = fallbackStreamingIndex >= 0 ? fallbackStreamingIndex : duplicateAssistantIndex >= 0 ? duplicateAssistantIndex : nextMessages.length - 1;
                   const last = nextMessages[lastIndex];
+                  const latestUserIndex = findLastMessageIndex(nextMessages, (message) => message.role?.toLowerCase() === "user");
+                  const currentTurnMessages = nextMessages.slice(latestUserIndex + 1);
+                  const shouldCollapseCurrentTurnFinal = (finalText || finalParts.length > 0)
+                    && currentTurnMessages.some((message) =>
+                      isToolOnlyAssistantMessage(message)
+                      || /^__streaming__(?:[^_]+__)?/.test(message.text ?? "")
+                      || isTextOnlyAssistantMessage(message),
+                    );
+                  if (shouldCollapseCurrentTurnFinal) {
+                    const usage = extractUsageFromGatewayMessage(chat.message);
+                    const finalRenderableParts = finalParts.filter((part) => part.kind !== "tool_call" && part.kind !== "tool_result");
+                    const collapsedParts: MessagePart[] = finalRenderableParts.length > 0
+                      ? mergeStreamingParts([], finalRenderableParts, "")
+                      : [{ kind: "text", text: finalText }];
+                    const renderedFinalText = collapsedParts
+                      .flatMap((part) => part.kind === "text" ? [part.text] : [])
+                      .join("") || finalText;
+                    const preservedTurnMessages = currentTurnMessages.filter((message) =>
+                      message.role?.toLowerCase() !== "assistant"
+                      || isToolOnlyAssistantMessage(message)
+                      || (!isTextOnlyAssistantMessage(message) && !/^__streaming__(?:[^_]+__)?/.test(message.text ?? "")),
+                    );
+                    nextMessages = [
+                      ...nextMessages.slice(0, latestUserIndex + 1),
+                      ...preservedTurnMessages,
+                      {
+                        role: "assistant",
+                        text: renderedFinalText,
+                        parts: collapsedParts,
+                        model: chat.message?.model ?? currentConversation.model,
+                        provider: chat.message?.provider,
+                        api: chat.message?.api,
+                        timestamp: eventTimestamp,
+                        ...usage,
+                      },
+                    ];
+                  } else if (last?.role === "assistant" && (last.text.startsWith(streamingMarker) || /^__streaming__(?:[^_]+__)?/.test(last.text) || duplicateAssistantIndex >= 0)) {
                   
-                  if (last?.role === "assistant" && (last.text.startsWith(streamingMarker) || /^__streaming__(?:[^_]+__)?/.test(last.text) || duplicateAssistantIndex >= 0)) {
                     const usage = extractUsageFromGatewayMessage(chat.message);
                     const fallbackText = last.text.replace(/^__streaming__(?:[^_]+__)?/, "");
                     const hasExistingToolMessages = nextMessages.some((message, index) => index !== lastIndex && hasToolParts(message.parts ?? []));
@@ -372,6 +570,7 @@ export function useGatewayChat({
                   const usageTotals = summarizePreviewUsage(nextMessages);
                   return {
                     ...currentConversation,
+                    status: chat.state === "aborted" ? "stopped" : "completed",
                     lastRole: "assistant",
                     latestEventType: terminalEventType,
                     lastMessage: latestRenderedText || currentConversation.lastMessage,
@@ -390,6 +589,7 @@ export function useGatewayChat({
                       activeStartedAt: undefined,
                       lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
                       lastEventAt: eventTimestamp,
+                      lastEventIsHeartbeat: isHeartbeatEvent,
                       lastTerminalAt: eventTimestamp,
                       lastTerminalReason: chat.state === "aborted" ? "aborted" : "completed",
                     },
@@ -403,6 +603,7 @@ export function useGatewayChat({
 
           // Error handling
           if (chat.state === "error") {
+            applyBufferedTextDeltas();
             if (isCurrentConversation && isCurrentRun) {
               onActiveRunIdChange(null);
               onSendingChange(false);
@@ -416,6 +617,7 @@ export function useGatewayChat({
                 if (!conversationMatchesSessionKey(conversation, chat.sessionKey)) return conversation;
                 return patchConversation(conversation, (currentConversation) => ({
                   ...currentConversation,
+                  status: "failed",
                   latestEventType: "error",
                   runtime: {
                     ...currentConversation.runtime,
@@ -423,6 +625,7 @@ export function useGatewayChat({
                     activeStartedAt: undefined,
                     lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
                     lastEventAt: Date.now(),
+                    lastEventIsHeartbeat: isHeartbeatEvent,
                     lastTerminalAt: Date.now(),
                     lastTerminalReason: "error",
                   },
@@ -447,6 +650,7 @@ export function useGatewayChat({
 
     return () => {
       mounted = false;
+      applyBufferedTextDeltas();
       dispose?.();
     };
   }, [enabled, onAgentsChange, onActiveRunIdChange, onSendingChange, onGatewayError, onGatewayStatusTextChange, onGatewayConnectedChange, refreshGatewayStatus, onTerminalChatEvent]);

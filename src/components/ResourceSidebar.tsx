@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { Agent } from "../types/app";
+import type { Conversation } from "../types/conversation";
 import { isSystemAutoConversation } from "../lib/conversationSelectors";
 import { Icon, IconNames } from "./Icon";
 type TranslateFn = (key: string) => string;
@@ -42,6 +43,45 @@ export function ResourceSidebar({
   const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<Set<string>>(() => new Set());
 
+  const renderConversationButton = (agentId: string, conversation: Conversation, depth = 0) => (
+    <button
+      className={`conversation-tree-item flat ${conversation.visible ? "visible" : "hidden"} ${expandedConversationId === conversation.id ? "selected" : ""} ${depth > 0 ? "child-session" : ""}`}
+      key={conversation.id}
+      onClick={() => {
+        if (!conversation.visible) {
+          onToggleConversationVisibility(agentId, conversation.id, true);
+        }
+        onExpandedConversationChange(conversation.id);
+        onOpenConversation?.(conversation.id);
+      }}
+      type="button"
+      style={depth > 0 ? { "--conversation-depth": depth } as CSSProperties : undefined}
+    >
+      <div className="conversation-title-wrap">
+        <span className={`status-dot ${conversation.status}`} />
+        <span className="conversation-title">{conversation.title}</span>
+        {conversation.parentSessionKey ? (
+          <span className="tree-item-kind" title={tt(t, "conversation.childSessionHint", "Created by another conversation")}>
+            {tt(t, "conversation.childSession", "Child")}
+          </span>
+        ) : null}
+        {conversation.runtime?.lastEventIsHeartbeat ? (
+          <span className="tree-item-kind heartbeat" title={tt(t, "conversation.heartbeatHint", "Triggered by a scheduled heartbeat")}>
+            {tt(t, "conversation.heartbeat", "Heartbeat")}
+          </span>
+        ) : null}
+      </div>
+      <span className="tree-item-meta">
+        {conversation.agentRuntime ? (
+          <span className="tree-item-runtime" title={`Agent Runtime: ${conversation.agentRuntime.id}`}>
+            {conversation.agentRuntime.label ?? conversation.agentRuntime.id}
+          </span>
+        ) : null}
+        <span className="tree-item-tokens">{conversation.tokens}</span>
+      </span>
+    </button>
+  );
+
   if (!visible) {
     return (
       <aside className="resource-sidebar-collapsed">
@@ -70,8 +110,19 @@ export function ResourceSidebar({
           const displayConversations = showSystemConversations
             ? agent.conversations
             : agent.conversations.filter((conversation) => !isSystemAutoConversation(conversation));
-          const visibleConversations = showsAll ? displayConversations : displayConversations.slice(0, 5);
-          const hiddenCount = Math.max(0, displayConversations.length - visibleConversations.length);
+          const displayConversationIds = new Set(displayConversations.map((conversation) => conversation.id));
+          const childrenByParent = new Map<string, Conversation[]>();
+          for (const conversation of displayConversations) {
+            if (!conversation.parentSessionKey || !displayConversationIds.has(conversation.parentSessionKey)) continue;
+            const children = childrenByParent.get(conversation.parentSessionKey) ?? [];
+            children.push(conversation);
+            childrenByParent.set(conversation.parentSessionKey, children);
+          }
+          const rootConversations = displayConversations.filter(
+            (conversation) => !conversation.parentSessionKey || !displayConversationIds.has(conversation.parentSessionKey),
+          );
+          const visibleRootConversations = showsAll ? rootConversations : rootConversations.slice(0, 5);
+          const hiddenCount = Math.max(0, rootConversations.length - visibleRootConversations.length);
           return (
             <section className="agent-group flat" key={agent.id}>
               <div
@@ -139,33 +190,10 @@ export function ResourceSidebar({
               </div>
               {!isCollapsed ? (
                 <div className="conversation-tree flat">
-                  {visibleConversations.map((conversation) => (
-                    <button
-                      className={`conversation-tree-item flat ${conversation.visible ? "visible" : "hidden"} ${expandedConversationId === conversation.id ? "selected" : ""}`}
-                      key={conversation.id}
-                      onClick={() => {
-                        if (!conversation.visible) {
-                          onToggleConversationVisibility(agent.id, conversation.id, true);
-                        }
-                        onExpandedConversationChange(conversation.id);
-                        onOpenConversation?.(conversation.id);
-                      }}
-                      type="button"
-                    >
-                      <div className="conversation-title-wrap">
-                        <span className={`status-dot ${conversation.status}`} />
-                        <span className="conversation-title">{conversation.title}</span>
-                      </div>
-                      <span className="tree-item-meta">
-                        {conversation.agentRuntime ? (
-                          <span className="tree-item-runtime" title={`Agent Runtime: ${conversation.agentRuntime.id}`}>
-                            {conversation.agentRuntime.label ?? conversation.agentRuntime.id}
-                          </span>
-                        ) : null}
-                        <span className="tree-item-tokens">{conversation.tokens}</span>
-                      </span>
-                    </button>
-                  ))}
+                  {visibleRootConversations.flatMap((conversation) => [
+                    renderConversationButton(agent.id, conversation, 0),
+                    ...(childrenByParent.get(conversation.id) ?? []).map((child) => renderConversationButton(agent.id, child, 1)),
+                  ])}
                   {hiddenCount > 0 ? (
                     <button
                       className="conversation-tree-more"

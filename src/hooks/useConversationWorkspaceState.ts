@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo } from "react";
+import { useDeferredValue, useMemo, useRef } from "react";
 import { isConversationRunning } from "../lib/conversationRunState";
 import { findConversationById, getVisibleConversations } from "../lib/conversationSelectors";
 import type { Agent } from "../types/app";
@@ -7,6 +7,19 @@ import type { Conversation } from "../types/conversation";
 const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
 type ConversationSort = "updated" | "tokens" | "status";
+
+function conversationStructureKey(agents: Agent[]) {
+  return agents
+    .map((agent) => `${agent.id}:${agent.conversations.map((conversation) => `${conversation.id}:${conversation.visible ? 1 : 0}`).join(",")}`)
+    .join("|");
+}
+
+function isStreamingNavigationOnlyUpdate(conversation: Conversation | null) {
+  if (!conversation) return false;
+  const eventType = (conversation.latestEventType ?? "").toLowerCase();
+  return isConversationRunning(conversation)
+    && (eventType === "assistant_stream" || eventType === "tool_stream");
+}
 
 export function useConversationWorkspaceState({
   agents,
@@ -27,9 +40,25 @@ export function useConversationWorkspaceState({
   conversationSort: ConversationSort;
   showSystemConversations: boolean;
 }) {
+  const navigationAgentsRef = useRef(agents);
+  const navigationStructureKeyRef = useRef(conversationStructureKey(agents));
+  const activeConversation = useMemo(
+    () => findConversationById(agents, activeConversationId),
+    [activeConversationId, agents],
+  );
+  const nextStructureKey = conversationStructureKey(agents);
+  if (
+    nextStructureKey !== navigationStructureKeyRef.current
+    || !isStreamingNavigationOnlyUpdate(activeConversation)
+  ) {
+    navigationAgentsRef.current = agents;
+    navigationStructureKeyRef.current = nextStructureKey;
+  }
+  const navigationAgents = navigationAgentsRef.current;
+
   const visibleConversations = useMemo(
-    () => getVisibleConversations(agents, { showSystemConversations }),
-    [agents, showSystemConversations],
+    () => getVisibleConversations(navigationAgents, { showSystemConversations }),
+    [navigationAgents, showSystemConversations],
   );
   const deferredConversationSearch = useDeferredValue(conversationSearch);
 
@@ -112,12 +141,8 @@ export function useConversationWorkspaceState({
     });
   }, [conversationSort, searchFilteredVisibleConversations]);
 
-  const activeConversation = useMemo(
-    () => findConversationById(agents, activeConversationId),
-    [activeConversationId, agents],
-  );
-
   return {
+    navigationAgents,
     visibleConversations,
     conversationRuntimeOptions,
     conversationFiltersActive,

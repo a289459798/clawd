@@ -121,6 +121,16 @@ function normalizeImageSrc(data: string, mimeType?: string) {
   return `data:${mime};base64,${data}`;
 }
 
+function formatMessageTime(timestamp?: number) {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return "";
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function MessageBubbleWithCopy({
   text,
   imageVariant,
@@ -552,6 +562,7 @@ function ConversationMessageListInternal({
         const { message } = row;
         const messageRole = message.role?.toLowerCase() === "user" ? "user" : "assistant";
         const parts = message.parts?.length ? message.parts : [{ kind: "text", text: message.text } as MessagePart];
+        const messageTime = mode === "conversation" ? formatMessageTime(message.timestamp) : "";
         return (
           <div className={`message-stack ${messageRole}`} key={`${conversationId}-message-${row.index}`}>
             {message.displayRepeatCount && message.displayRepeatCount > 1 ? (
@@ -567,6 +578,11 @@ function ConversationMessageListInternal({
               t={t}
             />
             <MessageMeta message={message} formatTokenCount={formatTokenCount} role={messageRole} t={t} />
+            {messageTime ? (
+              <time className="message-time-badge conversation-message-time" dateTime={new Date(message.timestamp as number).toISOString()}>
+                {messageTime}
+              </time>
+            ) : null}
           </div>
         );
       })}

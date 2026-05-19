@@ -51,6 +51,8 @@ type ConversationWorkspaceProps = {
   composerAttachments: ComposerAttachment[];
   activeQueuedMessages: QueuedComposerMessage[];
   gatewayError: string | null;
+  historyLoading: boolean;
+  historyCanLoadMore: boolean;
   modelOptions: ModelOption[];
   modelsLoading: boolean;
   onBack: () => void;
@@ -61,6 +63,7 @@ type ConversationWorkspaceProps = {
   onOpenImage: (src: string) => void;
   formatTokenCount: (value?: number) => string;
   onOpenConversation: (conversationId: string) => void | Promise<void>;
+  onLoadMoreHistory: (conversationId: string) => void | Promise<void>;
   onHideConversation: (agentId: string, conversationId: string) => void;
   onConversationSearchChange: (value: string) => void;
   onConversationRuntimeFilterChange: (value: string) => void;
@@ -116,6 +119,8 @@ export function ConversationWorkspace({
   composerAttachments,
   activeQueuedMessages,
   gatewayError,
+  historyLoading,
+  historyCanLoadMore,
   modelOptions,
   modelsLoading,
   onBack,
@@ -126,6 +131,7 @@ export function ConversationWorkspace({
   onOpenImage,
   formatTokenCount,
   onOpenConversation,
+  onLoadMoreHistory,
   onHideConversation,
   onConversationSearchChange,
   onConversationRuntimeFilterChange,
@@ -255,6 +261,9 @@ export function ConversationWorkspace({
             t={t}
             statusLabel={statusLabel}
             gatewayError={gatewayError}
+            historyLoading={historyLoading}
+            historyCanLoadMore={historyCanLoadMore}
+            onLoadMoreHistory={onLoadMoreHistory}
             onBack={(resetUserExpanded) => { onBack(); resetUserExpanded(); }}
             resetUserExpanded={() => onUserExpandedChange(false)}
             parseSenderMeta={parseSenderMeta}

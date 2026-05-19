@@ -11,6 +11,9 @@ export type SnapshotSession = {
   thinking_levels?: Array<{ id: string; label?: string }>;
   updated_at?: number;
   channel?: string;
+  parent_session_key?: string;
+  child_sessions?: string[];
+  session_kind?: string;
   session_file?: string;
   last_message?: string;
   last_role?: string;
@@ -470,6 +473,7 @@ export type GatewayChatEvent = {
   stream?: "tool" | "lifecycle" | "compaction" | "fallback" | string;
   sessionKey?: string;
   runId?: string;
+  isHeartbeat?: boolean;
   deltaText?: string;
   replace?: boolean;
   message?: GatewayMessage;

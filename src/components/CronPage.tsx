@@ -46,6 +46,12 @@ type CronEditDraft = {
   agentId: string;
 };
 
+type CronRunNotice = {
+  runId?: string;
+  status: "queued" | "found" | "missing" | "error";
+  message?: string;
+};
+
 function defaultAtLocalValue() {
   const next = new Date(Date.now() + 60 * 60_000);
   next.setMinutes(0, 0, 0);
@@ -61,6 +67,31 @@ function formatRunTs(ts: number): string {
   }
 }
 
+function extractCronRunId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const row = payload as Record<string, unknown>;
+  if (typeof row.runId === "string") return row.runId;
+  const data = row.data;
+  if (data && typeof data === "object" && typeof (data as Record<string, unknown>).runId === "string") {
+    return (data as Record<string, unknown>).runId as string;
+  }
+  return undefined;
+}
+
+function mergeCronRuns(existing: CronRunRow[] | undefined, incoming: CronRunRow[]): CronRunRow[] {
+  if (!existing?.length) return incoming;
+  if (!incoming.length) return existing;
+  const seen = new Set<string>();
+  const merged: CronRunRow[] = [];
+  for (const row of [...incoming, ...existing]) {
+    const key = row.runId || `${row.ts}:${row.jobId ?? ""}:${row.status ?? ""}:${row.sessionKey ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
+}
+
 export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }: CronPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +101,13 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
   const [runsLoadingJobId, setRunsLoadingJobId] = useState<string | null>(null);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<CronEditDraft | null>(null);
+  const [runNotices, setRunNotices] = useState<Record<string, CronRunNotice>>({});
 
   const parsed = useMemo(() => parseCronListPayload(listPayload), [listPayload]);
+  const expandedRunJob = parsed.jobs.find((job) => job.id === expandedRunJobId) ?? null;
   const enabledCount = parsed.jobs.filter((job) => job.enabled !== false).length;
   const disabledCount = parsed.jobs.length - enabledCount;
-  const deliveryCount = parsed.jobs.filter((job) => !describeCronDeliveryLine(job, parsed.deliveryPreviews[job.id] ?? null).noDelivery).length;
+  const deliveryCount = parsed.jobs.filter((job) => !describeCronDeliveryLine(job, parsed.deliveryPreviews[job.id] ?? null, t).noDelivery).length;
 
   const loadList = useCallback(async () => {
     if (!gatewayConnected) {
@@ -162,14 +195,47 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
     setBusyJobId(job.id);
     setError(null);
     try {
-      await invoke<unknown>("gateway_cron_run", { params: { id: job.id, mode: "force" } });
-      const rawRuns = await invoke<unknown>("gateway_cron_runs", {
-        params: { id: job.id, limit: 25, sortDir: "desc" },
-      });
-      setRunsByJob((prev) => ({ ...prev, [job.id]: parseCronRunsPayload(rawRuns) }));
+      const runPayload = await invoke<unknown>("gateway_cron_run", { params: { id: job.id, mode: "force" } });
+      const runId = extractCronRunId(runPayload);
       setExpandedRunJobId(job.id);
+      setRunNotices((prev) => ({
+        ...prev,
+        [job.id]: {
+          runId,
+          status: "queued",
+        },
+      }));
+      const rawRuns = await invoke<unknown>("gateway_cron_runs", {
+        params: runId
+          ? { id: job.id, runId, limit: 1, sortDir: "desc" }
+          : { id: job.id, limit: 25, sortDir: "desc" },
+      });
+      const exactRuns = parseCronRunsPayload(rawRuns);
+      let nextRuns = exactRuns;
+      if (runId && exactRuns.length === 0) {
+        const recentRuns = await invoke<unknown>("gateway_cron_runs", {
+          params: { id: job.id, limit: 25, sortDir: "desc" },
+        });
+        nextRuns = parseCronRunsPayload(recentRuns);
+      }
+      setRunsByJob((prev) => ({ ...prev, [job.id]: mergeCronRuns(prev[job.id], nextRuns) }));
+      setExpandedRunJobId(job.id);
+      setRunNotices((prev) => ({
+        ...prev,
+        [job.id]: {
+          runId,
+          status: exactRuns.length > 0 || (!runId && nextRuns.length > 0) ? "found" : "missing",
+        },
+      }));
       await loadList();
     } catch (err) {
+      setRunNotices((prev) => ({
+        ...prev,
+        [job.id]: {
+          status: "error",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      }));
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusyJobId(null);
@@ -288,9 +354,7 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
             key={job.id}
             job={job}
             preview={parsed.deliveryPreviews[job.id]}
-            expanded={expandedRunJobId === job.id}
-            runs={runsByJob[job.id]}
-            runsLoading={runsLoadingJobId === job.id}
+            runNotice={runNotices[job.id]}
             busy={busyJobId === job.id}
             onToggleRuns={() => void toggleRuns(job.id)}
             onOpenSessionKey={onOpenSessionKey}
@@ -310,6 +374,16 @@ export function CronPage({ agents = [], gatewayConnected, onOpenSessionKey, t }:
           onCancel={() => setEditDraft(null)}
           onSubmit={() => void saveEditDraft(editDraft)}
           agents={agents}
+          t={t}
+        />
+      ) : null}
+      {expandedRunJob ? (
+        <CronRunsDialog
+          job={expandedRunJob}
+          runs={runsByJob[expandedRunJob.id]}
+          runsLoading={runsLoadingJobId === expandedRunJob.id}
+          onClose={() => setExpandedRunJobId(null)}
+          onOpenSessionKey={onOpenSessionKey}
           t={t}
         />
       ) : null}
@@ -435,6 +509,24 @@ function describeCronSendMode(job: CronJobRow, deliveryText: string, t: (key: st
   return tt(t, "cron.send.webhook", "Webhook · Send result to URL");
 }
 
+function describeRunNotice(notice: CronRunNotice, t: (key: string) => string): string {
+  if (notice.status === "found") return tt(t, "cron.runNotice.found", "This run has started. The latest record is shown below.");
+  if (notice.status === "missing") return tt(t, "cron.runNotice.missing", "Run has been queued. The run record may appear after OpenClaw finishes scheduling it.");
+  if (notice.status === "error") return notice.message || tt(t, "cron.runNotice.error", "Run failed to start.");
+  return tt(t, "cron.runNotice.queued", "Run has been queued.");
+}
+
+function cronStatusLabel(status: string | undefined, t: (key: string) => string): string {
+  if (!status) return "-";
+  const normalized = status.toLowerCase();
+  if (normalized === "ok" || normalized === "success" || normalized === "completed") return tt(t, "cron.status.ok", "Completed");
+  if (normalized === "error" || normalized === "failed") return tt(t, "cron.status.error", "Failed");
+  if (normalized === "skipped") return tt(t, "cron.status.skipped", "Skipped");
+  if (normalized === "running") return tt(t, "cron.status.running", "Running");
+  if (normalized === "queued" || normalized === "pending") return tt(t, "cron.status.queued", "Queued");
+  return status;
+}
+
 function describeDraftSchedule(draft: CronEditDraft, agents: Array<{ id: string; name?: string }>, t: (key: string) => string): string {
   const selectedAgent = agents.find((agent) => agent.id === draft.agentId);
   const actor = selectedAgent?.name || selectedAgent?.id || tt(t, "cron.defaultAgent", "default agent");
@@ -469,9 +561,7 @@ function describeDraftSchedule(draft: CronEditDraft, agents: Array<{ id: string;
 function CronJobCard({
   job,
   preview,
-  expanded,
-  runs,
-  runsLoading,
+  runNotice,
   busy,
   onToggleRuns,
   onOpenSessionKey,
@@ -483,9 +573,7 @@ function CronJobCard({
 }: {
   job: CronJobRow;
   preview?: { label?: string; detail?: string };
-  expanded: boolean;
-  runs: CronRunRow[] | undefined;
-  runsLoading: boolean;
+  runNotice?: CronRunNotice;
   busy: boolean;
   onToggleRuns: () => void;
   onOpenSessionKey: (sessionKey: string) => void;
@@ -495,8 +583,8 @@ function CronJobCard({
   onDelete: () => void;
   t: (key: string) => string;
 }) {
-  const scheduleText = formatCronSchedule(job.schedule);
-  const delivery = describeCronDeliveryLine(job, preview ?? null);
+  const scheduleText = formatCronSchedule(job.schedule, t);
+  const delivery = describeCronDeliveryLine(job, preview ?? null, t);
   const title = job.name?.trim() || job.id;
   const lastRunText = formatCronTimestamp(job.state?.lastRunAtMs);
   const lastRunStatus = job.state?.lastRunStatus;
@@ -504,7 +592,7 @@ function CronJobCard({
   const sendText = describeCronSendMode(job, delivery.text, t);
 
   return (
-    <article className={`info-card cron-job-card ${job.enabled === false ? "cron-job-disabled" : ""} ${expanded ? "cron-job-expanded" : ""}`}>
+    <article className={`info-card cron-job-card ${job.enabled === false ? "cron-job-disabled" : ""}`}>
       <div className="cron-job-head">
         <div>
           <strong>{title}</strong>
@@ -520,7 +608,7 @@ function CronJobCard({
               {sendMode === "isolated" ? tt(t, "cron.badge.isolated", "Isolated") : tt(t, "cron.badge.silent", "Silent")}
             </span>
           ) : (
-            <span className="cron-badge cron-badge-deliver">{sendMode === "webhook" ? "Webhook" : tt(t, "cron.badge.notify", "Notify")}</span>
+            <span className="cron-badge cron-badge-deliver">{sendMode === "webhook" ? tt(t, "cron.badge.webhook", "Webhook") : tt(t, "cron.badge.notify", "Notify")}</span>
           )}
         </div>
       </div>
@@ -536,7 +624,7 @@ function CronJobCard({
         <span>{tt(t, "cron.lastRun", "Last run")}</span>
         <span title={lastRunText}>
           {lastRunText}
-          {lastRunStatus ? <em className={`cron-last-status cron-last-status-${lastRunStatus}`}>{lastRunStatus}</em> : null}
+          {lastRunStatus ? <em className={`cron-last-status cron-last-status-${lastRunStatus}`}>{cronStatusLabel(lastRunStatus, t)}</em> : null}
         </span>
       </div>
       {job.sessionKey ? (
@@ -551,8 +639,8 @@ function CronJobCard({
         <button type="button" className="ghost-link-button primary-action" onClick={onRun} disabled={busy}>
           {busy ? tt(t, "cron.running", "Running") : tt(t, "cron.run", "Run")}
         </button>
-        <button type="button" className="ghost-link-button" onClick={onToggleRuns} disabled={busy}>
-          {expanded ? tt(t, "cron.hideRuns", "Hide runs") : tt(t, "cron.runs", "Runs")}
+        <button type="button" className="ghost-link-button" onClick={onToggleRuns}>
+          {tt(t, "cron.runs", "Runs")}
         </button>
         <button type="button" className="ghost-link-button" onClick={onEdit} disabled={busy}>{tt(t, "common.edit", "Edit")}</button>
         <button type="button" className="ghost-link-button" onClick={onToggleEnabled} disabled={busy}>
@@ -560,8 +648,43 @@ function CronJobCard({
         </button>
         <button type="button" className="ghost-link-button danger-action" onClick={onDelete} disabled={busy}>{tt(t, "common.delete", "Delete")}</button>
       </div>
-      {expanded ? (
-        <div className="cron-runs-panel">
+      {runNotice ? (
+        <div className={`cron-run-notice cron-run-notice-${runNotice.status}`}>
+          <span>{describeRunNotice(runNotice, t)}</span>
+          {runNotice.runId ? <code>{runNotice.runId}</code> : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function CronRunsDialog({
+  job,
+  runs,
+  runsLoading,
+  onClose,
+  onOpenSessionKey,
+  t,
+}: {
+  job: CronJobRow;
+  runs: CronRunRow[] | undefined;
+  runsLoading: boolean;
+  onClose: () => void;
+  onOpenSessionKey: (sessionKey: string) => void;
+  t: (key: string) => string;
+}) {
+  const title = job.name?.trim() || job.id;
+  return (
+    <div className="cron-runs-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="cron-runs-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="cron-runs-modal-head">
+          <div>
+            <strong>{tt(t, "cron.runs", "Runs")}</strong>
+            <span>{title}</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label={tt(t, "common.close", "Close")} title={tt(t, "common.close", "Close")}>×</button>
+        </div>
+        <div className="cron-runs-modal-body">
           {runsLoading ? <div className="inline-page-status">{tt(t, "cron.loadingRuns", "Loading runs...")}</div> : null}
           {!runsLoading && runs && runs.length === 0 ? <div className="empty-panel">{tt(t, "cron.emptyRuns", "No run records yet.")}</div> : null}
           {!runsLoading && runs && runs.length > 0 ? (
@@ -569,13 +692,16 @@ function CronJobCard({
               {runs.map((row, idx) => (
                 <div className="cron-run-row" key={`${row.ts}-${idx}`}>
                   <span className="cron-run-time">{formatRunTs(row.ts)}</span>
-                  <span className={`cron-run-status cron-run-status-${row.status ?? "unknown"}`}>{row.status ?? "-"}</span>
+                  <span className={`cron-run-status cron-run-status-${row.status ?? "unknown"}`}>{cronStatusLabel(row.status, t)}</span>
                   <span className="cron-run-summary">{row.summary || row.jobId || tt(t, "cron.noSummary", "No summary")}</span>
                   {row.sessionKey ? (
                     <button
                       type="button"
                       className="ghost-link-button"
-                      onClick={() => onOpenSessionKey(row.sessionKey!)}
+                      onClick={() => {
+                        onClose();
+                        onOpenSessionKey(row.sessionKey!);
+                      }}
                     >
                       {tt(t, "conversation.openSession", "Open session")}
                     </button>
@@ -587,8 +713,11 @@ function CronJobCard({
             </div>
           ) : null}
         </div>
-      ) : null}
-    </article>
+        <div className="cron-runs-modal-actions">
+          <button type="button" className="ghost-link-button" onClick={onClose}>{tt(t, "common.close", "Close")}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -9,6 +9,11 @@ import {
   scheduleKindOf,
 } from "./cronGateway";
 
+const zh = (key: string) => ({
+  "cron.schedule.everyHours": "每 {{count}} 小时",
+  "cron.delivery.none": "不投递（仅执行任务）",
+}[key] ?? key);
+
 describe("formatCronSchedule", () => {
   it("formats cron expr", () => {
     expect(formatCronSchedule({ kind: "cron", expr: "0 * * * *", tz: "Asia/Shanghai" })).toBe(
@@ -17,13 +22,13 @@ describe("formatCronSchedule", () => {
   });
 
   it("formats everyMs", () => {
-    expect(formatCronSchedule({ kind: "every", everyMs: 3600_000 })).toBe("每 1 小时");
+    expect(formatCronSchedule({ kind: "every", everyMs: 3600_000 }, zh)).toBe("每 1 小时");
   });
 });
 
 describe("describeCronDeliveryLine", () => {
   it("detects explicit none mode", () => {
-    const r = describeCronDeliveryLine({ id: "1", delivery: { mode: "none" } }, null);
+    const r = describeCronDeliveryLine({ id: "1", delivery: { mode: "none" } }, null, zh);
     expect(r.noDelivery).toBe(true);
     expect(r.text).toContain("不投递");
   });

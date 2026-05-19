@@ -12,7 +12,7 @@ import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { OpenClawInfoModal } from "./components/OpenClawInfoModal";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
-import { conversationMatchesSessionKey, findConversationById } from "./lib/conversationSelectors";
+import { conversationMatchesSessionKey, findConversationByGatewaySessionKey, findConversationById } from "./lib/conversationSelectors";
 import { readComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
 import { useClawKitSettings } from "./hooks/useClawKitSettings";
@@ -31,7 +31,7 @@ import { useModelManagementActions } from "./hooks/useModelManagementActions";
 import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
 import { formatTokenCount } from "./lib/appFormatters";
 import { parseSenderMeta } from "./lib/messageMeta";
-import { canonicalizeModelRef } from "./lib/modelOptions";
+import { canonicalizeModelRef, isUnconfiguredModelRef, normalizeModelKey } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
 import { isConversationRunning } from "./lib/conversationRunState";
@@ -60,6 +60,7 @@ import { onNativeNotificationAction, sendNativeNotification } from "./lib/notifi
 import { createTranslator, resolveLocale } from "./lib/i18n";
 import { shouldRunDestructiveAction } from "./lib/sessionConfirmations";
 import { parseConversationFilters, serializeConversationFilters } from "./lib/appUiPersistence";
+import { measureAsync } from "./lib/perfDebug";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
 import type { Agent, ChannelConnection, ComposerAttachment, NavKey, PluginRepairCard, QqbotPluginStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
 import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
@@ -77,6 +78,10 @@ const CronPage = lazy(async () => import("./components/CronPage").then((module) 
 const PetsPage = lazy(async () => import("./components/PetsPage").then((module) => ({ default: module.PetsPage })));
 const SettingsPage = lazy(async () => import("./components/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const SEND_STARTUP_SESSION_REFRESH_SUPPRESS_MS = 30_000;
+const CONVERSATION_HISTORY_OPEN_LIMIT = 80;
+const CONVERSATION_HISTORY_MAX_CHARS = 4_000;
+const CONVERSATION_HISTORY_LOAD_STEPS = [80, 200, 500] as const;
 const CONVERSATION_FILTERS_STORAGE_KEY = "clawkit.conversationFilters";
 const LAST_CONVERSATION_STORAGE_KEY = "clawkit.lastConversationId";
 const tr = (t: (key: string) => string, key: string, fallback: string) => {
@@ -166,9 +171,12 @@ function App() {
   const [openClawGatewayMessage, setOpenClawGatewayMessage] = useState<string | null>(null);
   const [settingsOpenClawActionBusy, setSettingsOpenClawActionBusy] = useState(false);
   const [settingsOpenClawActionMessage, setSettingsOpenClawActionMessage] = useState<string | null>(null);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"general" | "appearance" | "notifications" | "openclaw" | undefined>(undefined);
   const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const uiFrameDiagnostics = useUiFrameDiagnostics(bootstrapStep === "ready");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [conversationHistoryLimits, setConversationHistoryLimits] = useState<Record<string, number>>({});
+  const [historyLoadingConversationId, setHistoryLoadingConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
   const { loadGatewaySnapshot } = useGatewaySnapshot();
@@ -184,6 +192,9 @@ function App() {
   const previousConversationsRef = useRef<Map<string, Conversation>>(new Map());
   const notifiedConversationRunKeysRef = useRef<Set<string>>(new Set());
   const activeConversationIdRef = useRef<string | null>(null);
+  const composerModelRef = useRef("");
+  const composerThinkingRef = useRef("off");
+  const sessionPatchPendingRef = useRef<Record<string, Promise<void>>>({});
   const queuedMessagesByConversationRef = useRef<Record<string, QueuedComposerMessage[]>>({});
   const restoredLastConversationRef = useRef(false);
   const autoStartGatewayAttemptedRef = useRef(false);
@@ -500,6 +511,8 @@ function App() {
     let cancelled = false;
     let eventCleanup: (() => void) | undefined;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let refreshInFlight = false;
+    let refreshPending = false;
 
     // Ensure gateway connection on app startup (binding may already be configured).
     // gateway_connect returns "already connected" if previously established, so this is safe.
@@ -539,6 +552,30 @@ function App() {
       }
     };
 
+    const runSessionsChangedRefresh = async () => {
+      if (Date.now() < suppressSessionRefreshUntilRef.current) {
+        return;
+      }
+      if (refreshInFlight) {
+        refreshPending = true;
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        do {
+          refreshPending = false;
+          if (cancelled) return;
+          if (hasActiveAgentRun(agentsRef.current)) {
+            await loadSnapshotLightMergeSessionsList();
+          } else {
+            await loadSnapshot();
+          }
+        } while (refreshPending && !cancelled);
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+
     /**
      * Targeted reconciliation: merge `sessions.list` rows only (no sessions.preview fan-out).
      * Falls back to full snapshot when store shape diverges (new/removed sessions).
@@ -546,16 +583,18 @@ function App() {
     const loadSnapshotLightMergeSessionsList = async () => {
       try {
         const currentAgentSnapshots = agentsRef.current;
-        await invoke("gateway_connect");
-        const sessionsResult = await invoke<GatewaySessionsListResult>("gateway_sessions_list", {
-          params: {
-            limit: 100,
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-            includeGlobal: false,
-            includeUnknown: false,
-          },
-        });
+        await measureAsync("sessions.changed.gateway_connect", () => invoke("gateway_connect"), 300);
+        const sessionsResult = await measureAsync("sessions.changed.sessions_list", () =>
+          invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+            params: {
+              limit: 100,
+              includeDerivedTitles: true,
+              includeLastMessage: true,
+              includeGlobal: false,
+              includeUnknown: false,
+            },
+          }),
+        );
         if (cancelled) {
           return;
         }
@@ -597,14 +636,7 @@ function App() {
             clearTimeout(refreshTimer);
           }
           refreshTimer = setTimeout(() => {
-            if (Date.now() < suppressSessionRefreshUntilRef.current) {
-              return;
-            }
-            if (hasActiveAgentRun(agentsRef.current)) {
-              void loadSnapshotLightMergeSessionsList();
-            } else {
-              void loadSnapshot();
-            }
+            void runSessionsChangedRefresh();
           }, 250);
         });
         eventCleanup = () => {
@@ -998,16 +1030,18 @@ function App() {
   );
 
   const mergeSessionsListFromGateway = useCallback(async () => {
-    await invoke("gateway_connect");
-    const sessionsResult = await invoke<GatewaySessionsListResult>("gateway_sessions_list", {
-      params: {
-        limit: 100,
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-        includeGlobal: false,
-        includeUnknown: false,
-      },
-    });
+    await measureAsync("sessions.merge.gateway_connect", () => invoke("gateway_connect"), 300);
+    const sessionsResult = await measureAsync("sessions.merge.sessions_list", () =>
+      invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+        params: {
+          limit: 100,
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+          includeGlobal: false,
+          includeUnknown: false,
+        },
+      }),
+    );
     const rows = sessionsResult.sessions ?? [];
     const transcriptSourceOfTruthIds = new Set<string>();
     const aid = activeConversationIdRef.current;
@@ -1310,11 +1344,14 @@ function App() {
   const refreshGatewaySnapshot = useCallback(async (options?: { priorityAgentId?: string }) => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
     const { snapshot, sessionsDefaults } = await loadGatewaySnapshot({ fallbackSnapshot });
-    setGatewaySessionsDefaults(sessionsDefaults ?? null);
-    setAgents(buildAgentsFromSnapshot(snapshot, agentsRef.current, {
+    const nextAgents = buildAgentsFromSnapshot(snapshot, agentsRef.current, {
       preserveExistingConversations: true,
       priorityAgentId: options?.priorityAgentId,
-    }));
+    });
+    setGatewaySessionsDefaults(sessionsDefaults ?? null);
+    agentsRef.current = nextAgents;
+    setAgents(nextAgents);
+    return nextAgents;
   }, [loadGatewaySnapshot]);
 
   const runWeixinTerminalAction = useCallback(async (command: "open_weixin_plugin_install_terminal" | "open_weixin_plugin_update_terminal" | "open_weixin_login_terminal") => {
@@ -1394,6 +1431,7 @@ function App() {
   });
 
   const {
+    navigationAgents,
     visibleConversations,
     conversationRuntimeOptions,
     conversationFiltersActive,
@@ -1445,6 +1483,14 @@ function App() {
   useEffect(() => {
     activeConversationRef.current = activeConversation;
   }, [activeConversation]);
+
+  useEffect(() => {
+    composerModelRef.current = composerModel;
+  }, [composerModel]);
+
+  useEffect(() => {
+    composerThinkingRef.current = composerThinking;
+  }, [composerThinking]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
     const lastAssistant = getLastAssistantMessage(conversation?.previewMessages ?? []);
@@ -1561,16 +1607,15 @@ function App() {
     }
   }, [announceWorkspace, t]);
 
-  const openConversationDetail = useCallback(async (conversationId: string, preserveStatus = false) => {
-    setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
-    setExpandedConversationId(conversationId);
-    setActiveConversationId(conversationId);
-    setUserExpanded(false);
+  const loadConversationHistory = useCallback(async (conversationId: string, preserveStatus = false, limit = CONVERSATION_HISTORY_OPEN_LIMIT) => {
+    setHistoryLoadingConversationId(conversationId);
     try {
       // Ensure gateway is connected first
-      await invoke("gateway_connect");
-      const result = await invoke<GatewayHistoryResult>("gateway_chat_history", { params: { sessionKey: conversationId, limit: 200 } });
-      await refreshGatewayStatus();
+      await measureAsync("open_conversation.gateway_connect", () => invoke("gateway_connect"), 300);
+      const result = await measureAsync("open_conversation.chat_history", () =>
+        invoke<GatewayHistoryResult>("gateway_chat_history", { params: { sessionKey: conversationId, limit, maxChars: CONVERSATION_HISTORY_MAX_CHARS } }),
+      );
+      await measureAsync("open_conversation.refresh_gateway_status", refreshGatewayStatus, 300);
       if (Array.isArray(result?.messages)) {
         const mappedMessages = mapGatewayHistoryMessages(result);
         const lastAssistant = getLastAssistantMessage(mappedMessages);
@@ -1635,17 +1680,46 @@ function App() {
     } catch (error) {
       await refreshGatewayStatus();
       console.error("Failed to load chat history", error);
+    } finally {
+      setHistoryLoadingConversationId((current) => (current === conversationId ? null : current));
     }
   }, [refreshGatewayStatus]);
+
+  const openConversationDetail = useCallback(async (conversationId: string, preserveStatus = false) => {
+    setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
+    setExpandedConversationId(conversationId);
+    setActiveConversationId(conversationId);
+    setUserExpanded(false);
+    const limit = conversationHistoryLimits[conversationId] ?? CONVERSATION_HISTORY_OPEN_LIMIT;
+    await loadConversationHistory(conversationId, preserveStatus, limit);
+  }, [conversationHistoryLimits, loadConversationHistory]);
+
+  const handleLoadMoreConversationHistory = useCallback(async (conversationId: string) => {
+    const currentLimit = conversationHistoryLimits[conversationId] ?? CONVERSATION_HISTORY_OPEN_LIMIT;
+    const nextLimit = CONVERSATION_HISTORY_LOAD_STEPS.find((item) => item > currentLimit) ?? currentLimit;
+    if (nextLimit === currentLimit) return;
+    setConversationHistoryLimits((current) => ({ ...current, [conversationId]: nextLimit }));
+    await loadConversationHistory(conversationId, true, nextLimit);
+  }, [conversationHistoryLimits, loadConversationHistory]);
 
   const handleOpenCronSessionKey = useCallback(
     (sessionKey: string) => {
       setActiveNav("conversations");
-      window.requestAnimationFrame(() => {
-        void openConversationDetail(sessionKey);
-      });
+      void (async () => {
+        let nextAgents = agentsRef.current;
+        let conversationId = findConversationByGatewaySessionKey(nextAgents, sessionKey)?.id;
+        if (!conversationId) {
+          try {
+            nextAgents = await refreshGatewaySnapshot();
+            conversationId = findConversationByGatewaySessionKey(nextAgents, sessionKey)?.id;
+          } catch (error) {
+            console.warn("Failed to refresh sessions before opening cron run session", error);
+          }
+        }
+        await openConversationDetail(conversationId ?? sessionKey);
+      })();
     },
-    [openConversationDetail],
+    [openConversationDetail, refreshGatewaySnapshot],
   );
 
   const openConversationDetailRef = useRef(openConversationDetail);
@@ -1756,6 +1830,102 @@ function App() {
     () => Boolean(activeConversationId && !activeConversationId.startsWith("draft-") && !activeConversation?.isDraft),
     [activeConversation?.isDraft, activeConversationId],
   );
+
+  const patchConversationComposerDefaults = useCallback((
+    conversationId: string,
+    patch: { model?: string; thinkingDefault?: string },
+  ) => {
+    setAgents((current) => current.map((agent) => ({
+      ...agent,
+      conversations: agent.conversations.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        return {
+          ...conversation,
+          model: patch.model ?? conversation.model,
+          thinkingDefault: patch.thinkingDefault ?? conversation.thinkingDefault,
+        };
+      }),
+    })));
+  }, []);
+
+  const queueSessionPatch = useCallback((
+    sessionKey: string,
+    patch: Record<string, unknown>,
+    label: string,
+  ) => {
+    const previous = sessionPatchPendingRef.current[sessionKey] ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await measureAsync(`${label}.gateway_connect`, () => invoke("gateway_connect"), 300);
+        await measureAsync(`${label}.sessions_patch`, () =>
+          invoke("gateway_sessions_patch", {
+            params: { sessionKey, ...patch },
+          }),
+        );
+      });
+    sessionPatchPendingRef.current[sessionKey] = run;
+    const cleanup = () => {
+      if (sessionPatchPendingRef.current[sessionKey] === run) {
+        delete sessionPatchPendingRef.current[sessionKey];
+      }
+    };
+    run.then(cleanup, cleanup);
+    return run;
+  }, []);
+
+  const handleComposerModelChange = useCallback((nextModel: string) => {
+    setComposerModel(nextModel);
+    composerModelRef.current = nextModel;
+    const conversation = activeConversationRef.current;
+    const sessionKey = activeConversationIdRef.current;
+    if (!conversation || !sessionKey || conversation.isDraft || sessionKey.startsWith("draft-")) return;
+
+    const lastAssistant = getLastAssistantMessage(conversation.previewMessages ?? []);
+    const selectedModel = canonicalizeModelRef(nextModel, modelOptions, lastAssistant?.provider);
+    const currentModel = canonicalizeModelRef(conversation.model ?? "", modelOptions, lastAssistant?.provider);
+    if (isUnconfiguredModelRef(selectedModel) || normalizeModelKey(selectedModel) === normalizeModelKey(currentModel)) {
+      return;
+    }
+
+    const previousModel = conversation.model;
+    patchConversationComposerDefaults(sessionKey, { model: selectedModel });
+    void queueSessionPatch(sessionKey, { model: selectedModel }, "composer.model_patch")
+      .catch((error) => {
+        const messageText = error instanceof Error ? error.message : String(error);
+        patchConversationComposerDefaults(sessionKey, { model: previousModel });
+        if (activeConversationIdRef.current === sessionKey) {
+          setComposerModel(previousModel);
+          composerModelRef.current = previousModel;
+        }
+        setSessionActionError(`${t("app.saveSessionModelFailed")}: ${messageText}`);
+      });
+  }, [modelOptions, patchConversationComposerDefaults, queueSessionPatch, t]);
+
+  const handleComposerThinkingChange = useCallback((nextThinking: string) => {
+    setComposerThinking(nextThinking);
+    composerThinkingRef.current = nextThinking;
+    const conversation = activeConversationRef.current;
+    const sessionKey = activeConversationIdRef.current;
+    if (!conversation || !sessionKey || conversation.isDraft || sessionKey.startsWith("draft-")) return;
+
+    const currentThinking = conversation.thinkingDefault ?? "off";
+    if (nextThinking === currentThinking) return;
+
+    const previousThinking = currentThinking;
+    patchConversationComposerDefaults(sessionKey, { thinkingDefault: nextThinking });
+    void queueSessionPatch(sessionKey, { thinkingLevel: nextThinking }, "composer.thinking_patch")
+      .catch((error) => {
+        const messageText = error instanceof Error ? error.message : String(error);
+        patchConversationComposerDefaults(sessionKey, { thinkingDefault: previousThinking });
+        if (activeConversationIdRef.current === sessionKey) {
+          setComposerThinking(previousThinking);
+          composerThinkingRef.current = previousThinking;
+        }
+        setSessionActionError(`${t("app.saveSessionThinkingFailed")}: ${messageText}`);
+      });
+  }, [patchConversationComposerDefaults, queueSessionPatch, t]);
+
   const handleClearConversationFilters = useCallback(() => {
     setConversationSearch("");
     setConversationRuntimeFilter("all");
@@ -2004,11 +2174,19 @@ function App() {
       return;
     }
 
-    suppressSessionRefreshUntilRef.current = 0;
+    suppressSessionRefreshUntilRef.current = Date.now() + SEND_STARTUP_SESSION_REFRESH_SUPPRESS_MS;
+    const pendingSessionPatch = sessionPatchPendingRef.current[activeConversationId];
+    if (pendingSessionPatch) {
+      try {
+        await measureAsync("send.wait_pending_session_patch", () => pendingSessionPatch, 300);
+      } catch {
+        return;
+      }
+    }
     await sendMessageToConversation(activeConversationId, message, attachments, {
       restoreToComposerOnError: true,
-      model: composerModel,
-      thinking: composerThinking,
+      model: composerModelRef.current,
+      thinking: composerThinkingRef.current,
     });
   }, [activeConversationId, activeConversationSending, composerAttachments, composerModel, composerThinking, composerValue, enqueueComposerMessage, sendMessageToConversation]);
 
@@ -2027,7 +2205,7 @@ function App() {
     }));
     const queuedPayload = nextQueuedMessage;
     window.setTimeout(() => {
-      suppressSessionRefreshUntilRef.current = 0;
+      suppressSessionRefreshUntilRef.current = Date.now() + SEND_STARTUP_SESSION_REFRESH_SUPPRESS_MS;
       void sendMessageToConversation(activeConversationId, queuedPayload.text, queuedPayload.attachments, {
         requeueOnError: queuedPayload,
         model: queuedPayload.model,
@@ -2128,7 +2306,7 @@ function App() {
           <>
             <ResourceSidebar
               t={t}
-              agents={agents}
+              agents={navigationAgents}
               expandedConversationId={expandedConversationId}
               visible={showResourceSidebar}
               onCreateAgent={() => setAgentCreateOpen(true)}
@@ -2171,6 +2349,12 @@ function App() {
               composerAttachments={composerAttachments}
               activeQueuedMessages={activeQueuedMessages}
               gatewayError={activeSendError}
+              historyLoading={historyLoadingConversationId === activeConversation?.id}
+              historyCanLoadMore={Boolean(
+                activeConversation
+                && (conversationHistoryLimits[activeConversation.id] ?? CONVERSATION_HISTORY_OPEN_LIMIT) < CONVERSATION_HISTORY_LOAD_STEPS[CONVERSATION_HISTORY_LOAD_STEPS.length - 1]
+                && (activeConversation.previewMessages?.length ?? 0) >= (conversationHistoryLimits[activeConversation.id] ?? CONVERSATION_HISTORY_OPEN_LIMIT),
+              )}
               modelOptions={modelOptions}
               modelsLoading={modelsLoading}
               composerThinkingOptions={composerThinkingOptions}
@@ -2182,14 +2366,15 @@ function App() {
               onOpenImage={setPreviewImageSrc}
               formatTokenCount={formatTokenCount}
               onOpenConversation={openConversationDetail}
+              onLoadMoreHistory={handleLoadMoreConversationHistory}
               onHideConversation={handleHideConversation}
               onConversationSearchChange={setConversationSearch}
               onConversationRuntimeFilterChange={setConversationRuntimeFilter}
               onConversationSortChange={setConversationSort}
               onFocusChange={setComposerFocused}
               onValueChange={setComposerValue}
-              onModelChange={setComposerModel}
-              onThinkingChange={setComposerThinking}
+              onModelChange={handleComposerModelChange}
+              onThinkingChange={handleComposerThinkingChange}
               onFilesSelected={handleComposerFiles}
               onRemoveAttachment={removeComposerAttachment}
               onRemoveQueuedMessage={removeQueuedMessage}
@@ -2236,6 +2421,11 @@ function App() {
               loading={metadataLoading || !metadataPageReady}
               t={t}
               onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
+              onRefreshSkills={() => void refreshGatewaySkills()}
+              onOpenUploadSettings={() => {
+                setSettingsInitialSection("openclaw");
+                setActiveNav("settings");
+              }}
             />
           </Suspense>
         ) : null}
@@ -2323,6 +2513,7 @@ function App() {
               onUpdateOpenClaw={() => void runOpenClawUpdate()}
               onNavigate={handleNavChange}
               patchOpenClawConfig={patchOpenClawConfig}
+              initialSection={settingsInitialSection}
             />
           </Suspense>
         ) : null}

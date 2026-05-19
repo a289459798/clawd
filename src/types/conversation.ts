@@ -30,6 +30,7 @@ export type ConversationRuntime = {
   activeStartedAt?: number;
   lastRunStartedAt?: number;
   lastEventAt?: number;
+  lastEventIsHeartbeat?: boolean;
   lastTerminalAt?: number;
   lastTerminalReason?: "completed" | "aborted" | "error" | "failed" | "timeout" | "killed" | "cancelled" | "interrupted";
 };
@@ -55,6 +56,9 @@ export type Conversation = {
   alternateSessionKeys?: string[];
   title: string;
   channel?: string;
+  parentSessionKey?: string;
+  childSessionKeys?: string[];
+  sessionKind?: string;
   status: ConversationStatus;
   lastMessage: string;
   lastTime: string;

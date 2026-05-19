@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ChannelConnection, PluginRepairCard, QqbotPluginStatus, Skill, SkillPolicyHint, WeixinPluginStatus } from "../types/app";
 import type { FeishuEditorForm } from "../lib/feishuChannelPatch";
+import { formatFileSize } from "../lib/fileDisplay";
 import type { QqbotEditorForm } from "../lib/qqbotChannelPatch";
 import { FeishuConfigDialog } from "./FeishuConfigDialog";
 import { QqbotConfigDialog } from "./QqbotConfigDialog";
-import type { GatewayChannelsEventLoopHealth, GatewaySessionsUsageResult, GatewayUsageTotals } from "../types/gateway";
+import type { GatewayChannelsEventLoopHealth, GatewayConfigGetResult, GatewaySessionsUsageResult, GatewayUsageTotals } from "../types/gateway";
 import {
   accountOperationalHealthHint,
   describeHealthState,
@@ -70,6 +72,39 @@ async function copyToClipboard(text: string) {
   } catch {
     /* ignore */
   }
+}
+
+const SKILL_UPLOAD_CHUNK_SIZE = 256 * 1024;
+
+function normalizeSkillSlug(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\.zip$/i, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let out = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    out += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(out);
+}
+
+async function sha256Hex(buffer: ArrayBuffer) {
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function readAllowUploadedArchives(config: unknown) {
+  if (!config || typeof config !== "object") return false;
+  const skills = (config as Record<string, unknown>).skills;
+  if (!skills || typeof skills !== "object") return false;
+  const install = (skills as Record<string, unknown>).install;
+  if (!install || typeof install !== "object") return false;
+  return (install as Record<string, unknown>).allowUploadedArchives === true;
 }
 
 function PluginRepairActions({ actions, t }: { actions: PluginRepairCard["actions"]; t: TranslateFn }) {
@@ -202,17 +237,277 @@ export function SkillsPage({
   loading,
   t,
   onToggleSkill,
+  onRefreshSkills,
+  onOpenUploadSettings,
 }: {
   skills: Skill[];
   pluginLoadRepairs: PluginRepairCard[];
   loading: boolean;
   t: TranslateFn;
   onToggleSkill: (skillId: string, enabled: boolean) => void;
+  onRefreshSkills: () => void | Promise<void>;
+  onOpenUploadSettings: () => void;
 }) {
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadSlug, setUploadSlug] = useState("");
+  const [uploadForce, setUploadForce] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadDragActive, setUploadDragActive] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadConfirmOpen, setUploadConfirmOpen] = useState(false);
+  const [zipUploadAllowed, setZipUploadAllowed] = useState<boolean | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setZipUploadAllowed(null);
+    void (async () => {
+      try {
+        await invoke("gateway_connect");
+        const result = await invoke<GatewayConfigGetResult>("gateway_config_get");
+        if (cancelled) return;
+        setZipUploadAllowed(readAllowUploadedArchives(result.config));
+      } catch {
+        if (!cancelled) setZipUploadAllowed(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleUploadFileChange = (file: File | null) => {
+    setUploadFile(file);
+    setUploadMessage(null);
+    setUploadError(null);
+    if (file && !uploadSlug.trim()) {
+      setUploadSlug(normalizeSkillSlug(file.name));
+    }
+  };
+
+  const installUploadedSkill = async (confirmed = false) => {
+    if (zipUploadAllowed !== true) {
+      setUploadError(tt(t, "skills.upload.disabledByConfig", "Zip uploads are not enabled yet. Turn on Allow zip uploads in Settings > OpenClaw, then retry."));
+      return;
+    }
+    if (!uploadFile) {
+      setUploadError(tt(t, "skills.upload.selectZipFirst", "Choose a zip file first."));
+      return;
+    }
+    const slug = normalizeSkillSlug(uploadSlug || uploadFile.name);
+    if (!slug) {
+      setUploadError(tt(t, "skills.upload.slugRequired", "Enter a skill name before installing."));
+      return;
+    }
+    if (!uploadFile.name.toLowerCase().endsWith(".zip")) {
+      setUploadError(tt(t, "skills.upload.zipOnly", "Only .zip skill archives are supported."));
+      return;
+    }
+    if (!confirmed) {
+      setUploadConfirmOpen(true);
+      return;
+    }
+
+    setUploadConfirmOpen(false);
+    setUploadBusy(true);
+    setUploadError(null);
+    setUploadMessage(tt(t, "skills.upload.hashing", "Checking archive..."));
+    try {
+      await invoke("gateway_connect");
+      const buffer = await uploadFile.arrayBuffer();
+      const sha256 = await sha256Hex(buffer);
+      const begin = await invoke<{ uploadId?: string }>("gateway_skills_upload_begin", {
+        params: {
+          kind: "skill-archive",
+          slug,
+          sizeBytes: uploadFile.size,
+          sha256,
+          force: uploadForce,
+          idempotencyKey: `clawkit-${Date.now()}-${slug}`,
+        },
+      });
+      const uploadId = begin.uploadId;
+      if (!uploadId) {
+        throw new Error(tt(t, "skills.upload.noUploadId", "Gateway did not return an upload id."));
+      }
+
+      const bytes = new Uint8Array(buffer);
+      for (let offset = 0; offset < bytes.length; offset += SKILL_UPLOAD_CHUNK_SIZE) {
+        setUploadMessage(
+          tt(t, "skills.upload.uploading", "Uploading archive...")
+            .replace("{{percent}}", `${Math.min(99, Math.floor((offset / Math.max(bytes.length, 1)) * 100))}%`),
+        );
+        await invoke("gateway_skills_upload_chunk", {
+          params: {
+            uploadId,
+            offset,
+            dataBase64: bytesToBase64(bytes.subarray(offset, offset + SKILL_UPLOAD_CHUNK_SIZE)),
+          },
+        });
+      }
+
+      setUploadMessage(tt(t, "skills.upload.installing", "Installing skill..."));
+      await invoke("gateway_skills_upload_commit", { params: { uploadId, sha256 } });
+      await invoke("gateway_skills_install_upload", {
+        params: {
+          uploadId,
+          slug,
+          force: uploadForce,
+          sha256,
+          timeoutMs: 120_000,
+        },
+      });
+      setUploadMessage(tt(t, "skills.upload.done", "Skill installed. Refreshing list..."));
+      setUploadFile(null);
+      setUploadSlug("");
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
+      await onRefreshSkills();
+      setUploadMessage(tt(t, "skills.upload.doneShort", "Skill installed."));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setUploadError(message.includes("allowUploadedArchives")
+        ? tt(t, "skills.upload.disabledByConfig", "Zip uploads are not enabled yet. Turn on Allow zip uploads in Settings > OpenClaw, then retry.")
+        : message);
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
   return (
     <section className="single-page">
       {loading ? <div className="inline-page-status">{tt(t, "skills.loading", "Syncing skill status...")}</div> : null}
       <PluginRepairStack title={tt(t, "skills.pluginRuntimeIssues", "Plugin runtime load issues (from Gateway health)")} items={pluginLoadRepairs} t={t} />
+      {zipUploadAllowed === true ? (
+      <article className="info-card skill-upload-card">
+        <div className="skill-upload-head">
+          <div>
+            <strong>{tt(t, "skills.upload.title", "Install skill from zip")}</strong>
+            <p>{tt(t, "skills.upload.description", "Choose a skill zip archive. ClawKit will upload it through OpenClaw Gateway and install it into the default skills folder.")}</p>
+          </div>
+          <span className="skill-upload-trust-badge">{tt(t, "skills.upload.trustedOnly", "Only use archives you trust")}</span>
+        </div>
+
+        <div className="skill-upload-body">
+          <button
+            className={`skill-upload-dropzone ${uploadFile ? "has-file" : ""} ${uploadDragActive ? "drag-active" : ""}`}
+            type="button"
+            disabled={uploadBusy}
+            onClick={() => uploadInputRef.current?.click()}
+            onDragOver={(event) => {
+              event.preventDefault();
+              if (!uploadBusy) setUploadDragActive(true);
+            }}
+            onDragLeave={() => setUploadDragActive(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setUploadDragActive(false);
+              if (uploadBusy) return;
+              handleUploadFileChange(event.dataTransfer.files?.[0] ?? null);
+            }}
+          >
+            <span className="skill-upload-drop-icon" aria-hidden="true">ZIP</span>
+            <span className="skill-upload-drop-copy">
+              <strong>{uploadFile ? uploadFile.name : tt(t, "skills.upload.chooseFile", "Choose zip archive")}</strong>
+              <small>
+                {uploadFile
+                  ? `${formatFileSize(uploadFile.size)} · ${tt(t, "skills.upload.clickToReplace", "Click to choose another file")}`
+                  : tt(t, "skills.upload.dropHint", "Click to choose a file, or drop it here")}
+              </small>
+            </span>
+          </button>
+          <input
+            ref={uploadInputRef}
+            className="skill-upload-native-input"
+            type="file"
+            accept=".zip,application/zip"
+            disabled={uploadBusy}
+            onChange={(event) => handleUploadFileChange(event.target.files?.[0] ?? null)}
+          />
+
+          <div className="skill-upload-settings">
+            <label>
+              <span>{tt(t, "skills.upload.slug", "Skill name")}</span>
+              <input
+                type="text"
+                value={uploadSlug}
+                disabled={uploadBusy}
+                placeholder={tt(t, "skills.upload.slugPlaceholder", "for example: my-skill")}
+                onChange={(event) => setUploadSlug(event.target.value)}
+              />
+            </label>
+            <label className="skill-upload-force">
+              <input
+                type="checkbox"
+                checked={uploadForce}
+                disabled={uploadBusy}
+                onChange={(event) => setUploadForce(event.target.checked)}
+              />
+              <span>{tt(t, "skills.upload.force", "Replace existing skill with the same name")}</span>
+            </label>
+          </div>
+        </div>
+
+        <div className="skill-upload-footer">
+          <div className="skill-upload-status">
+            {uploadMessage ? <div className="inline-page-status">{uploadMessage}</div> : null}
+            {uploadError ? <div className="inline-page-status danger">{uploadError}</div> : null}
+          </div>
+          <button className="primary-button compact" type="button" onClick={() => void installUploadedSkill()} disabled={uploadBusy || !uploadFile}>
+            {uploadBusy ? tt(t, "skills.upload.busy", "Installing...") : tt(t, "skills.upload.action", "Upload and install")}
+          </button>
+        </div>
+        {uploadConfirmOpen ? (
+          <div className="modal-backdrop skill-upload-confirm-backdrop" role="presentation" onMouseDown={() => setUploadConfirmOpen(false)}>
+            <section className="skill-upload-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="skill-upload-confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="skill-upload-confirm-head">
+                <strong id="skill-upload-confirm-title">{tt(t, "skills.upload.confirmTitle", "Install this skill?")}</strong>
+                <button type="button" onClick={() => setUploadConfirmOpen(false)} aria-label={tt(t, "common.close", "Close")}>×</button>
+              </div>
+              <div className="skill-upload-confirm-body">
+                <p>{tt(t, "skills.upload.confirmBody", "Skill archives can contain code that runs on this computer. Only continue if you trust the source.")}</p>
+                {uploadFile ? (
+                  <div className="skill-upload-confirm-file">
+                    <span>ZIP</span>
+                    <div>
+                      <strong>{uploadFile.name}</strong>
+                      <small>{formatFileSize(uploadFile.size)} · {normalizeSkillSlug(uploadSlug || uploadFile.name)}</small>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className="skill-upload-confirm-actions">
+                <button className="ghost-button" type="button" onClick={() => setUploadConfirmOpen(false)}>{tt(t, "common.cancel", "Cancel")}</button>
+                <button className="primary-button compact" type="button" onClick={() => void installUploadedSkill(true)}>{tt(t, "skills.upload.confirmAction", "Install trusted zip")}</button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </article>
+      ) : (
+        <article className="info-card skill-upload-card skill-upload-disabled-card">
+          <div className="skill-upload-head">
+            <div>
+              <strong>{tt(t, "skills.upload.title", "Install skill from zip")}</strong>
+              <p>
+                {zipUploadAllowed === null
+                  ? tt(t, "skills.upload.checkingConfig", "Checking whether zip uploads are enabled...")
+                  : tt(t, "skills.upload.disabledNotice", "Zip upload is turned off. Enable it in Settings > OpenClaw when you need to install a trusted private skill archive.")}
+              </p>
+            </div>
+            <span className="skill-upload-trust-badge disabled">{tt(t, "common.disabled", "Disabled")}</span>
+          </div>
+          {zipUploadAllowed === false ? (
+            <div className="skill-upload-disabled-actions">
+              <button className="ghost-button" type="button" onClick={onOpenUploadSettings}>
+                {tt(t, "skills.upload.openSettings", "Open Settings")}
+              </button>
+            </div>
+          ) : null}
+        </article>
+      )}
       <div className="card-grid-panel skills-grid">
         {skills.map((skill) => (
           <article className="info-card skill-card" key={skill.id}>
