@@ -1,11 +1,10 @@
 # ClawKit
 
-ClawKit 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，目标不是再做一个泛化的 AI 面板，而是**把 OpenClaw 变成一个更顺手、更像常规桌面软件的工作台**。
+ClawKit 是一个基于 `Tauri + React + TypeScript` 的本地桌面端项目，**把 OpenClaw 变成一个更顺手、更像常规桌面软件的工作台**。
 
 - 降低 OpenClaw 日常使用门槛
 - 减少频繁切换对话窗口的成本
 - 让 `agent / 对话 / model / skill / channel / usage` 这些 OpenClaw 核心对象可视化
-- 为后续的本地 adapter 接入预留结构
 
 ---
 
