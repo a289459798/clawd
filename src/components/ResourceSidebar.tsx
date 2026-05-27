@@ -18,10 +18,13 @@ type ResourceSidebarProps = {
   onToggleConversationVisibility: (agentId: string, conversationId: string, visible: boolean) => void;
   onExpandedConversationChange: (conversationId: string) => void;
   onOpenConversation?: (conversationId: string) => void | Promise<void>;
+  onLoadAgentHistory?: (agentId: string) => void | Promise<void>;
   onCollapse: () => void;
   onExpand: () => void;
   visible: boolean;
   showSystemConversations: boolean;
+  agentHistoryHasMore?: Record<string, boolean>;
+  agentHistoryLoadingId?: string | null;
   t: TranslateFn;
 };
 
@@ -34,14 +37,22 @@ export function ResourceSidebar({
   onToggleConversationVisibility,
   onExpandedConversationChange,
   onOpenConversation,
+  onLoadAgentHistory,
   onCollapse,
   onExpand,
   visible,
   showSystemConversations,
+  agentHistoryHasMore = {},
+  agentHistoryLoadingId,
   t,
 }: ResourceSidebarProps) {
   const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
   const [collapsedAgentIds, setCollapsedAgentIds] = useState<Set<string>>(() => new Set());
+
+  const loadAgentHistory = (agentId: string) => {
+    setExpandedAgentIds((current) => new Set(current).add(agentId));
+    void onLoadAgentHistory?.(agentId);
+  };
 
   const renderConversationButton = (agentId: string, conversation: Conversation, depth = 0) => (
     <button
@@ -123,6 +134,8 @@ export function ResourceSidebar({
           );
           const visibleRootConversations = showsAll ? rootConversations : rootConversations.slice(0, 5);
           const hiddenCount = Math.max(0, rootConversations.length - visibleRootConversations.length);
+          const canLoadHistory = Boolean(agentHistoryHasMore[agent.id] && onLoadAgentHistory);
+          const loadingHistory = agentHistoryLoadingId === agent.id;
           return (
             <section className="agent-group flat" key={agent.id}>
               <div
@@ -203,6 +216,19 @@ export function ResourceSidebar({
                       }}
                     >
                       {tt(t, "common.showMore", "Show more")} {hiddenCount}
+                    </button>
+                  ) : canLoadHistory ? (
+                    <button
+                      className="conversation-tree-more"
+                      type="button"
+                      disabled={loadingHistory}
+                      onClick={() => {
+                        loadAgentHistory(agent.id);
+                      }}
+                    >
+                      {loadingHistory
+                        ? tt(t, "conversation.loadingHistory", "Loading history...")
+                        : tt(t, "conversation.viewHistory", "View history")}
                     </button>
                   ) : showsAll && displayConversations.length > 5 ? (
                     <button

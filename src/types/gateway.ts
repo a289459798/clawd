@@ -350,9 +350,11 @@ export type GatewayUsageTotals = {
 
 export type GatewaySessionsListParams = {
   limit?: number;
+  offset?: number;
   activeMinutes?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
+  configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   label?: string;
@@ -418,6 +420,11 @@ export type GatewaySessionsListResult = {
   };
   sessions?: GatewaySessionRow[];
   agents?: Array<{ id: string; name?: string; workspace?: string; model?: string }>;
+  totalCount?: number;
+  limitApplied?: number | null;
+  offset?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
 };
 
 export type GatewaySessionsPreviewResult = {

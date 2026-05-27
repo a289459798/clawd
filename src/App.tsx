@@ -29,6 +29,7 @@ import { useOpenClawRuntime } from "./hooks/useOpenClawRuntime";
 import { useModelsPageData } from "./hooks/useModelsPageData";
 import { useModelManagementActions } from "./hooks/useModelManagementActions";
 import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
+import { buildSnapshotFromGateway } from "./lib/gatewaySnapshotAdapter";
 import { formatTokenCount } from "./lib/appFormatters";
 import { parseSenderMeta } from "./lib/messageMeta";
 import { canonicalizeModelRef, isUnconfiguredModelRef, normalizeModelKey } from "./lib/modelOptions";
@@ -165,6 +166,8 @@ function App() {
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [usagePageReady, setUsagePageReady] = useState(true);
   const [gatewaySessionsDefaults, setGatewaySessionsDefaults] = useState<GatewaySessionsListResult["defaults"] | null>(null);
+  const [agentHistoryHasMore, setAgentHistoryHasMore] = useState<Record<string, boolean>>({});
+  const [agentHistoryLoadingId, setAgentHistoryLoadingId] = useState<string | null>(null);
   const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
   const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
   const [openClawGatewayBusy, setOpenClawGatewayBusy] = useState(false);
@@ -540,10 +543,16 @@ function App() {
           }
           snapshot = gatewayLoad.snapshot;
           setGatewaySessionsDefaults(gatewayLoad.sessionsDefaults ?? null);
+          setAgentHistoryHasMore(
+            gatewayLoad.sessionsHasMore
+              ? Object.fromEntries(gatewayLoad.snapshot.agents.map((agent) => [agent.id, true]))
+              : {},
+          );
         } catch (error) {
           console.warn("Gateway snapshot unavailable, falling back to local OpenClaw snapshot", error);
           if (!cancelled) {
             setGatewaySessionsDefaults(null);
+            setAgentHistoryHasMore({});
           }
         }
         setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots, { preserveExistingConversations: true }));
@@ -587,9 +596,10 @@ function App() {
         const sessionsResult = await measureAsync("sessions.changed.sessions_list", () =>
           invoke<GatewaySessionsListResult>("gateway_sessions_list", {
             params: {
-              limit: 100,
-              includeDerivedTitles: true,
-              includeLastMessage: true,
+              limit: 50,
+              configuredAgentsOnly: true,
+              includeDerivedTitles: false,
+              includeLastMessage: false,
               includeGlobal: false,
               includeUnknown: false,
             },
@@ -1034,9 +1044,10 @@ function App() {
     const sessionsResult = await measureAsync("sessions.merge.sessions_list", () =>
       invoke<GatewaySessionsListResult>("gateway_sessions_list", {
         params: {
-          limit: 100,
-          includeDerivedTitles: true,
-          includeLastMessage: true,
+          limit: 50,
+          configuredAgentsOnly: true,
+          includeDerivedTitles: false,
+          includeLastMessage: false,
           includeGlobal: false,
           includeUnknown: false,
         },
@@ -1054,6 +1065,71 @@ function App() {
     setAgents(mergeGatewaySessionRowsIntoAgents(agentsRef.current, rows, { transcriptSourceOfTruthIds }));
     setGatewaySessionsDefaults(sessionsResult.defaults ?? null);
   }, []);
+
+  const handleLoadAgentHistory = useCallback(async (agentId: string) => {
+    if (agentHistoryLoadingId) return;
+    setAgentHistoryLoadingId(agentId);
+    try {
+      const currentAgents = agentsRef.current;
+      const currentAgent = currentAgents.find((agent) => agent.id === agentId);
+      const offset = Math.max(
+        0,
+        currentAgent?.conversations.filter((conversation) => !conversation.isDraft).length ?? 0,
+      );
+      await measureAsync("agent_history.gateway_connect", () => invoke("gateway_connect"), 300);
+      const sessionsResult = await measureAsync("agent_history.sessions_list", () =>
+        invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+          params: {
+            agentId,
+            limit: 50,
+            offset,
+            configuredAgentsOnly: true,
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+            includeGlobal: false,
+            includeUnknown: false,
+          },
+        }),
+      );
+      const snapshot = buildSnapshotFromGateway({
+        agentsResult: null,
+        sessionsResult,
+        previewsResult: null,
+        fallbackSnapshot: {
+          agents: currentAgents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            workspace: agent.conversations[0]?.workspace,
+            model: agent.model,
+            agent_dir: agent.configPath,
+          })),
+          sessions: [],
+          connections: [],
+          skills: [],
+        },
+      });
+      const nextAgents = buildAgentsFromSnapshot(snapshot, currentAgents, {
+        preserveExistingConversations: true,
+      }).map((agent) => {
+        if (agent.id !== agentId) return agent;
+        return {
+          ...agent,
+          conversations: [...agent.conversations].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+        };
+      });
+      setAgents(nextAgents);
+      setGatewaySessionsDefaults(sessionsResult.defaults ?? null);
+      setAgentHistoryHasMore((current) => ({
+        ...current,
+        [agentId]: sessionsResult.hasMore === true,
+      }));
+    } catch (error) {
+      console.warn("Failed to load agent history", error);
+      announceWorkspace(t("conversation.loadHistoryFailed"));
+    } finally {
+      setAgentHistoryLoadingId(null);
+    }
+  }, [agentHistoryLoadingId, announceWorkspace, t]);
 
   const handleResetComposerThinkingDefault = useCallback(async () => {
     const key = activeConversationId;
@@ -2315,9 +2391,12 @@ function App() {
               onToggleConversationVisibility={toggleConversationVisibility}
               onExpandedConversationChange={setExpandedConversationId}
               onOpenConversation={openConversationDetail}
+              onLoadAgentHistory={handleLoadAgentHistory}
               onCollapse={() => setShowResourceSidebar(false)}
               onExpand={() => setShowResourceSidebar(true)}
               showSystemConversations={clawKitSettings.general.showSystemConversations}
+              agentHistoryHasMore={agentHistoryHasMore}
+              agentHistoryLoadingId={agentHistoryLoadingId}
             />
 
             <ConversationWorkspace

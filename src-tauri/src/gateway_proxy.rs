@@ -70,9 +70,11 @@ pub struct GatewayHistoryParams {
 #[serde(rename_all = "camelCase")]
 pub struct GatewaySessionsListParams {
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
     pub active_minutes: Option<u32>,
     pub include_global: Option<bool>,
     pub include_unknown: Option<bool>,
+    pub configured_agents_only: Option<bool>,
     pub include_derived_titles: Option<bool>,
     pub include_last_message: Option<bool>,
     pub label: Option<String>,
@@ -1543,6 +1545,9 @@ pub async fn gateway_sessions_list(
     if let Some(limit) = params.limit {
         json_params.insert("limit".to_string(), json!(limit));
     }
+    if let Some(offset) = params.offset {
+        json_params.insert("offset".to_string(), json!(offset));
+    }
     if let Some(active_minutes) = params.active_minutes {
         json_params.insert("activeMinutes".to_string(), json!(active_minutes));
     }
@@ -1551,6 +1556,12 @@ pub async fn gateway_sessions_list(
     }
     if let Some(include_unknown) = params.include_unknown {
         json_params.insert("includeUnknown".to_string(), json!(include_unknown));
+    }
+    if let Some(configured_agents_only) = params.configured_agents_only {
+        json_params.insert(
+            "configuredAgentsOnly".to_string(),
+            json!(configured_agents_only),
+        );
     }
     if let Some(include_derived_titles) = params.include_derived_titles {
         json_params.insert(
