@@ -1,222 +1,147 @@
-import { startTransition, useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { defaultWindowIcon } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GatewayBanner, ImageLightbox, NavSidebar } from "./components/AppChrome";
+import { MandatoryAppUpdateModal } from "./components/MandatoryAppUpdateModal";
 import { AgentCreateDialog } from "./components/AgentCreateDialog";
 import { AgentFilesDialog } from "./components/AgentFilesDialog";
 import { BootstrapScreens } from "./components/BootstrapScreens";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
-import { CronPage } from "./components/CronPage";
-import { OpenClawUiDiagnostics } from "./components/OpenClawUiDiagnostics";
-import { ConnectionsPage, SkillsPage, UsagePage } from "./components/InfoPages";
-import { ModelsPage } from "./components/ModelsPage";
+import { OpenClawInfoModal } from "./components/OpenClawInfoModal";
 import { ResourceSidebar } from "./components/ResourceSidebar";
 import { getLastAssistantMessage, mapGatewayHistoryMessages, resolveConversationDefaultModel as resolveConversationModel, summarizeMessageUsage } from "./lib/conversationHistory";
-import { conversationMatchesSessionKey, findConversationById, getVisibleConversations } from "./lib/conversationSelectors";
+import { conversationMatchesSessionKey, findConversationByGatewaySessionKey, findConversationById } from "./lib/conversationSelectors";
 import { readComposerAttachments } from "./lib/composerAttachments";
 import { useConversationAutoScroll } from "./hooks/useConversationAutoScroll";
+import { useClawKitSettings } from "./hooks/useClawKitSettings";
+import { useClawKitSelfUpdate } from "./hooks/useClawKitSelfUpdate";
 import { useGatewayChat } from "./hooks/useGatewayChat";
 import { useGatewaySnapshot } from "./hooks/useGatewaySnapshot";
 import { useMessageSender } from "./hooks/useMessageSender";
 import { useModels } from "./hooks/useModels";
 import { useUiFrameDiagnostics } from "./hooks/useUiFrameDiagnostics";
+import { useConversationWorkspaceState } from "./hooks/useConversationWorkspaceState";
+import { usePetContextSync } from "./hooks/usePetContextSync";
+import { useBootstrapFlow } from "./hooks/useBootstrapFlow";
+import { useOpenClawRuntime } from "./hooks/useOpenClawRuntime";
+import { useModelsPageData } from "./hooks/useModelsPageData";
+import { useModelManagementActions } from "./hooks/useModelManagementActions";
 import { buildAgentsFromSnapshot, hasActiveAgentRun, mergeGatewaySessionRowsIntoAgents, patchConversation, resolveAgentDefaultModel } from "./lib/agentsSnapshot";
-import { connectionLabel, formatTokenCount, statusLabel } from "./lib/appFormatters";
-import { buildSkillPolicyHints } from "./lib/skillPolicyHints";
-import {
-  interpretPluginHealthError,
-  mergePluginRepairsIntoConnections,
-  parseHealthPluginErrors,
-} from "./lib/pluginPackagingDiagnostics";
-import { resolveChannelHealthHint, resolveChannelOperationalDegraded } from "./lib/channelHealth";
+import { buildSnapshotFromGateway } from "./lib/gatewaySnapshotAdapter";
+import { formatTokenCount } from "./lib/appFormatters";
 import { parseSenderMeta } from "./lib/messageMeta";
-import { buildModelOptions, canonicalizeModelRef } from "./lib/modelOptions";
+import { canonicalizeModelRef, isUnconfiguredModelRef, normalizeModelKey } from "./lib/modelOptions";
 import { mergeSnapshotMessagesPreservingCurrentOrder } from "./lib/toolStream";
 import { isInternalOpenClawMessage } from "./lib/gatewayMessages";
+import { isConversationRunning } from "./lib/conversationRunState";
+import { AGENT_DESCRIPTION_FILE } from "./lib/agentTemplates";
+import {
+  applyPluginHealthToChannels,
+  mapGatewaySkills,
+} from "./lib/appDerivedData";
+import {
+  buildFeishuSettingsPatch,
+  readFeishuEditorFormFromConfig,
+  validateFeishuEditorForm,
+  type FeishuEditorForm,
+} from "./lib/feishuChannelPatch";
+import {
+  buildQqbotSettingsPatch,
+  readQqbotEditorFormFromConfig,
+  validateQqbotEditorForm,
+  type QqbotEditorForm,
+} from "./lib/qqbotChannelPatch";
 import { describeUpdateRestartSentinel, extrapolateGatewayUptimeMs, formatApproxDurationMs } from "./lib/gatewayRuntimeInfo";
 import { resolveComposerThinkingOptions } from "./lib/thinkingOptions";
+import { buildAppearanceDataAttributes } from "./lib/appAppearance";
+import { buildConversationCompletionNotification } from "./lib/conversationNotifications";
+import { onNativeNotificationAction, sendNativeNotification } from "./lib/notifications";
+import { createTranslator, resolveLocale } from "./lib/i18n";
+import { shouldRunDestructiveAction } from "./lib/sessionConfirmations";
+import { parseConversationFilters, serializeConversationFilters } from "./lib/appUiPersistence";
+import { measureAsync } from "./lib/perfDebug";
 import type { Conversation, ConversationRuntime, PreviewMessage } from "./types/conversation";
-import type { Agent, ChannelConnection, ClawxBootstrapStatus, ComposerAttachment, NavKey, OpenClawCliStatus, PluginRepairCard, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
-import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewayModelAuthStatusResult, GatewayModelSummary, GatewayModelsResult, GatewayOpenClawStatusResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, GatewayUpdateStatusResult, OpenClawSnapshot } from "./types/gateway";
+import type { Agent, ChannelConnection, ComposerAttachment, NavKey, PluginRepairCard, QqbotPluginStatus, QueuedComposerMessage, Skill, WeixinPluginStatus } from "./types/app";
+import type { GatewayAgentsCreateResult, GatewayAgentsUpdateResult, GatewayChannelsEventLoopHealth, GatewayChannelsStatusResult, GatewayConfigGetResult, GatewayConfigPatchResult, GatewayHistoryResult, GatewaySessionsListResult, GatewaySessionsUsageResult, GatewaySkillsStatusResult, GatewaySkillsUpdateResult, GatewayStatus, OpenClawSnapshot } from "./types/gateway";
 import type { RealtimeGatewayEvent, RealtimeSessionMessageEvent } from "./realtime";
 import "./App.css";
 
 const agentsSeed: Agent[] = [];
 const fallbackSkills: Skill[] = [];
 const fallbackConnections: ChannelConnection[] = [];
-const RECENT_CONVERSATION_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+const ModelsPage = lazy(async () => import("./components/ModelsPage").then((module) => ({ default: module.ModelsPage })));
+const SkillsPage = lazy(async () => import("./components/InfoPages").then((module) => ({ default: module.SkillsPage })));
+const ConnectionsPage = lazy(async () => import("./components/InfoPages").then((module) => ({ default: module.ConnectionsPage })));
+const UsagePage = lazy(async () => import("./components/InfoPages").then((module) => ({ default: module.UsagePage })));
+const CronPage = lazy(async () => import("./components/CronPage").then((module) => ({ default: module.CronPage })));
+const PetsPage = lazy(async () => import("./components/PetsPage").then((module) => ({ default: module.PetsPage })));
+const SettingsPage = lazy(async () => import("./components/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const OPENCLAW_VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const SEND_STARTUP_SESSION_REFRESH_SUPPRESS_MS = 30_000;
+const CONVERSATION_HISTORY_OPEN_LIMIT = 80;
+const CONVERSATION_HISTORY_MAX_CHARS = 4_000;
+const CONVERSATION_HISTORY_LOAD_STEPS = [80, 200, 500] as const;
+const CONVERSATION_FILTERS_STORAGE_KEY = "clawkit.conversationFilters";
+const LAST_CONVERSATION_STORAGE_KEY = "clawkit.lastConversationId";
+const tr = (t: (key: string) => string, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function readNestedRecord(root: unknown, path: string[]): Record<string, unknown> | null {
-  let current: unknown = root;
-  for (const key of path) {
-    const record = asRecord(current);
-    if (!record) return null;
-    current = record[key];
+function readStorageValue(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
   }
-  return asRecord(current);
 }
 
-function readNestedString(root: unknown, path: string[]): string | null {
-  let current: unknown = root;
-  for (const key of path) {
-    const record = asRecord(current);
-    if (!record) return null;
-    current = record[key];
+function writeStorageValue(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Local storage can be unavailable in restricted webviews; settings still work without it.
   }
-  return typeof current === "string" && current.trim() ? current.trim() : null;
 }
 
-function resolveConfigDefaultModel(config: unknown): string | null {
-  const modelPrimary = readNestedString(config, ["agents", "defaults", "model", "primary"]);
-  if (modelPrimary) return modelPrimary;
-  const model = readNestedString(config, ["agents", "defaults", "model"]);
-  if (model) return model;
-  const defaultModels = readNestedRecord(config, ["agents", "defaults", "models"]);
-  const firstConfiguredDefault = defaultModels ? Object.keys(defaultModels).find((key) => key.trim()) : null;
-  return firstConfiguredDefault ?? null;
-}
-
-function normalizeSkillMissing(missing: unknown): string[] {
-  if (!missing) return [];
-  if (Array.isArray(missing)) return missing.map((item) => String(item)).filter(Boolean);
-  if (typeof missing === "object") {
-    return Object.entries(missing as Record<string, unknown>)
-      .filter(([, value]) => {
-        if (Array.isArray(value)) return value.length > 0;
-        if (value && typeof value === "object") return Object.keys(value).length > 0;
-        return Boolean(value);
-      })
-      .map(([key]) => key);
-  }
-  return [String(missing)];
-}
-
-function mapGatewaySkills(result: GatewaySkillsStatusResult): Skill[] {
-  return (result.skills ?? []).map((skill) => ({
-    id: skill.skillKey ?? skill.name,
-    name: [skill.emoji, skill.name].filter(Boolean).join(" "),
-    summary: skill.description ?? "暂无技能说明。",
-    description: skill.description,
-    enabled: !skill.disabled,
-    eligible: skill.eligible,
-    missing: normalizeSkillMissing(skill.missing),
-    homepage: skill.homepage,
-    policyHints: buildSkillPolicyHints({
-      name: skill.name,
-      blockedByAllowlist: skill.blockedByAllowlist,
-      blockedByAgentFilter: skill.blockedByAgentFilter,
-      eligible: skill.eligible,
-      install: skill.install,
-    }),
-  }));
-}
-
-function applyPluginHealthToChannels(
-  channelsResult: GatewayChannelsStatusResult,
-  healthRaw: unknown,
-): {
-  connections: ChannelConnection[];
-  eventLoop?: GatewayChannelsEventLoopHealth;
-  repairs: PluginRepairCard[];
-  unmatched: PluginRepairCard[];
-} {
-  const pluginErrors = parseHealthPluginErrors(healthRaw);
-  const repairCards = pluginErrors.map(interpretPluginHealthError);
-  const channelPayload = mapGatewayChannels(channelsResult);
-  const merged = mergePluginRepairsIntoConnections(channelPayload.connections, repairCards);
-  return {
-    connections: merged.connections,
-    eventLoop: channelPayload.eventLoop,
-    repairs: repairCards,
-    unmatched: merged.unmatchedRepairs,
-  };
-}
-
-function mapGatewayChannels(result: GatewayChannelsStatusResult): {
-  connections: ChannelConnection[];
-  eventLoop?: GatewayChannelsEventLoopHealth;
-} {
-  const ids = result.channelOrder ?? Object.keys(result.channels ?? {});
-  const connections = ids.map((id) => {
-    const accounts = result.channelAccounts?.[id] ?? [];
-    const connected = accounts.some((account) => account.connected || account.running);
-    const configured = accounts.some((account) => account.configured || account.enabled);
-    const error = accounts.find((account) => account.lastError)?.lastError;
-    const degradedOperational = resolveChannelOperationalDegraded(accounts);
-    const healthHint = resolveChannelHealthHint(accounts);
-
-    let status: ChannelConnection["status"];
-    if (connected) {
-      status = degradedOperational ? "degraded" : "connected";
-    } else if (error) {
-      status = "warning";
-    } else if (configured) {
-      status = "warning";
-    } else {
-      status = "disabled";
+async function bringMainWindowForward() {
+  const appWindow = getCurrentWindow();
+  try {
+    await appWindow.show();
+    const minimized = await appWindow.isMinimized().catch(() => false);
+    if (minimized) {
+      await appWindow.unminimize();
     }
-
-    const label = result.channelLabels?.[id] ?? result.channelMeta?.find((item) => item.id === id)?.label ?? id;
-    const detail = result.channelDetailLabels?.[id] ?? result.channelMeta?.find((item) => item.id === id)?.detailLabel ?? "OpenClaw Gateway channel";
-    return {
-      id,
-      name: label,
-      status,
-      detail: error ? `${detail}：${error}` : detail,
-      config: `channels.${id}`,
-      activity: connected ? "运行中" : configured ? "已配置，等待连接" : "待配置",
-      healthHint,
-      packageName: id === "openclaw-weixin" ? "@tencent-weixin/openclaw-weixin" : undefined,
-      docsUrl: `https://docs.openclaw.ai/channels/${id}`,
-      accounts: accounts.map((account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-        linked: account.linked,
-        connected: account.connected,
-        running: account.running,
-        lastError: account.lastError,
-        healthState: account.healthState,
-        tokenSource: account.tokenSource,
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
-        signingSecretSource: account.signingSecretSource,
-        tokenStatus: account.tokenStatus,
-        botTokenStatus: account.botTokenStatus,
-        appTokenStatus: account.appTokenStatus,
-        signingSecretStatus: account.signingSecretStatus,
-        userTokenStatus: account.userTokenStatus,
-        statusState: account.statusState,
-      })),
-    };
-  });
-  return { connections, eventLoop: result.eventLoop };
+    await appWindow.setFocus();
+    await appWindow.requestUserAttention(UserAttentionType.Informational).catch(() => undefined);
+  } catch (error) {
+    console.warn("Failed to bring ClawKit window forward", error);
+  }
 }
 
 function App() {
-  const [bootstrapStatus, setBootstrapStatus] = useState<ClawxBootstrapStatus | null>(null);
-  const [bootstrapLoading, setBootstrapLoading] = useState(true);
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  const [bindingInProgress, setBindingInProgress] = useState(false);
+  const {
+    bootstrapStatus,
+    bootstrapLoading,
+    bootstrapError,
+    bindingInProgress,
+    bootstrapStep,
+    bootstrapConnectError,
+    setBootstrapStep,
+    setBootstrapConnectError,
+    loadBootstrapStatus,
+    bindOpenClaw,
+  } = useBootstrapFlow();
   const [agentCreateOpen, setAgentCreateOpen] = useState(false);
   const [agentCreating, setAgentCreating] = useState(false);
   const [agentCreateError, setAgentCreateError] = useState<string | null>(null);
   const [agentFilesAgentId, setAgentFilesAgentId] = useState<string | null>(null);
-  const [bootstrapStep, setBootstrapStep] = useState<"detect" | "install" | "bind" | "connect_test" | "ready">("detect");
-  const [bootstrapConnectError, setBootstrapConnectError] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<NavKey>("conversations");
-  const [conversationSearch, setConversationSearch] = useState("");
-  const [conversationRuntimeFilter, setConversationRuntimeFilter] = useState("all");
-  const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">("updated");
+  const [conversationSearch, setConversationSearch] = useState(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).search);
+  const [conversationRuntimeFilter, setConversationRuntimeFilter] = useState(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).runtimeFilter);
+  const [conversationSort, setConversationSort] = useState<"updated" | "tokens" | "status">(() => parseConversationFilters(readStorageValue(CONVERSATION_FILTERS_STORAGE_KEY)).sort);
   const [openedConversationIds, setOpenedConversationIds] = useState<Record<string, true>>({});
   const [agents, setAgents] = useState(agentsSeed);
   const [expandedConversationId, setExpandedConversationId] = useState("");
@@ -231,59 +156,112 @@ function App() {
   const [weixinStatus, setWeixinStatus] = useState<WeixinPluginStatus | null>(null);
   const [weixinBusy, setWeixinBusy] = useState(false);
   const [weixinMessage, setWeixinMessage] = useState<string | null>(null);
+  const [qqbotStatus, setQqbotStatus] = useState<QqbotPluginStatus | null>(null);
+  const [qqbotStatusBusy, setQqbotStatusBusy] = useState(false);
+  const [qqbotBusy, setQqbotBusy] = useState(false);
+  const [qqbotNotice, setQqbotNotice] = useState<{ text: string; tone: "success" | "error" } | null>(null);
+  const [feishuBusy, setFeishuBusy] = useState(false);
+  const [feishuNotice, setFeishuNotice] = useState<{ text: string; tone: "success" | "error" } | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usage, setUsage] = useState<GatewaySessionsUsageResult | null>(null);
   const [usagePageReady, setUsagePageReady] = useState(true);
-  const [modelsPageLoading, setModelsPageLoading] = useState(false);
-  const [modelActionBusy, setModelActionBusy] = useState(false);
-  const [modelsActionMessage, setModelsActionMessage] = useState<string | null>(null);
-  const [configuredModels, setConfiguredModels] = useState<GatewayModelSummary[]>([]);
-  const [allModels, setAllModels] = useState<GatewayModelSummary[]>([]);
-  const [modelAuthStatus, setModelAuthStatus] = useState<GatewayModelAuthStatusResult | null>(null);
-  const [modelsPageReady, setModelsPageReady] = useState(false);
   const [gatewaySessionsDefaults, setGatewaySessionsDefaults] = useState<GatewaySessionsListResult["defaults"] | null>(null);
-  const [openClawStatus, setOpenClawStatus] = useState<GatewayOpenClawStatusResult | null>(null);
-  const [openClawConfigDefaultModel, setOpenClawConfigDefaultModel] = useState<string | null>(null);
-  const [openClawConfigDefaultModelLoaded, setOpenClawConfigDefaultModelLoaded] = useState(false);
-  const [openClawCliStatus, setOpenClawCliStatus] = useState<OpenClawCliStatus | null>(null);
+  const [agentHistoryHasMore, setAgentHistoryHasMore] = useState<Record<string, boolean>>({});
+  const [agentHistoryLoadingId, setAgentHistoryLoadingId] = useState<string | null>(null);
   const [openClawUpdateBusy, setOpenClawUpdateBusy] = useState(false);
   const [openClawUpdateMessage, setOpenClawUpdateMessage] = useState<string | null>(null);
   const [openClawGatewayBusy, setOpenClawGatewayBusy] = useState(false);
   const [openClawGatewayMessage, setOpenClawGatewayMessage] = useState<string | null>(null);
+  const [settingsOpenClawActionBusy, setSettingsOpenClawActionBusy] = useState(false);
+  const [settingsOpenClawActionMessage, setSettingsOpenClawActionMessage] = useState<string | null>(null);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"general" | "appearance" | "notifications" | "openclaw" | undefined>(undefined);
   const [openClawInfoOpen, setOpenClawInfoOpen] = useState(false);
   const uiFrameDiagnostics = useUiFrameDiagnostics(bootstrapStep === "ready");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [conversationHistoryLimits, setConversationHistoryLimits] = useState<Record<string, number>>({});
+  const [historyLoadingConversationId, setHistoryLoadingConversationId] = useState<string | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  const currentDefaultModel = openClawStatus?.sessions?.defaults?.model ?? gatewaySessionsDefaults?.model ?? openClawConfigDefaultModel ?? null;
-  const { modelOptions, modelsLoading, setModelOptions } = useModels({
-    enabled: bootstrapStep === "ready" && openClawConfigDefaultModelLoaded,
-    defaultModel: currentDefaultModel,
-  });
   const { loadGatewaySnapshot } = useGatewaySnapshot();
   const [composerModel, setComposerModel] = useState("");
   const [composerThinking, setComposerThinking] = useState("off");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
   const [queuedMessagesByConversation, setQueuedMessagesByConversation] = useState<Record<string, QueuedComposerMessage[]>>({});
   const [sendErrorsByConversation, setSendErrorsByConversation] = useState<Record<string, string>>({});
-  const [sending, setSending] = useState(false);
+  const [, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoSendingQueuedMessageRef = useRef<string | null>(null);
   const agentsRef = useRef<Agent[]>(agentsSeed);
+  const previousConversationsRef = useRef<Map<string, Conversation>>(new Map());
+  const notifiedConversationRunKeysRef = useRef<Set<string>>(new Set());
   const activeConversationIdRef = useRef<string | null>(null);
+  const composerModelRef = useRef("");
+  const composerThinkingRef = useRef("off");
+  const sessionPatchPendingRef = useRef<Record<string, Promise<void>>>({});
   const queuedMessagesByConversationRef = useRef<Record<string, QueuedComposerMessage[]>>({});
+  const restoredLastConversationRef = useRef(false);
+  const autoStartGatewayAttemptedRef = useRef(false);
+  const suppressSessionRefreshUntilRef = useRef(0);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(false);
-  const [gatewayStatusText, setGatewayStatusText] = useState("Gateway 连接中...");
+  const [gatewayStatusText, setGatewayStatusText] = useState("Gateway connecting...");
   const [gatewayUptimeBasisMs, setGatewayUptimeBasisMs] = useState<number | null>(null);
   const [gatewayUptimeRecordedAtMs, setGatewayUptimeRecordedAtMs] = useState<number | null>(null);
-  const [gatewayUpdateRestartSentinel, setGatewayUpdateRestartSentinel] = useState<unknown>(null);
+  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => (
+    typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark"
+  ));
+  const {
+    settings: clawKitSettings,
+    settingsLoading: clawKitSettingsLoading,
+    settingsError: clawKitSettingsError,
+    patchSettings,
+  } = useClawKitSettings({ enabled: !bootstrapLoading });
+  const maybeAutoStartOpenClawGateway = useCallback(async () => {
+    if (!clawKitSettings.openclaw.autoStartGateway || autoStartGatewayAttemptedRef.current) {
+      return;
+    }
+    autoStartGatewayAttemptedRef.current = true;
+    try {
+      await invoke("openclaw_gateway_start");
+    } catch (error) {
+      console.warn("Failed to auto-start OpenClaw Gateway", error);
+    }
+  }, [clawKitSettings.openclaw.autoStartGateway]);
+  const locale = useMemo(
+    () => resolveLocale(clawKitSettings.general.language, typeof navigator !== "undefined" ? navigator.language : null),
+    [clawKitSettings.general.language],
+  );
+  const t = useMemo(() => createTranslator(locale), [locale]);
+  const lazyPageFallback = <section className="workspace-area"><p className="empty-state">{t("common.loading")}</p></section>;
+  const localizedStatusLabel = useMemo(
+    () => ({
+      working: tr(t, "conversation.status.working", "Running"),
+      completed: tr(t, "conversation.status.completed", "Completed"),
+      failed: tr(t, "conversation.status.failed", "Failed"),
+      stopped: tr(t, "conversation.status.stopped", "Stopped"),
+      idle: tr(t, "conversation.status.idle", "Idle"),
+    }),
+    [t],
+  );
+  const localizedConnectionLabel = useMemo(
+    () => ({
+      connected: tr(t, "common.connected", "Connected"),
+      degraded: tr(t, "connections.degraded", "Running (degraded)"),
+      warning: tr(t, "connections.warning", "Needs attention"),
+      disabled: tr(t, "connections.notEnabled", "Not enabled"),
+    }),
+    [t],
+  );
+  const clawKitSelfUpdate = useClawKitSelfUpdate(
+    bootstrapStep === "ready" && !clawKitSettingsLoading && clawKitSettings.general.autoCheckUpdates,
+  );
   const [gatewayRuntimeTick, setGatewayRuntimeTick] = useState(0);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [userExpanded, setUserExpanded] = useState(false);
   const [workspaceAnnouncement, setWorkspaceAnnouncement] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null);
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+  const petContextSnapshotRef = useRef("");
   const workspaceAnnouncementTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const announceWorkspace = useCallback((message: string) => {
@@ -318,7 +296,7 @@ function App() {
           await getCurrentWindow().setIcon(icon);
         }
       } catch (error) {
-        console.warn("Failed to apply Clawx window icon", error);
+        console.warn("Failed to apply ClawKit window icon", error);
       }
     }
 
@@ -330,47 +308,93 @@ function App() {
   }, []);
 
   useEffect(() => {
+    void bringMainWindowForward();
+  }, []);
+
+  useEffect(() => {
+    if (clawKitSettingsError) {
+      console.warn("Failed to load ClawKit settings", clawKitSettingsError);
+    }
+  }, [clawKitSettingsError]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return undefined;
+    const query = window.matchMedia("(prefers-color-scheme: light)");
+    const updateTheme = () => setSystemTheme(query.matches ? "light" : "dark");
+    updateTheme();
+    query.addEventListener("change", updateTheme);
+    return () => query.removeEventListener("change", updateTheme);
+  }, []);
+
+  useEffect(() => {
     queuedMessagesByConversationRef.current = queuedMessagesByConversation;
   }, [queuedMessagesByConversation]);
 
   useEffect(() => {
+    const previousConversations = previousConversationsRef.current;
+    const nextConversations = new Map<string, Conversation>();
+    const windowFocused = typeof document !== "undefined" ? document.hasFocus() : false;
+
+    for (const agent of agents) {
+      for (const conversation of agent.conversations) {
+        nextConversations.set(conversation.id, conversation);
+        const notification = buildConversationCompletionNotification({
+          previous: previousConversations.get(conversation.id) ?? null,
+          current: conversation,
+          settings: clawKitSettings.notifications,
+          windowFocused,
+          seenKeys: notifiedConversationRunKeysRef.current,
+          copy: {
+            genericFinished: t("notification.genericFinished"),
+            completed: t("notification.completed"),
+            failed: t("notification.failed"),
+          },
+        });
+        if (notification) {
+          void sendNativeNotification({
+            key: notification.key,
+            title: notification.title,
+            body: notification.body,
+            conversationId: conversation.id,
+          });
+        }
+      }
+    }
+
+    previousConversationsRef.current = nextConversations;
     agentsRef.current = agents;
-  }, [agents]);
+  }, [agents, clawKitSettings.notifications, t]);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  const loadBootstrapStatus = useCallback(async () => {
-    setBootstrapLoading(true);
-    setBootstrapError(null);
-    try {
-      const status = await invoke<ClawxBootstrapStatus>("get_clawx_bootstrap_status");
-      setBootstrapStatus(status);
-      setBootstrapStep(!status.openclawInstalled ? "install" : status.bindingConfigured ? "ready" : "bind");
-    } catch (error) {
-      console.error("Failed to load clawx bootstrap status", error);
-      setBootstrapError(error instanceof Error ? error.message : "读取 OpenClaw 状态失败");
-    } finally {
-      setBootstrapLoading(false);
+  useEffect(() => {
+    if (clawKitSettingsLoading || !clawKitSettings.general.rememberConversationFilters) {
+      return;
     }
-  }, []);
+    writeStorageValue(
+      CONVERSATION_FILTERS_STORAGE_KEY,
+      serializeConversationFilters({
+        search: conversationSearch,
+        runtimeFilter: conversationRuntimeFilter,
+        sort: conversationSort,
+      }),
+    );
+  }, [
+    clawKitSettings.general.rememberConversationFilters,
+    clawKitSettingsLoading,
+    conversationRuntimeFilter,
+    conversationSearch,
+    conversationSort,
+  ]);
 
-  const bindOpenClaw = useCallback(async () => {
-    setBindingInProgress(true);
-    setBootstrapError(null);
-    setBootstrapConnectError(null);
-    try {
-      const status = await invoke<ClawxBootstrapStatus>("ensure_clawx_binding");
-      setBootstrapStatus(status);
-      setBootstrapStep(status.bindingConfigured ? "connect_test" : "bind");
-    } catch (error) {
-      console.error("Failed to bind OpenClaw config", error);
-      setBootstrapError(error instanceof Error ? error.message : "写入 OpenClaw 配置失败");
-    } finally {
-      setBindingInProgress(false);
+  useEffect(() => {
+    if (clawKitSettingsLoading || !clawKitSettings.general.restoreLastConversation || !activeConversationId) {
+      return;
     }
-  }, []);
+    writeStorageValue(LAST_CONVERSATION_STORAGE_KEY, activeConversationId);
+  }, [activeConversationId, clawKitSettings.general.restoreLastConversation, clawKitSettingsLoading]);
 
   const refreshWeixinPluginStatus = useCallback(async () => {
     setWeixinBusy(true);
@@ -379,9 +403,25 @@ function App() {
       setWeixinStatus(status);
     } catch (error) {
       console.warn("Failed to refresh WeChat plugin status", error);
-      setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件状态检测失败");
+      setWeixinMessage(error instanceof Error ? error.message : t("app.wechatPluginStatusFailed"));
     } finally {
       setWeixinBusy(false);
+    }
+  }, []);
+
+  const refreshQqbotPluginStatus = useCallback(async () => {
+    setQqbotStatusBusy(true);
+    try {
+      const status = await invoke<QqbotPluginStatus>("qqbot_plugin_status");
+      setQqbotStatus(status);
+    } catch (error) {
+      console.warn("Failed to refresh QQ Bot plugin status", error);
+      setQqbotNotice({
+        text: error instanceof Error ? error.message : t("app.qqbotPluginStatusFailed"),
+        tone: "error",
+      });
+    } finally {
+      setQqbotStatusBusy(false);
     }
   }, []);
 
@@ -430,7 +470,7 @@ function App() {
       await refreshGatewayConnections();
     } catch (error) {
       console.error("Failed to enable WeChat plugin", error);
-      setWeixinMessage(error instanceof Error ? error.message : "WeChat 插件启用失败");
+      setWeixinMessage(error instanceof Error ? error.message : t("app.wechatPluginEnableFailed"));
     } finally {
       setWeixinBusy(false);
     }
@@ -450,6 +490,7 @@ function App() {
       void (async () => {
         setBootstrapConnectError(null);
         try {
+          await maybeAutoStartOpenClawGateway();
           await invoke("gateway_connect");
           if (!cancelled) {
             setBootstrapStep("ready");
@@ -457,7 +498,7 @@ function App() {
         } catch (error) {
           console.error("Gateway connect test failed", error);
           if (!cancelled) {
-            setBootstrapConnectError(error instanceof Error ? error.message : "Gateway 连接测试失败");
+            setBootstrapConnectError(error instanceof Error ? error.message : t("app.gatewayConnectionTestFailed"));
           }
         }
       })();
@@ -473,11 +514,14 @@ function App() {
     let cancelled = false;
     let eventCleanup: (() => void) | undefined;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let refreshInFlight = false;
+    let refreshPending = false;
 
     // Ensure gateway connection on app startup (binding may already be configured).
     // gateway_connect returns "already connected" if previously established, so this is safe.
     void (async () => {
       try {
+        await maybeAutoStartOpenClawGateway();
         await invoke("gateway_connect");
       } catch {
         // Ignore errors here; connection status will be reported by refreshGatewayStatus.
@@ -499,15 +543,45 @@ function App() {
           }
           snapshot = gatewayLoad.snapshot;
           setGatewaySessionsDefaults(gatewayLoad.sessionsDefaults ?? null);
+          setAgentHistoryHasMore(
+            gatewayLoad.sessionsHasMore
+              ? Object.fromEntries(gatewayLoad.snapshot.agents.map((agent) => [agent.id, true]))
+              : {},
+          );
         } catch (error) {
           console.warn("Gateway snapshot unavailable, falling back to local OpenClaw snapshot", error);
           if (!cancelled) {
             setGatewaySessionsDefaults(null);
+            setAgentHistoryHasMore({});
           }
         }
         setAgents(buildAgentsFromSnapshot(snapshot, currentAgentSnapshots, { preserveExistingConversations: true }));
       } catch (error) {
         console.error("Failed to load OpenClaw snapshot", error);
+      }
+    };
+
+    const runSessionsChangedRefresh = async () => {
+      if (Date.now() < suppressSessionRefreshUntilRef.current) {
+        return;
+      }
+      if (refreshInFlight) {
+        refreshPending = true;
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        do {
+          refreshPending = false;
+          if (cancelled) return;
+          if (hasActiveAgentRun(agentsRef.current)) {
+            await loadSnapshotLightMergeSessionsList();
+          } else {
+            await loadSnapshot();
+          }
+        } while (refreshPending && !cancelled);
+      } finally {
+        refreshInFlight = false;
       }
     };
 
@@ -518,16 +592,19 @@ function App() {
     const loadSnapshotLightMergeSessionsList = async () => {
       try {
         const currentAgentSnapshots = agentsRef.current;
-        await invoke("gateway_connect");
-        const sessionsResult = await invoke<GatewaySessionsListResult>("gateway_sessions_list", {
-          params: {
-            limit: 100,
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-            includeGlobal: false,
-            includeUnknown: false,
-          },
-        });
+        await measureAsync("sessions.changed.gateway_connect", () => invoke("gateway_connect"), 300);
+        const sessionsResult = await measureAsync("sessions.changed.sessions_list", () =>
+          invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+            params: {
+              limit: 50,
+              configuredAgentsOnly: true,
+              includeDerivedTitles: false,
+              includeLastMessage: false,
+              includeGlobal: false,
+              includeUnknown: false,
+            },
+          }),
+        );
         if (cancelled) {
           return;
         }
@@ -545,7 +622,7 @@ function App() {
         if (aid) transcriptSourceOfTruthIds.add(aid);
         for (const agent of currentAgentSnapshots) {
           for (const conversation of agent.conversations) {
-            if (conversation.runtime?.activeRunId) transcriptSourceOfTruthIds.add(conversation.id);
+            if (isConversationRunning(conversation)) transcriptSourceOfTruthIds.add(conversation.id);
           }
         }
         setAgents(mergeGatewaySessionRowsIntoAgents(currentAgentSnapshots, rows, { transcriptSourceOfTruthIds }));
@@ -564,16 +641,12 @@ function App() {
       try {
         await invoke("gateway_sessions_subscribe");
         const { listen } = await import("@tauri-apps/api/event");
-        const unlisten = await listen("clawx://sessions-changed", () => {
+        const unlisten = await listen("clawkit://sessions-changed", () => {
           if (refreshTimer) {
             clearTimeout(refreshTimer);
           }
           refreshTimer = setTimeout(() => {
-            if (hasActiveAgentRun(agentsRef.current)) {
-              void loadSnapshotLightMergeSessionsList();
-            } else {
-              void loadSnapshot();
-            }
+            void runSessionsChangedRefresh();
           }, 250);
         });
         eventCleanup = () => {
@@ -595,7 +668,13 @@ function App() {
       }
       eventCleanup?.();
     };
-  }, [bootstrapStatus?.bindingConfigured, bootstrapStatus?.openclawInstalled, bootstrapStep, loadGatewaySnapshot]);
+  }, [
+    bootstrapStatus?.bindingConfigured,
+    bootstrapStatus?.openclawInstalled,
+    bootstrapStep,
+    loadGatewaySnapshot,
+    maybeAutoStartOpenClawGateway,
+  ]);
 
   useEffect(() => {
     if (!bootstrapStatus?.openclawInstalled || !bootstrapStatus.bindingConfigured || bootstrapStep !== "ready") {
@@ -648,6 +727,7 @@ function App() {
                       ...conversation.runtime,
                       activeRunId: conversation.runtime?.activeRunId ?? `snapshot-tool-${payload.session.key}`,
                       activeStartedAt: conversation.runtime?.activeStartedAt ?? nextUpdatedAt ?? Date.now(),
+                      lastRunStartedAt: conversation.runtime?.activeStartedAt ?? conversation.runtime?.lastRunStartedAt ?? nextUpdatedAt ?? Date.now(),
                       lastEventAt: nextUpdatedAt,
                     }
                   : isTerminalSnapshot
@@ -655,6 +735,7 @@ function App() {
                         ...conversation.runtime,
                         activeRunId: undefined,
                         activeStartedAt: undefined,
+                        lastRunStartedAt: conversation.runtime?.activeStartedAt ?? conversation.runtime?.lastRunStartedAt,
                         lastEventAt: nextUpdatedAt,
                         lastTerminalAt: nextUpdatedAt,
                         lastTerminalReason: terminalReason,
@@ -662,15 +743,17 @@ function App() {
                     : isActiveSnapshot && !isFreshActiveSnapshot
                       ? {
                           ...conversation.runtime,
-                          activeRunId: undefined,
-                          activeStartedAt: undefined,
-                          lastEventAt: nextUpdatedAt,
-                          lastTerminalAt: conversation.runtime?.lastTerminalAt ?? nextUpdatedAt,
-                          lastTerminalReason: conversation.runtime?.lastTerminalReason ?? "interrupted",
+                      activeRunId: undefined,
+                      activeStartedAt: undefined,
+                      lastRunStartedAt: conversation.runtime?.activeStartedAt ?? conversation.runtime?.lastRunStartedAt,
+                      lastEventAt: nextUpdatedAt,
+                      lastTerminalAt: conversation.runtime?.lastTerminalAt ?? nextUpdatedAt,
+                      lastTerminalReason: conversation.runtime?.lastTerminalReason ?? "interrupted",
                         }
                       : conversation.runtime ?? {
                       activeRunId: undefined,
                       activeStartedAt: undefined,
+                      lastRunStartedAt: undefined,
                       lastEventAt: nextUpdatedAt,
                       lastTerminalAt: nextLastRole === "assistant" ? nextUpdatedAt : undefined,
                       lastTerminalReason: nextLastRole === "assistant" ? "completed" : undefined,
@@ -737,16 +820,11 @@ function App() {
     return ms == null ? null : formatApproxDurationMs(ms);
   }, [gatewayRuntimeTick, gatewayUptimeBasisMs, gatewayUptimeRecordedAtMs]);
 
-  const gatewayRestartSentinelLine = useMemo(
-    () => describeUpdateRestartSentinel(gatewayUpdateRestartSentinel),
-    [gatewayUpdateRestartSentinel],
-  );
-
   const refreshGatewayStatus = useCallback(async () => {
     try {
       const status = await invoke<GatewayStatus>("gateway_status");
       setGatewayConnected(status.connected);
-      setGatewayStatusText(status.statusText || (status.connected ? "Gateway 已连接" : "Gateway 未连接"));
+      setGatewayStatusText(status.statusText || (status.connected ? t("app.gatewayConnected") : t("app.gatewayDisconnected")));
       setGatewayError(status.error ?? null);
       setGatewayUptimeBasisMs(status.gatewayUptimeBasisMs ?? null);
       setGatewayUptimeRecordedAtMs(status.gatewayUptimeRecordedAtMs ?? null);
@@ -762,6 +840,7 @@ function App() {
                 ...currentConversation.runtime,
                 activeRunId: undefined,
                 activeStartedAt: undefined,
+                lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
                 lastEventAt: disconnectedAt,
                 lastTerminalAt: disconnectedAt,
                 lastTerminalReason: "interrupted",
@@ -774,7 +853,7 @@ function App() {
       const message = error instanceof Error ? error.message : String(error);
       const disconnectedAt = Date.now();
       setGatewayConnected(false);
-      setGatewayStatusText(`Gateway 状态获取失败: ${message}`);
+      setGatewayStatusText(`${t("app.gatewayStatusFetchFailed")}: ${message}`);
       setGatewayError(message);
       setGatewayUptimeBasisMs(null);
       setGatewayUptimeRecordedAtMs(null);
@@ -788,6 +867,7 @@ function App() {
               ...currentConversation.runtime,
               activeRunId: undefined,
               activeStartedAt: undefined,
+              lastRunStartedAt: currentConversation.runtime?.activeStartedAt ?? currentConversation.runtime?.lastRunStartedAt,
               lastEventAt: disconnectedAt,
               lastTerminalAt: disconnectedAt,
               lastTerminalReason: "interrupted",
@@ -798,71 +878,52 @@ function App() {
     }
   }, []);
 
-  const refreshOpenClawDefaultModel = useCallback(async () => {
-    try {
-      await invoke("gateway_connect");
-      const configResult = await invoke<GatewayConfigGetResult>("gateway_config_get");
-      setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult.config));
-    } catch (error) {
-      console.warn("Failed to load OpenClaw default model", error);
-    } finally {
-      setOpenClawConfigDefaultModelLoaded(true);
-    }
-  }, []);
-
-  const refreshOpenClawStatus = useCallback(async () => {
-    try {
-      await invoke("gateway_connect");
-      const [status, updateStatus, configResult] = await Promise.all([
-        invoke<GatewayOpenClawStatusResult>("gateway_openclaw_status"),
-        invoke<GatewayUpdateStatusResult>("gateway_update_status").catch(() => null),
-        invoke<GatewayConfigGetResult>("gateway_config_get").catch(() => null),
-      ]);
-      setOpenClawStatus(status);
-      setOpenClawConfigDefaultModel(resolveConfigDefaultModel(configResult?.config));
-      setOpenClawConfigDefaultModelLoaded(true);
-      setGatewayUpdateRestartSentinel(updateStatus?.sentinel ?? null);
-      await refreshGatewayStatus();
-    } catch (error) {
-      console.warn("Failed to load OpenClaw runtime status", error);
-      setGatewayUpdateRestartSentinel(null);
-      await refreshGatewayStatus();
-    }
-  }, [refreshGatewayStatus]);
-
-  const refreshModelsPage = useCallback(async (options?: { refreshAuth?: boolean }) => {
-    setModelsPageLoading(true);
-    try {
-      await invoke("gateway_connect");
-      const [configuredResult, authResult] = await Promise.all([
-        invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "configured" } }),
-        invoke<GatewayModelAuthStatusResult>("gateway_models_auth_status", { params: { refresh: Boolean(options?.refreshAuth) } }),
-      ]);
-      startTransition(() => {
-        setConfiguredModels(configuredResult.models ?? []);
-        setModelAuthStatus(authResult);
-        setModelOptions(buildModelOptions(configuredResult, currentDefaultModel));
-      });
-      setModelsPageLoading(false);
-      void (async () => {
-        try {
-          const allResult = await invoke<GatewayModelsResult>("gateway_models_list", { params: { view: "all" } });
-          startTransition(() => setAllModels(allResult.models ?? []));
-        } catch (error) {
-          console.warn("Failed to refresh full model catalog", error);
-        }
-      })();
-    } catch (error) {
-      console.warn("Failed to refresh models page", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "模型状态刷新失败");
-      setModelsPageLoading(false);
-    }
-  }, [currentDefaultModel, setModelOptions]);
+  const {
+    openClawStatus,
+    openClawConfigDefaultModel,
+    openClawConfigDefaultModelLoaded,
+    openClawCliStatus,
+    gatewayUpdateRestartSentinel,
+    setOpenClawStatus,
+    setOpenClawConfigDefaultModel,
+    setOpenClawConfigDefaultModelLoaded,
+    setGatewayUpdateRestartSentinel,
+    refreshOpenClawDefaultModel,
+    refreshOpenClawStatus,
+    refreshOpenClawCliStatus,
+  } = useOpenClawRuntime({ refreshGatewayStatus });
+  const gatewayRestartSentinelLine = useMemo(
+    () => describeUpdateRestartSentinel(gatewayUpdateRestartSentinel),
+    [gatewayUpdateRestartSentinel],
+  );
+  const currentDefaultModel = openClawStatus?.sessions?.defaults?.model ?? gatewaySessionsDefaults?.model ?? openClawConfigDefaultModel ?? null;
+  const { modelOptions, modelsLoading, setModelOptions } = useModels({
+    enabled: bootstrapStep === "ready" && openClawConfigDefaultModelLoaded,
+    defaultModel: currentDefaultModel,
+  });
+  const {
+    modelsPageLoading,
+    modelActionBusy,
+    modelsActionMessage,
+    configuredModels,
+    allModels,
+    modelAuthStatus,
+    modelsPageReady,
+    setModelActionBusy,
+    setModelsActionMessage,
+    setModelsPageLoading,
+    setModelsPageReady,
+    refreshModelsPage,
+  } = useModelsPageData({
+    currentDefaultModel,
+    setModelOptions,
+    refreshFailedMessage: t("app.modelStatusRefreshFailed"),
+  });
 
   const patchOpenClawConfig = useCallback(async (patch: unknown) => {
     const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
     if (!current.hash) {
-      throw new Error("OpenClaw 配置 hash 不可用，请刷新后重试");
+      throw new Error(t("app.openclawConfigHashMissing"));
     }
     await invoke<GatewayConfigPatchResult>("gateway_config_patch", {
       params: {
@@ -873,133 +934,236 @@ function App() {
     });
   }, []);
 
-  const handleSetDefaultModel = useCallback(async (modelRef: string) => {
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      await patchOpenClawConfig({ agents: { defaults: { model: { primary: modelRef }, models: { [modelRef]: {} } } } });
-      setModelsActionMessage(`已设为默认模型：${modelRef}`);
-      setComposerModel(modelRef);
-      setOpenClawConfigDefaultModel(modelRef);
-      setOpenClawConfigDefaultModelLoaded(true);
-      setOpenClawStatus((current) => current ? {
-        ...current,
-        sessions: {
-          ...current.sessions,
-          defaults: {
-            ...current.sessions?.defaults,
-            model: modelRef,
-          },
-        },
-      } : current);
-      void refreshOpenClawStatus();
-      void refreshModelsPage({ refreshAuth: true });
-    } catch (error) {
-      console.error("Failed to set default model", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "设置默认模型失败");
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [patchOpenClawConfig, refreshModelsPage, refreshOpenClawStatus]);
+  const {
+    handleSetDefaultModel,
+    handleModelAuthProvider,
+    handleSaveProviderConfig,
+    handleSaveModelConfig,
+  } = useModelManagementActions({
+    t,
+    patchOpenClawConfig,
+    refreshModelsPage,
+    refreshOpenClawStatus,
+    setModelActionBusy,
+    setModelsActionMessage,
+    setComposerModel,
+    setOpenClawConfigDefaultModel,
+    setOpenClawConfigDefaultModelLoaded,
+    setOpenClawStatus,
+  });
 
-  const handleModelAuthProvider = useCallback(async (provider: string, setDefault: boolean) => {
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      const message = await invoke<string>("open_model_auth_terminal", { provider, setDefault });
-      setModelsActionMessage(message);
-      window.setTimeout(() => void refreshModelsPage({ refreshAuth: true }), 1500);
-    } catch (error) {
-      console.error("Failed to open model auth terminal", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "打开模型授权失败");
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [refreshModelsPage]);
-
-  const handleSaveProviderConfig = useCallback(async (draft: { provider: string; apiKey: string; baseUrl: string }) => {
-    const provider = draft.provider.trim();
-    if (!provider) {
-      setModelsActionMessage("Provider 不能为空");
-      return;
-    }
-    const providerConfig: Record<string, unknown> = {};
-    if (draft.apiKey.trim()) providerConfig.apiKey = draft.apiKey.trim();
-    if (draft.baseUrl.trim()) providerConfig.baseUrl = draft.baseUrl.trim();
-    if (Object.keys(providerConfig).length === 0) {
-      setModelsActionMessage("请填写 API Key 或 Base URL");
-      return;
-    }
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      await patchOpenClawConfig({ models: { providers: { [provider]: providerConfig } } });
-      setModelsActionMessage(`已保存 Provider：${provider}`);
-      void refreshModelsPage({ refreshAuth: true });
-    } catch (error) {
-      console.error("Failed to save provider config", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "保存 Provider 配置失败");
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [patchOpenClawConfig, refreshModelsPage]);
-
-  const handleSaveModelConfig = useCallback(async (draft: { provider: string; modelId: string; alias: string; setDefault: boolean }) => {
-    const provider = draft.provider.trim();
-    const modelId = draft.modelId.trim();
-    if (!provider || !modelId) {
-      setModelsActionMessage("Provider 和模型名称不能为空");
-      return;
-    }
-    const modelRef = `${provider}/${modelId}`;
-    const patch: Record<string, unknown> = {
-      models: { providers: { [provider]: { models: [{ id: modelId, ...(draft.alias.trim() ? { name: draft.alias.trim() } : {}) }] } } },
-      agents: {
-        defaults: {
-          models: { [modelRef]: draft.alias.trim() ? { alias: draft.alias.trim() } : {} },
-          ...(draft.setDefault ? { model: { primary: modelRef } } : {}),
-        },
-      },
-    };
-
-    setModelActionBusy(true);
-    setModelsActionMessage(null);
-    try {
-      await patchOpenClawConfig(patch);
-      if (draft.setDefault) {
-        setComposerModel(modelRef);
-        setOpenClawConfigDefaultModel(modelRef);
-        setOpenClawConfigDefaultModelLoaded(true);
-        setOpenClawStatus((current) => current ? {
-          ...current,
-          sessions: {
-            ...current.sessions,
-            defaults: {
-              ...current.sessions?.defaults,
-              model: modelRef,
-            },
-          },
-        } : current);
-      }
-      setModelsActionMessage(draft.setDefault ? `已保存并设为默认：${modelRef}` : `已保存模型：${modelRef}`);
-      void refreshOpenClawStatus();
-      void refreshModelsPage({ refreshAuth: true });
-    } catch (error) {
-      console.error("Failed to save provider model config", error);
-      setModelsActionMessage(error instanceof Error ? error.message : "保存模型配置失败");
-    } finally {
-      setModelActionBusy(false);
-    }
-  }, [patchOpenClawConfig, refreshModelsPage, refreshOpenClawStatus]);
-
-  const refreshOpenClawCliStatus = useCallback(async () => {
-    try {
-      const status = await invoke<OpenClawCliStatus>("openclaw_cli_status");
-      setOpenClawCliStatus(status);
-    } catch (error) {
-      console.warn("Failed to load OpenClaw CLI version status", error);
-    }
+  const loadQqbotEditorForm = useCallback(async (): Promise<QqbotEditorForm> => {
+    await invoke("gateway_connect");
+    const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
+    return readQqbotEditorFormFromConfig(current.config);
   }, []);
+
+  const saveQqbotSettings = useCallback(
+    async (form: QqbotEditorForm) => {
+      const validationMessage = validateQqbotEditorForm(form);
+      if (validationMessage) {
+        setQqbotNotice({ text: validationMessage, tone: "error" });
+        return;
+      }
+      setQqbotBusy(true);
+      setQqbotNotice(null);
+      try {
+        await invoke("gateway_connect");
+        await patchOpenClawConfig(buildQqbotSettingsPatch(form));
+        setQqbotNotice({
+          text: t("app.qqbotConfigSavedRestartGateway"),
+          tone: "success",
+        });
+        void refreshGatewayConnections();
+      } catch (error) {
+        setQqbotNotice({
+          text: error instanceof Error ? error.message : t("app.qqbotConfigSaveFailed"),
+          tone: "error",
+        });
+      } finally {
+        setQqbotBusy(false);
+      }
+    },
+    [patchOpenClawConfig, refreshGatewayConnections],
+  );
+
+  const runQqbotPluginInstall = useCallback(async () => {
+    setQqbotStatusBusy(true);
+    try {
+      const message = await invoke<string>("open_qqbot_plugin_install_terminal");
+      setQqbotNotice({ text: message, tone: "success" });
+      await refreshQqbotPluginStatus();
+      void refreshGatewayConnections();
+    } catch (error) {
+      setQqbotNotice({
+        text: error instanceof Error ? error.message : t("app.qqbotInstallTerminalFailed"),
+        tone: "error",
+      });
+    } finally {
+      setQqbotStatusBusy(false);
+    }
+  }, [refreshGatewayConnections, refreshQqbotPluginStatus]);
+
+  const loadFeishuEditorForm = useCallback(async (): Promise<FeishuEditorForm> => {
+    await invoke("gateway_connect");
+    const current = await invoke<GatewayConfigGetResult>("gateway_config_get");
+    return readFeishuEditorFormFromConfig(current.config);
+  }, []);
+
+  const saveFeishuSettings = useCallback(
+    async (form: FeishuEditorForm) => {
+      const validationMessage = validateFeishuEditorForm(form);
+      if (validationMessage) {
+        setFeishuNotice({ text: validationMessage, tone: "error" });
+        return;
+      }
+      setFeishuBusy(true);
+      setFeishuNotice(null);
+      try {
+        await invoke("gateway_connect");
+        await patchOpenClawConfig(buildFeishuSettingsPatch(form));
+        setFeishuNotice({
+          text: "已写入 Feishu 配置。请重启 Gateway 使配置生效。",
+          tone: "success",
+        });
+        void refreshGatewayConnections();
+      } catch (error) {
+        setFeishuNotice({
+          text: error instanceof Error ? error.message : "保存 Feishu 配置失败",
+          tone: "error",
+        });
+      } finally {
+        setFeishuBusy(false);
+      }
+    },
+    [patchOpenClawConfig, refreshGatewayConnections],
+  );
+
+  const mergeSessionsListFromGateway = useCallback(async () => {
+    await measureAsync("sessions.merge.gateway_connect", () => invoke("gateway_connect"), 300);
+    const sessionsResult = await measureAsync("sessions.merge.sessions_list", () =>
+      invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+        params: {
+          limit: 50,
+          configuredAgentsOnly: true,
+          includeDerivedTitles: false,
+          includeLastMessage: false,
+          includeGlobal: false,
+          includeUnknown: false,
+        },
+      }),
+    );
+    const rows = sessionsResult.sessions ?? [];
+    const transcriptSourceOfTruthIds = new Set<string>();
+    const aid = activeConversationIdRef.current;
+    if (aid) transcriptSourceOfTruthIds.add(aid);
+    for (const agent of agentsRef.current) {
+      for (const conversation of agent.conversations) {
+        if (isConversationRunning(conversation)) transcriptSourceOfTruthIds.add(conversation.id);
+      }
+    }
+    setAgents(mergeGatewaySessionRowsIntoAgents(agentsRef.current, rows, { transcriptSourceOfTruthIds }));
+    setGatewaySessionsDefaults(sessionsResult.defaults ?? null);
+  }, []);
+
+  const handleLoadAgentHistory = useCallback(async (agentId: string) => {
+    if (agentHistoryLoadingId) return;
+    setAgentHistoryLoadingId(agentId);
+    try {
+      const currentAgents = agentsRef.current;
+      const currentAgent = currentAgents.find((agent) => agent.id === agentId);
+      const offset = Math.max(
+        0,
+        currentAgent?.conversations.filter((conversation) => !conversation.isDraft).length ?? 0,
+      );
+      await measureAsync("agent_history.gateway_connect", () => invoke("gateway_connect"), 300);
+      const sessionsResult = await measureAsync("agent_history.sessions_list", () =>
+        invoke<GatewaySessionsListResult>("gateway_sessions_list", {
+          params: {
+            agentId,
+            limit: 50,
+            offset,
+            configuredAgentsOnly: true,
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+            includeGlobal: false,
+            includeUnknown: false,
+          },
+        }),
+      );
+      const snapshot = buildSnapshotFromGateway({
+        agentsResult: null,
+        sessionsResult,
+        previewsResult: null,
+        fallbackSnapshot: {
+          agents: currentAgents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            workspace: agent.conversations[0]?.workspace,
+            model: agent.model,
+            agent_dir: agent.configPath,
+          })),
+          sessions: [],
+          connections: [],
+          skills: [],
+        },
+      });
+      const nextAgents = buildAgentsFromSnapshot(snapshot, currentAgents, {
+        preserveExistingConversations: true,
+      }).map((agent) => {
+        if (agent.id !== agentId) return agent;
+        return {
+          ...agent,
+          conversations: [...agent.conversations].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+        };
+      });
+      setAgents(nextAgents);
+      setGatewaySessionsDefaults(sessionsResult.defaults ?? null);
+      setAgentHistoryHasMore((current) => ({
+        ...current,
+        [agentId]: sessionsResult.hasMore === true,
+      }));
+    } catch (error) {
+      console.warn("Failed to load agent history", error);
+      announceWorkspace(t("conversation.loadHistoryFailed"));
+    } finally {
+      setAgentHistoryLoadingId(null);
+    }
+  }, [agentHistoryLoadingId, announceWorkspace, t]);
+
+  const handleResetComposerThinkingDefault = useCallback(async () => {
+    const key = activeConversationId;
+    if (!key || key.startsWith("draft-")) return;
+    setSessionActionError(null);
+    try {
+      await invoke("gateway_connect");
+      await invoke("gateway_sessions_patch", {
+        params: { sessionKey: key, thinkingLevel: null },
+      });
+      await mergeSessionsListFromGateway();
+      announceWorkspace(t("app.restoredThinkingDefault"));
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setSessionActionError(`${t("app.restoreThinkingDefaultFailed")}: ${messageText}`);
+    }
+  }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
+
+  const handleResetComposerFastDefault = useCallback(async () => {
+    const key = activeConversationId;
+    if (!key || key.startsWith("draft-")) return;
+    setSessionActionError(null);
+    try {
+      await invoke("gateway_connect");
+      await invoke("gateway_sessions_patch", {
+        params: { sessionKey: key, fastMode: null },
+      });
+      await mergeSessionsListFromGateway();
+      announceWorkspace(t("app.restoredFastDefault"));
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setSessionActionError(`${t("app.restoreFastDefaultFailed")}: ${messageText}`);
+    }
+  }, [activeConversationId, announceWorkspace, mergeSessionsListFromGateway]);
 
   const runOpenClawUpdate = useCallback(async () => {
     setOpenClawUpdateBusy(true);
@@ -1013,7 +1177,7 @@ function App() {
       }, 1500);
     } catch (error) {
       console.error("Failed to open OpenClaw update terminal", error);
-      setOpenClawUpdateMessage(error instanceof Error ? error.message : "OpenClaw 更新失败");
+      setOpenClawUpdateMessage(error instanceof Error ? error.message : t("app.openclawUpdateFailed"));
     } finally {
       setOpenClawUpdateBusy(false);
     }
@@ -1026,10 +1190,10 @@ function App() {
     setOpenClawGatewayMessage(null);
     try {
       const message = await invoke<string>(shouldStop ? "openclaw_gateway_stop" : "openclaw_gateway_start");
-      setOpenClawGatewayMessage(message || (shouldStop ? "OpenClaw Gateway 已停止。" : "OpenClaw Gateway 已启动。"));
+      setOpenClawGatewayMessage(message || (shouldStop ? t("app.openclawGatewayStopped") : t("app.openclawGatewayStarted")));
       if (shouldStop) {
         setGatewayConnected(false);
-        setGatewayStatusText("OpenClaw Gateway 已停止");
+        setGatewayStatusText(t("app.openclawGatewayStoppedShort"));
         setOpenClawStatus(null);
         setGatewayUpdateRestartSentinel(null);
         setGatewayUptimeBasisMs(null);
@@ -1038,7 +1202,7 @@ function App() {
       window.setTimeout(() => void refreshOpenClawStatus(), shouldStop ? 900 : 1200);
     } catch (error) {
       console.error(`Failed to ${shouldStop ? "stop" : "start"} OpenClaw Gateway`, error);
-      setOpenClawGatewayMessage(error instanceof Error ? error.message : (shouldStop ? "停止 OpenClaw 失败" : "启动 OpenClaw 失败"));
+      setOpenClawGatewayMessage(error instanceof Error ? error.message : (shouldStop ? t("app.stopOpenClawFailed") : t("app.startOpenClawFailed")));
       void refreshOpenClawStatus();
     } finally {
       setOpenClawGatewayBusy(false);
@@ -1053,6 +1217,53 @@ function App() {
       console.error("Failed to open OpenClaw dashboard", error);
     }
   };
+
+  const runSettingsOpenClawAction = useCallback(async (action: () => Promise<string | void>) => {
+    setSettingsOpenClawActionBusy(true);
+    setSettingsOpenClawActionMessage(null);
+    try {
+      const message = await action();
+      setSettingsOpenClawActionMessage(message || t("app.actionExecuted"));
+    } catch (error) {
+      setSettingsOpenClawActionMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSettingsOpenClawActionBusy(false);
+    }
+  }, []);
+
+  const refreshSettingsOpenClawStatus = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      await Promise.all([loadBootstrapStatus(), refreshOpenClawCliStatus(), refreshOpenClawStatus()]);
+      return t("app.statusRefreshed");
+    });
+  }, [loadBootstrapStatus, refreshOpenClawCliStatus, refreshOpenClawStatus, runSettingsOpenClawAction]);
+
+  const reconnectSettingsGateway = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      await invoke("gateway_connect");
+      await refreshOpenClawStatus();
+      return t("app.gatewayReconnected");
+    });
+  }, [refreshOpenClawStatus, runSettingsOpenClawAction]);
+
+  const repairSettingsBinding = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      await bindOpenClaw();
+      await loadBootstrapStatus();
+      return t("app.clawkitBindingRewritten");
+    });
+  }, [bindOpenClaw, loadBootstrapStatus, runSettingsOpenClawAction]);
+
+  const installOpenClawFromSettings = useCallback(() => {
+    void runSettingsOpenClawAction(async () => {
+      const message = await invoke<string>("open_openclaw_install_terminal");
+      window.setTimeout(() => {
+        void loadBootstrapStatus();
+        void refreshOpenClawCliStatus();
+      }, 1500);
+      return message;
+    });
+  }, [loadBootstrapStatus, refreshOpenClawCliStatus, runSettingsOpenClawAction]);
 
   const refreshUsage = useCallback(async () => {
     setUsageLoading(true);
@@ -1122,10 +1333,16 @@ function App() {
 
   const toggleOpenClawInfo = useCallback(() => {
     setOpenClawInfoOpen((current) => !current);
-    if (!openClawInfoOpen) {
-      void refreshOpenClawStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!openClawInfoOpen) return;
+    const raf = window.requestAnimationFrame(() => {
+      // Keep first paint responsive: render the modal first, then refresh runtime info.
+      void refreshOpenClawStatus({ skipGatewayRefresh: true });
       void refreshOpenClawCliStatus();
-    }
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [openClawInfoOpen, refreshOpenClawCliStatus, refreshOpenClawStatus]);
 
   useEffect(() => {
@@ -1160,6 +1377,7 @@ function App() {
         void refreshGatewayConnections();
       }, 80);
       scheduleAfterPaint(() => void refreshWeixinPluginStatus(), 430);
+      scheduleAfterPaint(() => void refreshQqbotPluginStatus(), 430);
     }
     if (activeNav === "models" && openClawConfigDefaultModelLoaded) {
       scheduleAfterPaint(() => {
@@ -1178,7 +1396,7 @@ function App() {
       frames.forEach((frame) => window.cancelAnimationFrame(frame));
       timeouts.forEach((timeout) => clearTimeout(timeout));
     };
-  }, [activeNav, bootstrapStep, openClawConfigDefaultModelLoaded, refreshGatewayConnections, refreshGatewaySkills, refreshModelsPage, refreshUsage, refreshWeixinPluginStatus]);
+  }, [activeNav, bootstrapStep, openClawConfigDefaultModelLoaded, refreshGatewayConnections, refreshGatewaySkills, refreshModelsPage, refreshQqbotPluginStatus, refreshUsage, refreshWeixinPluginStatus]);
 
   useEffect(() => {
     if (bootstrapStep !== "ready") {
@@ -1189,7 +1407,7 @@ function App() {
   }, [bootstrapStep, refreshOpenClawDefaultModel]);
 
   useEffect(() => {
-    if (bootstrapStep !== "ready") {
+    if (bootstrapStep !== "ready" || clawKitSettingsLoading || !clawKitSettings.general.autoCheckUpdates) {
       return undefined;
     }
     void refreshOpenClawCliStatus();
@@ -1197,16 +1415,19 @@ function App() {
       void refreshOpenClawCliStatus();
     }, OPENCLAW_VERSION_CHECK_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [bootstrapStep, refreshOpenClawCliStatus]);
+  }, [bootstrapStep, clawKitSettings.general.autoCheckUpdates, clawKitSettingsLoading, refreshOpenClawCliStatus]);
 
   const refreshGatewaySnapshot = useCallback(async (options?: { priorityAgentId?: string }) => {
     const fallbackSnapshot = await invoke<OpenClawSnapshot>("load_openclaw_snapshot");
     const { snapshot, sessionsDefaults } = await loadGatewaySnapshot({ fallbackSnapshot });
-    setGatewaySessionsDefaults(sessionsDefaults ?? null);
-    setAgents(buildAgentsFromSnapshot(snapshot, agentsRef.current, {
+    const nextAgents = buildAgentsFromSnapshot(snapshot, agentsRef.current, {
       preserveExistingConversations: true,
       priorityAgentId: options?.priorityAgentId,
-    }));
+    });
+    setGatewaySessionsDefaults(sessionsDefaults ?? null);
+    agentsRef.current = nextAgents;
+    setAgents(nextAgents);
+    return nextAgents;
   }, [loadGatewaySnapshot]);
 
   const runWeixinTerminalAction = useCallback(async (command: "open_weixin_plugin_install_terminal" | "open_weixin_plugin_update_terminal" | "open_weixin_login_terminal") => {
@@ -1223,13 +1444,13 @@ function App() {
       }
     } catch (error) {
       console.error(`Failed to run ${command}`, error);
-      setWeixinMessage(error instanceof Error ? error.message : "WeChat 操作失败");
+      setWeixinMessage(error instanceof Error ? error.message : t("app.wechatActionFailed"));
     } finally {
       setWeixinBusy(false);
     }
   }, [refreshGatewayConnections, refreshWeixinPluginStatus]);
 
-  const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string }) => {
+  const handleCreateAgent = useCallback(async (params: { agentId: string; name: string; workspace: string; emoji?: string; description?: string }) => {
     setAgentCreating(true);
     setAgentCreateError(null);
     try {
@@ -1246,6 +1467,15 @@ function App() {
           params: { agentId: result.agentId, name: params.name.trim() },
         });
       }
+      if (params.description?.trim()) {
+        await invoke("gateway_agents_files_set", {
+          params: {
+            agentId: result.agentId,
+            name: AGENT_DESCRIPTION_FILE,
+            content: params.description.trim(),
+          },
+        });
+      }
       await refreshGatewaySnapshot({ priorityAgentId: result.agentId });
       setAgentCreateOpen(false);
       setAgentFilesAgentId(result.agentId);
@@ -1256,6 +1486,10 @@ function App() {
       setAgentCreating(false);
     }
   }, [refreshGatewaySnapshot]);
+
+  const suppressSessionRefreshAfterTerminalChat = useCallback(() => {
+    suppressSessionRefreshUntilRef.current = Number.POSITIVE_INFINITY;
+  }, []);
 
   useGatewayChat({
     enabled: bootstrapStep === "ready",
@@ -1269,81 +1503,53 @@ function App() {
     onGatewayStatusTextChange: setGatewayStatusText,
     onGatewayConnectedChange: setGatewayConnected,
     refreshGatewayStatus,
+    onTerminalChatEvent: suppressSessionRefreshAfterTerminalChat,
   });
 
-  const visibleConversations = useMemo(() => getVisibleConversations(agents), [agents]);
+  const {
+    navigationAgents,
+    visibleConversations,
+    conversationRuntimeOptions,
+    conversationFiltersActive,
+    filteredVisibleConversations,
+    activeConversation,
+  } = useConversationWorkspaceState({
+    agents,
+    activeConversationId,
+    expandedConversationId,
+    openedConversationIds,
+    conversationSearch,
+    conversationRuntimeFilter,
+    conversationSort,
+    showSystemConversations: clawKitSettings.general.showSystemConversations,
+  });
 
-  const conversationRuntimeOptions = useMemo(() => {
-    const runtimeById = new Map<string, { value: string; label: string; count: number }>();
-    for (const conversation of visibleConversations) {
-      const runtime = conversation.agentRuntime;
-      if (!runtime?.id) continue;
-      const existing = runtimeById.get(runtime.id);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        runtimeById.set(runtime.id, {
-          value: runtime.id,
-          label: runtime.label ?? runtime.id,
-          count: 1,
-        });
-      }
+  useEffect(() => {
+    if (
+      restoredLastConversationRef.current ||
+      !clawKitSettings.general.restoreLastConversation ||
+      activeConversationId ||
+      visibleConversations.length === 0
+    ) {
+      return;
     }
-    return [...runtimeById.values()].sort((left, right) => left.label.localeCompare(right.label));
-  }, [visibleConversations]);
 
-  const conversationFiltersActive = Boolean(conversationSearch.trim()) || conversationRuntimeFilter !== "all";
+    restoredLastConversationRef.current = true;
+    const lastConversationId = readStorageValue(LAST_CONVERSATION_STORAGE_KEY);
+    if (lastConversationId && visibleConversations.some((conversation) => conversation.id === lastConversationId)) {
+      setActiveConversationId(lastConversationId);
+    }
+  }, [activeConversationId, clawKitSettings.general.restoreLastConversation, visibleConversations]);
 
-  const filteredVisibleConversations = useMemo(() => {
-    const query = conversationSearch.trim().toLowerCase();
-    const now = Date.now();
-    const selectedConversationIds = new Set([activeConversationId, expandedConversationId].filter(Boolean));
-    const recentConversations = visibleConversations.filter((conversation) => {
-      if (selectedConversationIds.has(conversation.id) || openedConversationIds[conversation.id]) {
-        return true;
-      }
-      if (conversation.isDraft || conversation.status === "working") {
-        return true;
-      }
-      return typeof conversation.updatedAt === "number" && now - conversation.updatedAt <= RECENT_CONVERSATION_WINDOW_MS;
-    });
-    const runtimeFiltered = conversationRuntimeFilter === "all"
-      ? recentConversations
-      : recentConversations.filter((conversation) => conversation.agentRuntime?.id === conversationRuntimeFilter);
-    const filtered = query
-      ? runtimeFiltered.filter((conversation) =>
-          [
-            conversation.title,
-            conversation.id,
-            conversation.agentName,
-            conversation.channel,
-            conversation.lastMessage,
-            conversation.model,
-            conversation.agentRuntime?.id,
-            conversation.agentRuntime?.label,
-            conversation.agentRuntime?.source,
-          ]
-            .filter(Boolean)
-            .some((value) => String(value).toLowerCase().includes(query)),
-        )
-      : runtimeFiltered;
-
-    return [...filtered].sort((left, right) => {
-      if (conversationSort === "tokens") {
-        return (right.totalTokens ?? 0) - (left.totalTokens ?? 0);
-      }
-      if (conversationSort === "status") {
-        const statusRank = { working: 0, failed: 1, stopped: 2, completed: 3, idle: 4 };
-        const byStatus = statusRank[left.status] - statusRank[right.status];
-        if (byStatus !== 0) return byStatus;
-      }
-      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
-    });
-  }, [activeConversationId, conversationRuntimeFilter, conversationSearch, conversationSort, expandedConversationId, openedConversationIds, visibleConversations]);
-
-  // Always get activeConversation from agents to ensure we have the latest data
-  // (including previewMessages updated by gateway_chat_history)
-  const activeConversation = findConversationById(agents, activeConversationId);
+  const { petContext } = usePetContextSync({
+    agents,
+    activeConversation,
+    activeConversationId,
+    activeNav,
+    agentsRef,
+    activeConversationIdRef,
+    petContextSnapshotRef,
+  });
   const composerThinkingOptions = useMemo(
     () => resolveComposerThinkingOptions(activeConversation ?? null, gatewaySessionsDefaults),
     [activeConversation, gatewaySessionsDefaults],
@@ -1353,6 +1559,14 @@ function App() {
   useEffect(() => {
     activeConversationRef.current = activeConversation;
   }, [activeConversation]);
+
+  useEffect(() => {
+    composerModelRef.current = composerModel;
+  }, [composerModel]);
+
+  useEffect(() => {
+    composerThinkingRef.current = composerThinking;
+  }, [composerThinking]);
 
   const resolveConversationDefaultModel = useCallback((conversation: Conversation | null) => {
     const lastAssistant = getLastAssistantMessage(conversation?.previewMessages ?? []);
@@ -1410,16 +1624,16 @@ function App() {
       if (agent.id !== agentId) return agent;
       const nextConversation: Conversation = {
         id: draftId,
-        title: "新对话",
+        title: t("conversation.newTitle"),
         status: "idle",
         lastMessage: "",
         lastTime: new Date().toLocaleString("zh-CN"),
         updatedAt: now,
         tokens: "--",
-        model: defaultModel || "未配置",
+        model: defaultModel || t("app.notConfigured"),
         thinkingDefault: draftThinkingDefault,
         thinkingOptions: draftThinkingOptions,
-        workspace: "未配置工作区",
+        workspace: t("app.workspaceNotConfigured"),
         visible: true,
         previewMessages: [],
         isDraft: true,
@@ -1435,13 +1649,13 @@ function App() {
     setActiveConversationId(draftId);
   }, [agents, gatewaySessionsDefaults, modelOptions]);
 
-  const toggleConversationVisibility = (agentId: string, conversationId: string, visible: boolean) => {
+  const toggleConversationVisibility = useCallback((agentId: string, conversationId: string, visible: boolean) => {
     const conv = findConversationById(agentsRef.current, conversationId);
     const label = conv?.title ?? conversationId;
     if (visible) {
-      announceWorkspace(`「${label}」已加入主工作区`);
+      announceWorkspace(`"${label}" ${t("app.addedToMainWorkspace")}`);
     } else {
-      announceWorkspace(`「${label}」已从主工作区隐藏`);
+      announceWorkspace(`"${label}" ${t("app.hiddenFromMainWorkspace")}`);
     }
     setAgents((current) =>
       current.map((agent) =>
@@ -1459,32 +1673,25 @@ function App() {
     if (visible) {
       setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
       setExpandedConversationId(conversationId);
-    } else if (expandedConversationId === conversationId) {
-      setOpenedConversationIds((current) => {
-        const next = { ...current };
-        delete next[conversationId];
-        return next;
-      });
-      setExpandedConversationId("");
     } else {
       setOpenedConversationIds((current) => {
         const next = { ...current };
         delete next[conversationId];
         return next;
       });
+      setExpandedConversationId((current) => (current === conversationId ? "" : current));
     }
-  };
+  }, [announceWorkspace, t]);
 
-  const openConversationDetail = async (conversationId: string, preserveStatus = false) => {
-    setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
-    setExpandedConversationId(conversationId);
-    setActiveConversationId(conversationId);
-    setUserExpanded(false);
+  const loadConversationHistory = useCallback(async (conversationId: string, preserveStatus = false, limit = CONVERSATION_HISTORY_OPEN_LIMIT) => {
+    setHistoryLoadingConversationId(conversationId);
     try {
       // Ensure gateway is connected first
-      await invoke("gateway_connect");
-      const result = await invoke<GatewayHistoryResult>("gateway_chat_history", { params: { sessionKey: conversationId, limit: 200 } });
-      await refreshGatewayStatus();
+      await measureAsync("open_conversation.gateway_connect", () => invoke("gateway_connect"), 300);
+      const result = await measureAsync("open_conversation.chat_history", () =>
+        invoke<GatewayHistoryResult>("gateway_chat_history", { params: { sessionKey: conversationId, limit, maxChars: CONVERSATION_HISTORY_MAX_CHARS } }),
+      );
+      await measureAsync("open_conversation.refresh_gateway_status", refreshGatewayStatus, 300);
       if (Array.isArray(result?.messages)) {
         const mappedMessages = mapGatewayHistoryMessages(result);
         const lastAssistant = getLastAssistantMessage(mappedMessages);
@@ -1536,6 +1743,7 @@ function App() {
               runtime: conversation.runtime ?? {
                 activeRunId: undefined,
                 activeStartedAt: undefined,
+                lastRunStartedAt: undefined,
                 lastEventAt: conversation.updatedAt,
                 lastTerminalAt: lastAssistant ? conversation.updatedAt : undefined,
                 lastTerminalReason: lastAssistant ? "completed" : undefined,
@@ -1548,17 +1756,46 @@ function App() {
     } catch (error) {
       await refreshGatewayStatus();
       console.error("Failed to load chat history", error);
+    } finally {
+      setHistoryLoadingConversationId((current) => (current === conversationId ? null : current));
     }
-  };
+  }, [refreshGatewayStatus]);
+
+  const openConversationDetail = useCallback(async (conversationId: string, preserveStatus = false) => {
+    setOpenedConversationIds((current) => ({ ...current, [conversationId]: true }));
+    setExpandedConversationId(conversationId);
+    setActiveConversationId(conversationId);
+    setUserExpanded(false);
+    const limit = conversationHistoryLimits[conversationId] ?? CONVERSATION_HISTORY_OPEN_LIMIT;
+    await loadConversationHistory(conversationId, preserveStatus, limit);
+  }, [conversationHistoryLimits, loadConversationHistory]);
+
+  const handleLoadMoreConversationHistory = useCallback(async (conversationId: string) => {
+    const currentLimit = conversationHistoryLimits[conversationId] ?? CONVERSATION_HISTORY_OPEN_LIMIT;
+    const nextLimit = CONVERSATION_HISTORY_LOAD_STEPS.find((item) => item > currentLimit) ?? currentLimit;
+    if (nextLimit === currentLimit) return;
+    setConversationHistoryLimits((current) => ({ ...current, [conversationId]: nextLimit }));
+    await loadConversationHistory(conversationId, true, nextLimit);
+  }, [conversationHistoryLimits, loadConversationHistory]);
 
   const handleOpenCronSessionKey = useCallback(
     (sessionKey: string) => {
       setActiveNav("conversations");
-      window.requestAnimationFrame(() => {
-        void openConversationDetail(sessionKey);
-      });
+      void (async () => {
+        let nextAgents = agentsRef.current;
+        let conversationId = findConversationByGatewaySessionKey(nextAgents, sessionKey)?.id;
+        if (!conversationId) {
+          try {
+            nextAgents = await refreshGatewaySnapshot();
+            conversationId = findConversationByGatewaySessionKey(nextAgents, sessionKey)?.id;
+          } catch (error) {
+            console.warn("Failed to refresh sessions before opening cron run session", error);
+          }
+        }
+        await openConversationDetail(conversationId ?? sessionKey);
+      })();
     },
-    [openConversationDetail],
+    [openConversationDetail, refreshGatewaySnapshot],
   );
 
   const openConversationDetailRef = useRef(openConversationDetail);
@@ -1566,6 +1803,33 @@ function App() {
   useEffect(() => {
     openConversationDetailRef.current = openConversationDetail;
   }, [openConversationDetail]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let cleanup: (() => void | Promise<void>) | undefined;
+
+    void (async () => {
+      try {
+        const listener = await onNativeNotificationAction(async (conversationId) => {
+          await bringMainWindowForward();
+          if (cancelled) return;
+          setActiveNav("conversations");
+          await openConversationDetailRef.current(conversationId);
+        });
+        cleanup = () => listener.unregister();
+        if (cancelled) {
+          void cleanup();
+        }
+      } catch (error) {
+        console.warn("Failed to listen for notification actions", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      void cleanup?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeConversationId || activeConversationId.startsWith("draft-") || bootstrapStep !== "ready") {
@@ -1580,7 +1844,7 @@ function App() {
       try {
         await invoke("gateway_session_messages_subscribe", { sessionKey: activeConversationId });
         const { listen } = await import("@tauri-apps/api/event");
-        const unlisten = await listen<RealtimeSessionMessageEvent>("clawx://session-message", (event) => {
+        const unlisten = await listen<RealtimeSessionMessageEvent>("clawkit://session-message", (event) => {
           const active = activeConversationRef.current;
           const eventKey = event.payload?.sessionKey;
           if (!active || !eventKey || !conversationMatchesSessionKey(active, eventKey)) {
@@ -1620,7 +1884,10 @@ function App() {
     };
   }, [activeConversationId, bootstrapStep]);
 
-  const { aiResponseScrollRef, shouldStickToBottomRef, showJumpToBottom, setShowJumpToBottom } = useConversationAutoScroll(activeConversation);
+  const { aiResponseScrollRef, shouldStickToBottomRef, showJumpToBottom, setShowJumpToBottom } = useConversationAutoScroll(
+    activeConversation,
+    clawKitSettings.general.conversationAutoScrollMode,
+  );
 
   const handleComposerFiles = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -1633,7 +1900,145 @@ function App() {
   }, []);
 
   const activeQueuedMessages = activeConversationId ? queuedMessagesByConversation[activeConversationId] ?? [] : [];
+  const activeConversationSending = isConversationRunning(activeConversation);
   const activeSendError = activeConversationId ? sendErrorsByConversation[activeConversationId] ?? null : null;
+  const sessionOverrideResetEnabled = useMemo(
+    () => Boolean(activeConversationId && !activeConversationId.startsWith("draft-") && !activeConversation?.isDraft),
+    [activeConversation?.isDraft, activeConversationId],
+  );
+
+  const patchConversationComposerDefaults = useCallback((
+    conversationId: string,
+    patch: { model?: string; thinkingDefault?: string },
+  ) => {
+    setAgents((current) => current.map((agent) => ({
+      ...agent,
+      conversations: agent.conversations.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        return {
+          ...conversation,
+          model: patch.model ?? conversation.model,
+          thinkingDefault: patch.thinkingDefault ?? conversation.thinkingDefault,
+        };
+      }),
+    })));
+  }, []);
+
+  const queueSessionPatch = useCallback((
+    sessionKey: string,
+    patch: Record<string, unknown>,
+    label: string,
+  ) => {
+    const previous = sessionPatchPendingRef.current[sessionKey] ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await measureAsync(`${label}.gateway_connect`, () => invoke("gateway_connect"), 300);
+        await measureAsync(`${label}.sessions_patch`, () =>
+          invoke("gateway_sessions_patch", {
+            params: { sessionKey, ...patch },
+          }),
+        );
+      });
+    sessionPatchPendingRef.current[sessionKey] = run;
+    const cleanup = () => {
+      if (sessionPatchPendingRef.current[sessionKey] === run) {
+        delete sessionPatchPendingRef.current[sessionKey];
+      }
+    };
+    run.then(cleanup, cleanup);
+    return run;
+  }, []);
+
+  const handleComposerModelChange = useCallback((nextModel: string) => {
+    setComposerModel(nextModel);
+    composerModelRef.current = nextModel;
+    const conversation = activeConversationRef.current;
+    const sessionKey = activeConversationIdRef.current;
+    if (!conversation || !sessionKey || conversation.isDraft || sessionKey.startsWith("draft-")) return;
+
+    const lastAssistant = getLastAssistantMessage(conversation.previewMessages ?? []);
+    const selectedModel = canonicalizeModelRef(nextModel, modelOptions, lastAssistant?.provider);
+    const currentModel = canonicalizeModelRef(conversation.model ?? "", modelOptions, lastAssistant?.provider);
+    if (isUnconfiguredModelRef(selectedModel) || normalizeModelKey(selectedModel) === normalizeModelKey(currentModel)) {
+      return;
+    }
+
+    const previousModel = conversation.model;
+    patchConversationComposerDefaults(sessionKey, { model: selectedModel });
+    void queueSessionPatch(sessionKey, { model: selectedModel }, "composer.model_patch")
+      .catch((error) => {
+        const messageText = error instanceof Error ? error.message : String(error);
+        patchConversationComposerDefaults(sessionKey, { model: previousModel });
+        if (activeConversationIdRef.current === sessionKey) {
+          setComposerModel(previousModel);
+          composerModelRef.current = previousModel;
+        }
+        setSessionActionError(`${t("app.saveSessionModelFailed")}: ${messageText}`);
+      });
+  }, [modelOptions, patchConversationComposerDefaults, queueSessionPatch, t]);
+
+  const handleComposerThinkingChange = useCallback((nextThinking: string) => {
+    setComposerThinking(nextThinking);
+    composerThinkingRef.current = nextThinking;
+    const conversation = activeConversationRef.current;
+    const sessionKey = activeConversationIdRef.current;
+    if (!conversation || !sessionKey || conversation.isDraft || sessionKey.startsWith("draft-")) return;
+
+    const currentThinking = conversation.thinkingDefault ?? "off";
+    if (nextThinking === currentThinking) return;
+
+    const previousThinking = currentThinking;
+    patchConversationComposerDefaults(sessionKey, { thinkingDefault: nextThinking });
+    void queueSessionPatch(sessionKey, { thinkingLevel: nextThinking }, "composer.thinking_patch")
+      .catch((error) => {
+        const messageText = error instanceof Error ? error.message : String(error);
+        patchConversationComposerDefaults(sessionKey, { thinkingDefault: previousThinking });
+        if (activeConversationIdRef.current === sessionKey) {
+          setComposerThinking(previousThinking);
+          composerThinkingRef.current = previousThinking;
+        }
+        setSessionActionError(`${t("app.saveSessionThinkingFailed")}: ${messageText}`);
+      });
+  }, [patchConversationComposerDefaults, queueSessionPatch, t]);
+
+  const handleClearConversationFilters = useCallback(() => {
+    setConversationSearch("");
+    setConversationRuntimeFilter("all");
+  }, []);
+  const handleBackToConversationList = useCallback(() => {
+    setActiveConversationId(null);
+  }, []);
+  const handleHideConversation = useCallback((agentId: string, conversationId: string) => {
+    toggleConversationVisibility(agentId, conversationId, false);
+  }, [toggleConversationVisibility]);
+  const handleUpdateConversationTitle = useCallback(async (conversationId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const target = findConversationById(agentsRef.current, conversationId);
+    const isDraftConversation = target?.isDraft ?? false;
+    if (isDraftConversation) {
+      setAgents((current) => current.map((agent) => ({
+        ...agent,
+        conversations: agent.conversations.map((conversation) =>
+          conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
+        ),
+      })));
+      return;
+    }
+    await invoke("gateway_sessions_patch", {
+      params: {
+        sessionKey: conversationId,
+        label: trimmed,
+      },
+    });
+    setAgents((current) => current.map((agent) => ({
+      ...agent,
+      conversations: agent.conversations.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
+      ),
+    })));
+  }, []);
 
   const enqueueComposerMessage = useCallback((conversationId: string, text: string, attachments: ComposerAttachment[]) => {
     const item: QueuedComposerMessage = {
@@ -1690,8 +2095,8 @@ function App() {
 
   const handleAbort = useCallback(async () => {
     if (!activeConversationId) return;
-    const runIdForAbort = activeConversation?.runtime?.activeRunId ?? activeRunId;
-    if (!sending && activeConversation?.status !== "working" && !runIdForAbort) return;
+    const runIdForAbort = activeConversation?.runtime?.activeRunId ?? null;
+    if (!activeConversationSending && !runIdForAbort) return;
     setSessionActionBusy("abort");
     setSessionActionError(null);
     try {
@@ -1701,32 +2106,32 @@ function App() {
         runId: runIdForAbort,
       });
       setGatewayError(null);
-      announceWorkspace("已请求停止当前运行");
+      announceWorkspace(t("app.stopRequested"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
       setGatewayError(messageText);
-      setSessionActionError(`停止失败：${messageText}`);
-      setGatewayStatusText(`停止失败: ${messageText}`);
+      setSessionActionError(`${t("app.stopFailed")}: ${messageText}`);
+      setGatewayStatusText(`${t("app.stopFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
-  }, [activeConversation?.runtime?.activeRunId, activeConversation?.status, activeConversationId, activeRunId, announceWorkspace, sending]);
+  }, [activeConversation?.runtime?.activeRunId, activeConversationId, activeConversationSending, announceWorkspace]);
 
   const handleCopySessionKey = useCallback(async (conversationId: string) => {
     setSessionActionError(null);
     try {
       await navigator.clipboard.writeText(conversationId);
-      announceWorkspace("已复制会话 ID");
+      announceWorkspace(t("app.sessionIdCopied"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`复制失败：${messageText}`);
+      setSessionActionError(`${t("app.copyFailed")}: ${messageText}`);
     }
   }, [announceWorkspace]);
 
   const handleCompactSession = useCallback(async (conversationId: string) => {
     const target = findConversationById(agentsRef.current, conversationId);
     if (target?.isDraft) {
-      setSessionActionError("这还是草稿会话，发送第一条消息后才需要整理上下文。");
+      setSessionActionError(t("app.draftConversationCompactionHint"));
       return;
     }
     setSessionActionBusy("compact");
@@ -1734,13 +2139,13 @@ function App() {
     try {
       await invoke("gateway_connect");
       await invoke("gateway_sessions_compact", { params: { sessionKey: conversationId } });
-      announceWorkspace("已整理上下文，长对话会更轻一些");
+      announceWorkspace(t("app.contextCompacted"));
       if (activeConversationIdRef.current === conversationId) {
         await openConversationDetail(conversationId, true);
       }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`整理上下文失败：${messageText}`);
+      setSessionActionError(`${t("app.compactContextFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
@@ -1749,7 +2154,10 @@ function App() {
   const handleResetSession = useCallback(async (conversationId: string) => {
     const target = findConversationById(agentsRef.current, conversationId);
     const label = target?.title ?? conversationId;
-    const confirmed = window.confirm(`要让「${label}」重新开始吗？\n\n这会清空这段会话的上下文和历史消息，但会保留会话入口。`);
+    const confirmed = shouldRunDestructiveAction(
+      clawKitSettings.general.confirmDestructiveActions,
+      () => window.confirm(`${t("app.restartConfirmTitle")} "${label}"?\n\n${t("app.restartConfirmBody")}`),
+    );
     if (!confirmed) return;
     setSessionActionBusy("reset");
     setSessionActionError(null);
@@ -1763,7 +2171,7 @@ function App() {
               : conversation,
           ),
         })));
-        announceWorkspace("草稿会话已清空");
+        announceWorkspace(t("app.draftConversationCleared"));
         return;
       }
       await invoke("gateway_connect");
@@ -1776,22 +2184,25 @@ function App() {
             : conversation,
         ),
       })));
-      announceWorkspace("会话已重新开始");
+      announceWorkspace(t("app.conversationRestarted"));
       if (activeConversationIdRef.current === conversationId) {
         await openConversationDetail(conversationId, true);
       }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`重新开始失败：${messageText}`);
+      setSessionActionError(`${t("app.restartFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
-  }, [announceWorkspace]);
+  }, [announceWorkspace, clawKitSettings.general.confirmDestructiveActions]);
 
   const handleDeleteSession = useCallback(async (conversationId: string) => {
     const target = findConversationById(agentsRef.current, conversationId);
     const label = target?.title ?? conversationId;
-    const confirmed = window.confirm(`确定删除「${label}」吗？\n\n删除后它会从 OpenClaw 会话列表中移除。只是暂时不想看到的话，可以在左侧列表用“隐藏”。`);
+    const confirmed = shouldRunDestructiveAction(
+      clawKitSettings.general.confirmDestructiveActions,
+      () => window.confirm(`${t("app.deleteConfirmTitle")} "${label}"?\n\n${t("app.deleteConfirmBody")}`),
+    );
     if (!confirmed) return;
     setSessionActionBusy("delete");
     setSessionActionError(null);
@@ -1815,14 +2226,14 @@ function App() {
       if (activeConversationIdRef.current === conversationId) {
         setActiveConversationId(null);
       }
-      announceWorkspace("会话已删除");
+      announceWorkspace(t("app.conversationDeleted"));
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      setSessionActionError(`删除失败：${messageText}`);
+      setSessionActionError(`${t("app.deleteFailed")}: ${messageText}`);
     } finally {
       setSessionActionBusy(null);
     }
-  }, [announceWorkspace, expandedConversationId]);
+  }, [announceWorkspace, clawKitSettings.general.confirmDestructiveActions, expandedConversationId]);
 
   const handleSend = useCallback(async () => {
     if (!activeConversationId) return;
@@ -1830,7 +2241,7 @@ function App() {
     const attachments = composerAttachments;
     if (!message && attachments.length === 0) return;
 
-    const shouldQueue = sending || activeConversation?.status === "working" || Boolean(activeConversation?.runtime?.activeRunId);
+    const shouldQueue = activeConversationSending;
     setComposerValue("");
     setComposerAttachments([]);
 
@@ -1839,16 +2250,25 @@ function App() {
       return;
     }
 
+    suppressSessionRefreshUntilRef.current = Date.now() + SEND_STARTUP_SESSION_REFRESH_SUPPRESS_MS;
+    const pendingSessionPatch = sessionPatchPendingRef.current[activeConversationId];
+    if (pendingSessionPatch) {
+      try {
+        await measureAsync("send.wait_pending_session_patch", () => pendingSessionPatch, 300);
+      } catch {
+        return;
+      }
+    }
     await sendMessageToConversation(activeConversationId, message, attachments, {
       restoreToComposerOnError: true,
-      model: composerModel,
-      thinking: composerThinking,
+      model: composerModelRef.current,
+      thinking: composerThinkingRef.current,
     });
-  }, [activeConversation, activeConversationId, composerAttachments, composerModel, composerThinking, composerValue, enqueueComposerMessage, sendMessageToConversation, sending]);
+  }, [activeConversationId, activeConversationSending, composerAttachments, composerModel, composerThinking, composerValue, enqueueComposerMessage, sendMessageToConversation]);
 
   useEffect(() => {
-    if (!activeConversationId || !activeConversation || sending) return;
-    if (activeConversation.status === "working" || activeConversation.runtime?.activeRunId) return;
+    if (!activeConversationId || !activeConversation) return;
+    if (activeConversationSending) return;
     const nextQueuedMessage = queuedMessagesByConversation[activeConversationId]?.[0];
     if (!nextQueuedMessage) return;
     if (autoSendingQueuedMessageRef.current === nextQueuedMessage.id) return;
@@ -1861,6 +2281,7 @@ function App() {
     }));
     const queuedPayload = nextQueuedMessage;
     window.setTimeout(() => {
+      suppressSessionRefreshUntilRef.current = Date.now() + SEND_STARTUP_SESSION_REFRESH_SUPPRESS_MS;
       void sendMessageToConversation(activeConversationId, queuedPayload.text, queuedPayload.attachments, {
         requeueOnError: queuedPayload,
         model: queuedPayload.model,
@@ -1870,19 +2291,16 @@ function App() {
           if (autoSendingQueuedMessageRef.current === queuedPayload.id) {
             autoSendingQueuedMessageRef.current = null;
           }
-          if (remainingQueuedMessages.length > 0) {
-            setSending(false);
-            setActiveRunId(null);
-          }
         });
     }, 180);
-  }, [activeConversation, activeConversationId, queuedMessagesByConversation, sendMessageToConversation, sending]);
+  }, [activeConversation, activeConversationId, activeConversationSending, queuedMessagesByConversation, sendMessageToConversation]);
 
 
 
 
   const bootstrapScreen = (
     <BootstrapScreens
+      t={t}
       bootstrapLoading={bootstrapLoading}
       bootstrapError={bootstrapError}
       bootstrapStatus={bootstrapStatus}
@@ -1905,11 +2323,21 @@ function App() {
     if (shouldShowBootstrap) return bootstrapScreen;
   }
 
+  const appearanceDataAttributes = buildAppearanceDataAttributes(clawKitSettings.appearance, systemTheme);
+
   return (
-    <main className="app-shell">
-      <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} />
-      <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} />
+    <main className="app-shell" {...appearanceDataAttributes}>
+      <GatewayBanner connected={gatewayConnected} statusText={gatewayStatusText} error={gatewayError} t={t} />
+      <ImageLightbox src={previewImageSrc} onClose={() => setPreviewImageSrc(null)} t={t} />
+      <MandatoryAppUpdateModal
+        open={clawKitSelfUpdate.mandatoryUpdateOpen}
+        version={clawKitSelfUpdate.pendingVersion}
+        installing={clawKitSelfUpdate.installingUpdate}
+        onApply={() => void clawKitSelfUpdate.applyPendingUpdate()}
+        t={t}
+      />
       <AgentCreateDialog
+        t={t}
         open={agentCreateOpen}
         creating={agentCreating}
         error={agentCreateError}
@@ -1921,6 +2349,7 @@ function App() {
         onCreate={handleCreateAgent}
       />
       <AgentFilesDialog
+        t={t}
         open={Boolean(agentFilesAgentId)}
         agentId={agentFilesAgentId}
         agentName={agents.find((agent) => agent.id === agentFilesAgentId)?.name}
@@ -1938,17 +2367,22 @@ function App() {
         <NavSidebar
           activeNav={activeNav}
           onNavChange={handleNavChange}
+          t={t}
           gatewayConnected={gatewayConnected}
           gatewayVersion={openClawStatus?.runtimeVersion}
           updateAvailable={openClawCliStatus?.updateAvailable}
           sessionCount={openClawStatus?.sessions?.count}
           onOpenStatus={toggleOpenClawInfo}
+          clawKitUpdateReady={clawKitSelfUpdate.showOptionalUpdateChrome}
+          clawKitUpdateInstalling={clawKitSelfUpdate.installingUpdate}
+          onApplyClawKitUpdate={() => void clawKitSelfUpdate.applyPendingUpdate()}
         />
 
         {activeNav === "conversations" ? (
           <>
             <ResourceSidebar
-              agents={agents}
+              t={t}
+              agents={navigationAgents}
               expandedConversationId={expandedConversationId}
               visible={showResourceSidebar}
               onCreateAgent={() => setAgentCreateOpen(true)}
@@ -1957,17 +2391,22 @@ function App() {
               onToggleConversationVisibility={toggleConversationVisibility}
               onExpandedConversationChange={setExpandedConversationId}
               onOpenConversation={openConversationDetail}
+              onLoadAgentHistory={handleLoadAgentHistory}
               onCollapse={() => setShowResourceSidebar(false)}
               onExpand={() => setShowResourceSidebar(true)}
+              showSystemConversations={clawKitSettings.general.showSystemConversations}
+              agentHistoryHasMore={agentHistoryHasMore}
+              agentHistoryLoadingId={agentHistoryLoadingId}
             />
 
             <ConversationWorkspace
+              t={t}
+              defaultDisplayMode={clawKitSettings.general.defaultConversationMode}
+              autoScrollMode={clawKitSettings.general.conversationAutoScrollMode}
+              sendShortcut={clawKitSettings.general.sendShortcut}
               visibleConversationCount={visibleConversations.length}
               conversationFiltersActive={conversationFiltersActive}
-              onClearConversationFilters={() => {
-                setConversationSearch("");
-                setConversationRuntimeFilter("all");
-              }}
+              onClearConversationFilters={handleClearConversationFilters}
               workspaceAnnouncement={workspaceAnnouncement}
               activeConversation={activeConversation}
               visibleConversations={visibleConversations}
@@ -1976,7 +2415,7 @@ function App() {
               conversationRuntimeFilter={conversationRuntimeFilter}
               conversationRuntimeOptions={conversationRuntimeOptions}
               conversationSort={conversationSort}
-              statusLabel={statusLabel}
+              statusLabel={localizedStatusLabel}
               userExpanded={userExpanded}
               aiResponseScrollRef={aiResponseScrollRef}
               showJumpToBottom={showJumpToBottom}
@@ -1985,59 +2424,44 @@ function App() {
               composerValue={composerValue}
               composerModel={composerModel}
               composerThinking={composerThinking}
-              sending={sending}
+              sending={activeConversationSending}
               composerAttachments={composerAttachments}
               activeQueuedMessages={activeQueuedMessages}
               gatewayError={activeSendError}
+              historyLoading={historyLoadingConversationId === activeConversation?.id}
+              historyCanLoadMore={Boolean(
+                activeConversation
+                && (conversationHistoryLimits[activeConversation.id] ?? CONVERSATION_HISTORY_OPEN_LIMIT) < CONVERSATION_HISTORY_LOAD_STEPS[CONVERSATION_HISTORY_LOAD_STEPS.length - 1]
+                && (activeConversation.previewMessages?.length ?? 0) >= (conversationHistoryLimits[activeConversation.id] ?? CONVERSATION_HISTORY_OPEN_LIMIT),
+              )}
               modelOptions={modelOptions}
               modelsLoading={modelsLoading}
               composerThinkingOptions={composerThinkingOptions}
-              onBack={() => setActiveConversationId(null)}
+              onBack={handleBackToConversationList}
               onUserExpandedChange={setUserExpanded}
               onJumpToBottomHidden={() => setShowJumpToBottom(false)}
-              onUpdateTitle={async (conversationId, newTitle) => {
-                const trimmed = newTitle.trim();
-                const target = agents.flatMap((agent) => agent.conversations).find((conversation) => conversation.id === conversationId);
-                const isDraftConversation = target?.isDraft ?? false;
-                if (isDraftConversation) {
-                  setAgents((current) => current.map((agent) => ({
-                    ...agent,
-                    conversations: agent.conversations.map((conversation) =>
-                      conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
-                    ),
-                  })));
-                  return;
-                }
-                await invoke("gateway_sessions_patch", {
-                  params: {
-                    sessionKey: conversationId,
-                    label: trimmed,
-                  },
-                });
-                setAgents((current) => current.map((agent) => ({
-                  ...agent,
-                  conversations: agent.conversations.map((conversation) =>
-                    conversation.id === conversationId ? { ...conversation, title: trimmed } : conversation,
-                  ),
-                })));
-              }}
+              onUpdateTitle={handleUpdateConversationTitle}
               parseSenderMeta={parseSenderMeta}
               onOpenImage={setPreviewImageSrc}
               formatTokenCount={formatTokenCount}
               onOpenConversation={openConversationDetail}
-              onHideConversation={(agentId, conversationId) => toggleConversationVisibility(agentId, conversationId, false)}
+              onLoadMoreHistory={handleLoadMoreConversationHistory}
+              onHideConversation={handleHideConversation}
               onConversationSearchChange={setConversationSearch}
               onConversationRuntimeFilterChange={setConversationRuntimeFilter}
               onConversationSortChange={setConversationSort}
               onFocusChange={setComposerFocused}
               onValueChange={setComposerValue}
-              onModelChange={setComposerModel}
-              onThinkingChange={setComposerThinking}
+              onModelChange={handleComposerModelChange}
+              onThinkingChange={handleComposerThinkingChange}
               onFilesSelected={handleComposerFiles}
               onRemoveAttachment={removeComposerAttachment}
               onRemoveQueuedMessage={removeQueuedMessage}
               onSend={handleSend}
               onAbort={handleAbort}
+              sessionOverrideResetEnabled={sessionOverrideResetEnabled}
+              onResetThinkingDefault={handleResetComposerThinkingDefault}
+              onResetFastDefault={handleResetComposerFastDefault}
               sessionActionBusy={sessionActionBusy}
               sessionActionError={sessionActionError}
               onCopySessionKey={handleCopySessionKey}
@@ -2049,133 +2473,150 @@ function App() {
         ) : null}
 
         {activeNav === "models" ? (
-          <ModelsPage
-            configuredModels={modelsPageReady ? configuredModels : []}
-            allModels={modelsPageReady ? allModels : []}
-            authStatus={modelsPageReady ? modelAuthStatus : null}
-            loading={modelsPageLoading || !modelsPageReady}
-            currentDefaultModel={currentDefaultModel}
-            actionBusy={modelActionBusy}
-            message={modelsActionMessage}
-            onRefresh={() => void refreshModelsPage({ refreshAuth: true })}
-            onSetDefault={(modelRef) => void handleSetDefaultModel(modelRef)}
-            onAuthProvider={(provider, setDefault) => void handleModelAuthProvider(provider, setDefault)}
-            onSaveProviderConfig={(draft) => void handleSaveProviderConfig(draft)}
-            onSaveModelConfig={(draft) => void handleSaveModelConfig(draft)}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <ModelsPage
+              t={t}
+              configuredModels={modelsPageReady ? configuredModels : []}
+              allModels={modelsPageReady ? allModels : []}
+              authStatus={modelsPageReady ? modelAuthStatus : null}
+              loading={modelsPageLoading || !modelsPageReady}
+              currentDefaultModel={currentDefaultModel}
+              actionBusy={modelActionBusy}
+              message={modelsActionMessage}
+              onRefresh={() => void refreshModelsPage({ refreshAuth: true })}
+              onSetDefault={(modelRef) => void handleSetDefaultModel(modelRef)}
+              onAuthProvider={(provider, setDefault) => void handleModelAuthProvider(provider, setDefault)}
+              onSaveProviderConfig={(draft) => void handleSaveProviderConfig(draft)}
+              onSaveModelConfig={(draft) => void handleSaveModelConfig(draft)}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "skills" ? (
-          <SkillsPage
-            skills={metadataPageReady ? skills : []}
-            pluginLoadRepairs={metadataPageReady ? pluginLoadRepairs : []}
-            loading={metadataLoading || !metadataPageReady}
-            onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <SkillsPage
+              skills={metadataPageReady ? skills : []}
+              pluginLoadRepairs={metadataPageReady ? pluginLoadRepairs : []}
+              loading={metadataLoading || !metadataPageReady}
+              t={t}
+              onToggleSkill={(skillId, enabled) => void handleToggleSkill(skillId, enabled)}
+              onRefreshSkills={() => void refreshGatewaySkills()}
+              onOpenUploadSettings={() => {
+                setSettingsInitialSection("openclaw");
+                setActiveNav("settings");
+              }}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "connections" ? (
-          <ConnectionsPage
-            connections={metadataPageReady ? connections : []}
-            connectionLabel={connectionLabel}
-            eventLoopHealth={metadataPageReady ? channelEventLoopHealth : null}
-            unmatchedPluginRepairs={metadataPageReady ? unmatchedPluginRepairs : []}
-            loading={metadataLoading || !metadataPageReady}
-            weixinStatus={weixinStatus}
-            weixinBusy={weixinBusy}
-            weixinMessage={weixinMessage}
-            onRefreshWeixinStatus={() => void refreshWeixinPluginStatus()}
-            onEnableWeixin={() => void ensureWeixinPluginEnabled()}
-            onInstallWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_install_terminal")}
-            onUpdateWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_update_terminal")}
-            onLoginWeixin={() => void runWeixinTerminalAction("open_weixin_login_terminal")}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <ConnectionsPage
+              connections={metadataPageReady ? connections : []}
+              connectionLabel={localizedConnectionLabel}
+              eventLoopHealth={metadataPageReady ? channelEventLoopHealth : null}
+              unmatchedPluginRepairs={metadataPageReady ? unmatchedPluginRepairs : []}
+              loading={metadataLoading || !metadataPageReady}
+              gatewayConnected={gatewayConnected}
+              weixinStatus={weixinStatus}
+              weixinBusy={weixinBusy}
+              weixinMessage={weixinMessage}
+              qqbotBusy={qqbotBusy}
+              qqbotStatusBusy={qqbotStatusBusy}
+              qqbotNotice={qqbotNotice}
+              qqbotPluginRegistered={Boolean(qqbotStatus?.installed)}
+              qqbotStatus={qqbotStatus}
+              t={t}
+              onRefreshWeixinStatus={() => void refreshWeixinPluginStatus()}
+              onEnableWeixin={() => void ensureWeixinPluginEnabled()}
+              onInstallWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_install_terminal")}
+              onUpdateWeixin={() => void runWeixinTerminalAction("open_weixin_plugin_update_terminal")}
+              onLoginWeixin={() => void runWeixinTerminalAction("open_weixin_login_terminal")}
+              onInstallQqbotPlugin={() => void runQqbotPluginInstall()}
+              onRefreshQqbotStatus={() => void refreshQqbotPluginStatus()}
+              onLoadQqbotEditorForm={loadQqbotEditorForm}
+              onSaveQqbotSettings={(form) => void saveQqbotSettings(form)}
+              onDismissQqbotNotice={() => setQqbotNotice(null)}
+            feishuBusy={feishuBusy}
+            feishuNotice={feishuNotice}
+            onLoadFeishuEditorForm={loadFeishuEditorForm}
+            onSaveFeishuSettings={(form) => void saveFeishuSettings(form)}
+            onDismissFeishuNotice={() => setFeishuNotice(null)}
+            onRefreshFeishuStatus={() => void refreshGatewayConnections()}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "cron" ? (
-          <CronPage
-            gatewayConnected={gatewayConnected}
-            onOpenSessionKey={handleOpenCronSessionKey}
-          />
+          <Suspense fallback={lazyPageFallback}>
+            <CronPage
+              gatewayConnected={gatewayConnected}
+              agents={agents.map((agent) => ({ id: agent.id, name: agent.name }))}
+              onOpenSessionKey={handleOpenCronSessionKey}
+              t={t}
+            />
+          </Suspense>
         ) : null}
 
         {activeNav === "usage" ? (
-          <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} />
+          <Suspense fallback={lazyPageFallback}>
+            <UsagePage usage={usagePageReady ? usage : null} loading={usageLoading || !usagePageReady} t={t} />
+          </Suspense>
+        ) : null}
+
+        {activeNav === "pets" ? (
+          <Suspense fallback={lazyPageFallback}>
+            <PetsPage context={petContext} t={t} />
+          </Suspense>
+        ) : null}
+
+        {activeNav === "settings" ? (
+          <Suspense fallback={lazyPageFallback}>
+            <SettingsPage
+              settings={clawKitSettings}
+              loading={clawKitSettingsLoading}
+              error={clawKitSettingsError}
+              t={t}
+              patchSettings={patchSettings}
+              gatewayConnected={gatewayConnected}
+              gatewayStatusText={gatewayStatusText}
+              bootstrapStatus={bootstrapStatus}
+              openClawCliStatus={openClawCliStatus}
+              actionBusy={settingsOpenClawActionBusy || openClawGatewayBusy || openClawUpdateBusy || bindingInProgress}
+              actionMessage={settingsOpenClawActionMessage ?? openClawGatewayMessage ?? openClawUpdateMessage}
+              onRefreshOpenClaw={refreshSettingsOpenClawStatus}
+              onReconnectGateway={reconnectSettingsGateway}
+              onToggleGateway={() => void toggleOpenClawGateway()}
+              onRepairBinding={repairSettingsBinding}
+              onInstallOpenClaw={installOpenClawFromSettings}
+              onUpdateOpenClaw={() => void runOpenClawUpdate()}
+              onNavigate={handleNavChange}
+              patchOpenClawConfig={patchOpenClawConfig}
+              initialSection={settingsInitialSection}
+            />
+          </Suspense>
         ) : null}
       </div>
 
-      {openClawInfoOpen ? (
-        <aside className="openclaw-info-drawer" role="dialog" aria-modal="true">
-          <div className="openclaw-info-head">
-            <div className="openclaw-info-status">
-              <span className={`status-dot ${gatewayConnected ? "working" : "completed"}`} />
-              <div>
-                <strong>{gatewayConnected ? "OpenClaw 已连接" : "OpenClaw 未连接"}</strong>
-                <span>{gatewayStatusText}</span>
-              </div>
-            </div>
-            <button
-              className={`openclaw-connect-switch ${openClawGatewayBusy ? "busy" : ""}`}
-              type="button"
-              title={gatewayConnected ? "停止 OpenClaw Gateway" : "启动 OpenClaw Gateway"}
-              aria-label={gatewayConnected ? "停止 OpenClaw Gateway" : "启动 OpenClaw Gateway"}
-              aria-pressed={gatewayConnected}
-              disabled={openClawGatewayBusy}
-              onClick={() => void toggleOpenClawGateway()}
-            >
-              <input
-                type="checkbox"
-                checked={gatewayConnected}
-                readOnly
-                tabIndex={-1}
-              />
-              <span />
-            </button>
-          </div>
-          <div className="openclaw-info-metrics">
-            <div><span>会话</span><strong>{openClawStatus?.sessions?.count ?? "-"}</strong></div>
-            <div><span>默认模型</span><strong>{openClawStatus?.sessions?.defaults?.model || "-"}</strong></div>
-            <div><span>默认 Agent</span><strong>{openClawStatus?.heartbeat?.defaultAgentId || "-"}</strong></div>
-            {gatewayConnected && gatewayProcessUptimeLabel ? (
-              <div><span>Gateway 运行时长</span><strong title="基于连接握手时的进程 uptime，并随本机时间推算">约 {gatewayProcessUptimeLabel}</strong></div>
-            ) : null}
-          </div>
-          {gatewayConnected && gatewayRestartSentinelLine ? (
-            <p className="openclaw-restart-sentinel-hint">{gatewayRestartSentinelLine}</p>
-          ) : null}
-          <OpenClawUiDiagnostics
-            entries={uiFrameDiagnostics.entries}
-            capabilities={uiFrameDiagnostics.capabilities}
-            onClear={uiFrameDiagnostics.clear}
-          />
-          <div className={`openclaw-update-panel ${openClawCliStatus?.updateAvailable ? "available" : ""}`}>
-            <div className="openclaw-update-row">
-              <span>当前版本</span>
-              <strong>{openClawCliStatus?.installedVersion || openClawStatus?.runtimeVersion || "-"}</strong>
-            </div>
-            <div className="openclaw-update-row">
-              <span>最新版本</span>
-              <strong>{openClawCliStatus?.latestVersion || (openClawCliStatus?.latestCheckError ? "检测失败" : "-")}</strong>
-            </div>
-            {openClawCliStatus?.latestCheckError ? (
-              <p className="openclaw-update-note">{openClawCliStatus.latestCheckError}</p>
-            ) : null}
-            {openClawUpdateMessage ? <p className="openclaw-update-note">{openClawUpdateMessage}</p> : null}
-            {openClawGatewayMessage ? <p className="openclaw-update-note">{openClawGatewayMessage}</p> : null}
-            {openClawCliStatus?.updateAvailable ? (
-              <button className="openclaw-update-button" type="button" onClick={() => void runOpenClawUpdate()} disabled={openClawUpdateBusy}>
-                {openClawUpdateBusy ? "正在打开终端..." : "更新 OpenClaw"}
-              </button>
-            ) : null}
-          </div>
-          <div className="openclaw-info-actions">
-            <button className="openclaw-home-button" type="button" onClick={() => void openLocalOpenClaw()} title="打开本地 OpenClaw">
-              <span>⌂</span>
-              打开本地 OpenClaw
-            </button>
-          </div>
-        </aside>
-      ) : null}
+      <OpenClawInfoModal
+        open={openClawInfoOpen}
+        t={t}
+        gatewayConnected={gatewayConnected}
+        gatewayStatusText={gatewayStatusText}
+        openClawGatewayBusy={openClawGatewayBusy}
+        onClose={() => setOpenClawInfoOpen(false)}
+        onToggleGateway={() => void toggleOpenClawGateway()}
+        openClawStatus={openClawStatus}
+        gatewayProcessUptimeLabel={gatewayProcessUptimeLabel}
+        gatewayRestartSentinelLine={gatewayRestartSentinelLine}
+        uiFrameDiagnostics={uiFrameDiagnostics}
+        openClawCliStatus={openClawCliStatus}
+        openClawUpdateMessage={openClawUpdateMessage}
+        openClawGatewayMessage={openClawGatewayMessage}
+        openClawUpdateBusy={openClawUpdateBusy}
+        onRunOpenClawUpdate={() => void runOpenClawUpdate()}
+        onOpenLocalOpenClaw={() => void openLocalOpenClaw()}
+      />
     </main>
   );
 }

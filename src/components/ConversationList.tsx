@@ -7,13 +7,14 @@ type ConversationListItem = Conversation & {
 };
 
 type ConversationListProps = {
+  t: (key: string) => string;
   conversations: ConversationListItem[];
   statusLabel: Record<ConversationStatus, string>;
   onOpen: (conversationId: string) => void;
   onHide: (agentId: string, conversationId: string) => void;
 };
 
-export function ConversationList({ conversations, statusLabel, onOpen, onHide }: ConversationListProps) {
+export function ConversationList({ conversations, statusLabel, onOpen, onHide, t }: ConversationListProps) {
   return (
     <div className="conversation-grid chat-layout-single">
       {conversations.map((conversation) => (
@@ -23,6 +24,7 @@ export function ConversationList({ conversations, statusLabel, onOpen, onHide }:
           statusLabel={statusLabel}
           onOpen={onOpen}
           onHide={onHide}
+          t={t}
         />
       ))}
     </div>

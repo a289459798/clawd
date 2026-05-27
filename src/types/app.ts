@@ -1,7 +1,7 @@
 import type { Conversation, ConversationRuntime, MessagePart, PreviewMessage } from "./conversation";
 import type { GatewayModelsResult, OpenClawSnapshot } from "./gateway";
 
-export type NavKey = "conversations" | "models" | "skills" | "connections" | "usage" | "cron";
+export type NavKey = "conversations" | "models" | "skills" | "connections" | "usage" | "cron" | "pets" | "settings";
 export type AgentStatus = "working" | "completed" | "idle";
 
 export type Agent = {
@@ -102,7 +102,7 @@ export type UsageTotals = {
   errors?: number;
 };
 
-export type ClawxBootstrapStatus = {
+export type ClawKitBootstrapStatus = {
   openclawInstalled: boolean;
   openclawPath?: string | null;
   configExists: boolean;
@@ -115,6 +115,15 @@ export type ClawxBootstrapStatus = {
 };
 
 export type WeixinPluginStatus = {
+  installed: boolean;
+  enabled: boolean;
+  installedVersion?: string | null;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  latestCheckError?: string | null;
+};
+
+export type QqbotPluginStatus = {
   installed: boolean;
   enabled: boolean;
   installedVersion?: string | null;

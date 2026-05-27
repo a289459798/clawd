@@ -1,5 +1,7 @@
 import { formatTokenCount } from "./appFormatters";
+import { isConversationRunning } from "./conversationRunState";
 import { isInternalOpenClawMessage } from "./gatewayMessages";
+import { mergeSnapshotMessagesPreservingCurrentOrder } from "./toolStream";
 import type { Conversation, ConversationAgentRuntime, ConversationRuntime, PreviewMessage } from "../types/conversation";
 import type { GatewaySessionRow, OpenClawSnapshot } from "../types/gateway";
 import type { Agent, BuildAgentsOptions, ModelOption } from "../types/app";
@@ -7,11 +9,15 @@ import type { Agent, BuildAgentsOptions, ModelOption } from "../types/app";
 const COMPLETED_RECENT_WINDOW_MS = 10 * 60 * 1000;
 const SNAPSHOT_ACTIVE_GRACE_MS = 30 * 1000;
 const STALE_RUNNING_WINDOW_MS = 6 * 60 * 60 * 1000;
+const FORCE_IDLE_RUNNING_WINDOW_MS = 5 * 60 * 1000;
 
 export const deriveConversationStatus = (runtime?: ConversationRuntime) => {
   const now = Date.now();
   if (runtime?.activeRunId) {
     const lastActiveAt = runtime.lastEventAt ?? runtime.activeStartedAt;
+    if (lastActiveAt && now - lastActiveAt > FORCE_IDLE_RUNNING_WINDOW_MS) {
+      return "idle" as const;
+    }
     if (lastActiveAt && now - lastActiveAt > STALE_RUNNING_WINDOW_MS) {
       return "stopped" as const;
     }
@@ -124,7 +130,7 @@ export const patchConversation = (conversation: Conversation, updater: (conversa
 
 export function hasActiveAgentRun(agents: Agent[]) {
   return agents.some((agent) =>
-    agent.conversations.some((conversation) => Boolean(conversation.runtime?.activeRunId)),
+    agent.conversations.some((conversation) => isConversationRunning(conversation)),
   );
 }
 
@@ -159,8 +165,10 @@ export function buildAgentsFromSnapshot(
 
         const existingConversation = existing?.conversations.find((item) => item.id === session.key);
         const runtime = runtimeFromGatewaySession(session, existingConversation?.runtime, latestRole);
-        const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message));
-        const mergedPreviewMessages = sessionMessages as PreviewMessage[];
+        const sessionMessages = (session.preview_messages || []).filter((message) => !isInternalOpenClawMessage(message)) as PreviewMessage[];
+        const mergedPreviewMessages = existingConversation?.previewMessages?.length
+          ? mergeSnapshotMessagesPreservingCurrentOrder(existingConversation.previewMessages, sessionMessages)
+          : sessionMessages;
         const displayTitle = session.label || session.title;
         const alternateSessionKeys = session.id !== session.key ? [session.id] : undefined;
         const thinkingOptions = session.thinking_levels?.map((level) => ({
@@ -173,6 +181,9 @@ export function buildAgentsFromSnapshot(
           alternateSessionKeys,
           title: displayTitle,
           channel: session.channel,
+          parentSessionKey: session.parent_session_key,
+          childSessionKeys: session.child_sessions,
+          sessionKind: session.session_kind,
           status: deriveConversationStatus(runtime),
           lastMessage: (() => {
             const hasToolCalls = latestAssistantMessage?.parts?.some((p) => p.kind === "tool_call");
@@ -335,6 +346,9 @@ export function mergeGatewaySessionRowsIntoAgents(
           ...conversation,
           title: mergedTitle,
           channel: row.channel ?? row.lastChannel ?? conversation.channel,
+          parentSessionKey: row.parentSessionKey ?? conversation.parentSessionKey,
+          childSessionKeys: row.childSessions ?? conversation.childSessionKeys,
+          sessionKind: row.kind ?? conversation.sessionKind,
           model: row.model ?? conversation.model,
           thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
           thinkingOptions: row.thinkingLevels?.map((level) => ({
@@ -364,6 +378,9 @@ export function mergeGatewaySessionRowsIntoAgents(
           ...conversation,
           title: mergedTitle,
           channel: row.channel ?? row.lastChannel ?? conversation.channel,
+          parentSessionKey: row.parentSessionKey ?? conversation.parentSessionKey,
+          childSessionKeys: row.childSessions ?? conversation.childSessionKeys,
+          sessionKind: row.kind ?? conversation.sessionKind,
           model: row.model ?? conversation.model,
           thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
           thinkingOptions: row.thinkingLevels?.map((level) => ({
@@ -387,6 +404,9 @@ export function mergeGatewaySessionRowsIntoAgents(
         ...conversation,
         title: mergedTitle,
         channel: row.channel ?? row.lastChannel ?? conversation.channel,
+        parentSessionKey: row.parentSessionKey ?? conversation.parentSessionKey,
+        childSessionKeys: row.childSessions ?? conversation.childSessionKeys,
+        sessionKind: row.kind ?? conversation.sessionKind,
         model: row.model ?? conversation.model,
         thinkingDefault: row.thinkingDefault ?? conversation.thinkingDefault,
         thinkingOptions: row.thinkingLevels?.map((level) => ({

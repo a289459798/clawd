@@ -9,13 +9,18 @@ import type {
 } from "../types/gateway";
 
 type AgentFilesDialogProps = {
+  t: (key: string) => string;
   open: boolean;
   agentId: string | null;
   agentName?: string;
   onClose: () => void;
 };
 
-export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFilesDialogProps) {
+export function AgentFilesDialog({ open, agentId, agentName, onClose, t }: AgentFilesDialogProps) {
+  const tt = (key: string, fallback: string) => {
+    const value = t(key);
+    return value === key ? fallback : value;
+  };
   const [files, setFiles] = useState<GatewayAgentFileEntry[]>([]);
   const [workspace, setWorkspace] = useState("");
   const [selectedName, setSelectedName] = useState("");
@@ -67,7 +72,7 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
 
   const confirmDiscardChanges = () => {
     if (!isDirty) return true;
-    return window.confirm("当前文件有未保存内容，切换或关闭会丢失这些修改。是否继续？");
+    return window.confirm(tt("agent.files.unsavedConfirm", "You have unsaved changes. Switching or closing will discard them. Continue?"));
   };
 
   const handleClose = () => {
@@ -132,7 +137,7 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
       setFiles((current) => orderAgentFiles(current.map((file) => file.name === selectedFile.name ? result.file : file)));
       setContent(nextContent);
       setOriginalContent(nextContent);
-      setSavedMessage(`${selectedFile.name} 已保存`);
+      setSavedMessage(`${selectedFile.name} ${tt("common.saved", "saved")}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -149,17 +154,17 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
       <section className="agent-files-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-files-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="agent-create-header">
           <div>
-            <h2 id="agent-files-title">完善 Agent 身份文件</h2>
+            <h2 id="agent-files-title">{tt("agent.files.title", "Edit agent identity files")}</h2>
             <span>{agentName ? `${agentName} · ${agentId}` : agentId}</span>
           </div>
-          <button className="icon-only-button" type="button" onClick={handleClose} title="关闭">×</button>
+          <button className="icon-only-button" type="button" onClick={handleClose} title={tt("common.close", "Close")}>×</button>
         </div>
 
         <div className="agent-files-body">
-          <aside className="agent-files-list" aria-label="Agent 文件列表">
-            <div className="agent-files-workspace">{workspace || "读取工作区中..."}</div>
-            {loading ? <div className="agent-files-empty">正在读取文件...</div> : null}
-            {!loading && orderedFiles.length === 0 ? <div className="agent-files-empty">暂无可编辑文件</div> : null}
+          <aside className="agent-files-list" aria-label={tt("agent.files.listAria", "Agent file list")}>
+            <div className="agent-files-workspace">{workspace || tt("agent.files.loadingWorkspace", "Loading workspace...")}</div>
+            {loading ? <div className="agent-files-empty">{tt("agent.files.loading", "Loading files...")}</div> : null}
+            {!loading && orderedFiles.length === 0 ? <div className="agent-files-empty">{tt("agent.files.empty", "No editable files")}</div> : null}
             {orderedFiles.map((file) => (
               <button
                 className={`agent-file-tab ${selectedFile?.name === file.name ? "active" : ""}`}
@@ -174,7 +179,7 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
                 }}
               >
                 <strong>{file.name}</strong>
-                <span>{file.missing ? "待创建" : file.size ? `${file.size} bytes` : "已存在"}</span>
+                <span>{file.missing ? tt("agent.files.toCreate", "To create") : file.size ? `${file.size} bytes` : tt("agent.files.exists", "Exists")}</span>
               </button>
             ))}
           </aside>
@@ -187,7 +192,7 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
                     <strong>{selectedFile.name}</strong>
                     <span>{describeAgentFile(selectedFile.name)}</span>
                   </div>
-                  {isDirty ? <small>未保存</small> : null}
+                  {isDirty ? <small>{tt("agent.files.unsaved", "Unsaved")}</small> : null}
                 </div>
                 <textarea
                   value={content}
@@ -197,11 +202,11 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
                   }}
                   disabled={fileLoading || saving}
                   spellCheck={false}
-                  placeholder={fileLoading ? "读取中..." : "在这里完善 Agent 的身份、职责和工作方式"}
+                  placeholder={fileLoading ? tt("agent.files.reading", "Reading...") : tt("agent.files.editorPlaceholder", "Edit agent identity, responsibilities, and workflow here")}
                 />
               </>
             ) : (
-              <div className="agent-files-empty editor">选择一个文件开始编辑</div>
+              <div className="agent-files-empty editor">{tt("agent.files.selectToEdit", "Select a file to start editing")}</div>
             )}
           </section>
         </div>
@@ -210,14 +215,14 @@ export function AgentFilesDialog({ open, agentId, agentName, onClose }: AgentFil
         {savedMessage ? <div className="agent-files-saved">{savedMessage}</div> : null}
 
         <div className="agent-create-actions">
-          <button className="ghost-button" type="button" onClick={handleClose} disabled={saving}>完成</button>
+          <button className="ghost-button" type="button" onClick={handleClose} disabled={saving}>{tt("common.done", "Done")}</button>
           <button
             className="primary-action-button"
             type="button"
             disabled={!selectedFile || !isDirty || fileLoading || saving}
             onClick={() => void saveSelectedFile()}
           >
-            {saving ? "保存中..." : "保存文件"}
+            {saving ? tt("common.saving", "Saving...") : tt("agent.files.saveFile", "Save file")}
           </button>
         </div>
       </section>

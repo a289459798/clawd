@@ -11,6 +11,9 @@ export type SnapshotSession = {
   thinking_levels?: Array<{ id: string; label?: string }>;
   updated_at?: number;
   channel?: string;
+  parent_session_key?: string;
+  child_sessions?: string[];
+  session_kind?: string;
   session_file?: string;
   last_message?: string;
   last_role?: string;
@@ -347,9 +350,11 @@ export type GatewayUsageTotals = {
 
 export type GatewaySessionsListParams = {
   limit?: number;
+  offset?: number;
   activeMinutes?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
+  configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   label?: string;
@@ -415,6 +420,11 @@ export type GatewaySessionsListResult = {
   };
   sessions?: GatewaySessionRow[];
   agents?: Array<{ id: string; name?: string; workspace?: string; model?: string }>;
+  totalCount?: number;
+  limitApplied?: number | null;
+  offset?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
 };
 
 export type GatewaySessionsPreviewResult = {
@@ -435,7 +445,8 @@ export type GatewayPart =
   | { type: "toolcall" | "toolCall"; name?: string; arguments?: unknown }
   | { type: "toolresult" | "toolResult"; name?: string; text?: string }
   | { type: "image" | "input_image" | "image_url"; data?: string; url?: string; mimeType?: string; mime_type?: string; text?: string; alt?: string; image_url?: { url?: string } }
-  | { type: "file" | "attachment" | "input_file"; path?: string; url?: string; fileName?: string; filename?: string; name?: string; mimeType?: string; mime_type?: string; size?: number; text?: string };
+  | { type: "file" | "attachment" | "input_file"; path?: string; url?: string; fileName?: string; filename?: string; name?: string; mimeType?: string; mime_type?: string; size?: number; text?: string }
+  | { type: "presentation" | "button" | "buttons" | "control" | "interactive" | "card" | "rich"; title?: string; text?: string; label?: string; name?: string };
 
 export type GatewayUsage = {
   input?: number;
@@ -457,6 +468,8 @@ export type GatewayMessage = {
   senderLabel?: string;
   toolCallId?: string;
   toolName?: string;
+  deltaText?: string;
+  replace?: boolean;
   isError?: boolean;
   errorMessage?: string;
 };
@@ -467,6 +480,9 @@ export type GatewayChatEvent = {
   stream?: "tool" | "lifecycle" | "compaction" | "fallback" | string;
   sessionKey?: string;
   runId?: string;
+  isHeartbeat?: boolean;
+  deltaText?: string;
+  replace?: boolean;
   message?: GatewayMessage;
   data?: Record<string, unknown>;
   errorMessage?: string;

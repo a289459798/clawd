@@ -62,6 +62,32 @@ describe("mergeSnapshotMessagesPreservingCurrentOrder", () => {
     ]);
   });
 
+  it("keeps richer structured messages when snapshot only has the same text preview", () => {
+    const current: PreviewMessage[] = [
+      { role: "user", text: "查文件", timestamp: 1000 },
+      {
+        role: "assistant",
+        text: "完成了",
+        parts: [
+          { kind: "tool_call", tool: "read_file", args: JSON.stringify({ path: "src/App.tsx" }) },
+          { kind: "tool_result", tool: "read_file", text: "export function App() {}" },
+          { kind: "text", text: "完成了" },
+        ],
+        timestamp: 2000,
+        output_tokens: 12,
+      },
+    ];
+    const snapshot: PreviewMessage[] = [
+      {
+        role: "assistant",
+        text: "完成了",
+        parts: [{ kind: "text", text: "完成了" }],
+      },
+    ];
+
+    expect(mergeSnapshotMessagesPreservingCurrentOrder(current, snapshot)).toEqual(current);
+  });
+
   it("does not collapse repeated same text messages that are far apart", () => {
     const first: PreviewMessage = { role: "assistant", text: "收到", timestamp: 1000 };
     const second: PreviewMessage = { role: "assistant", text: "收到", timestamp: 10 * 60 * 1000 };

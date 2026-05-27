@@ -90,6 +90,71 @@ describe("buildAgentsFromSnapshot", () => {
     expect(buildAgentsFromSnapshot(snapshot, [])[0]?.conversations[0]?.model).toBe("gpt-5.5");
   });
 
+  it("does not replace loaded structured history with short text-only previews", () => {
+    const sessionKey = "agent:master:direct:830d";
+    const snapshot: OpenClawSnapshot = {
+      agents: [{ id: "master", name: "Master" }],
+      sessions: [
+        {
+          id: sessionKey,
+          agent_id: "master",
+          key: sessionKey,
+          title: "Session",
+          total_tokens: 100,
+          preview_messages: [
+            { role: "assistant", text: "完成了", parts: [{ kind: "text", text: "完成了" }] },
+          ],
+        },
+      ],
+      connections: [],
+      skills: [],
+    };
+    const current = [
+      {
+        id: "master",
+        name: "Master",
+        color: "#fff",
+        status: "idle" as const,
+        model: "gpt-5.5",
+        mdFile: "",
+        configPath: "",
+        summary: "",
+        conversations: [
+          {
+            id: sessionKey,
+            title: "Session",
+            status: "idle" as const,
+            lastMessage: "完成了",
+            lastTime: "—",
+            tokens: "42",
+            model: "gpt-5.5",
+            workspace: "",
+            visible: true,
+            previewMessages: [
+              { role: "user", text: "查一下文件", timestamp: 1 },
+              {
+                role: "assistant",
+                text: "完成了",
+                timestamp: 2,
+                output_tokens: 42,
+                parts: [
+                  { kind: "tool_call" as const, tool: "read_file", args: JSON.stringify({ path: "src/App.tsx" }) },
+                  { kind: "tool_result" as const, tool: "read_file", text: "export function App() {}" },
+                  { kind: "text" as const, text: "完成了" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const conversation = buildAgentsFromSnapshot(snapshot, current)[0]?.conversations[0];
+    expect(conversation?.tokens).toBe("100");
+    expect(conversation?.previewMessages?.[1]?.parts).toEqual(current[0]!.conversations[0]!.previewMessages![1]!.parts);
+    expect(conversation?.previewMessages?.[1]?.output_tokens).toBe(42);
+  });
+
   it("maps session thinking levels and default onto conversations", () => {
     const snapshot: OpenClawSnapshot = {
       agents: [{ id: "master", name: "Master" }],

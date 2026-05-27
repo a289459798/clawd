@@ -20,6 +20,11 @@ import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage, stripInboundWrapperText } from "../lib/gatewayMessages";
 import { buildToolTimelineItems } from "../lib/toolStream";
 import type { MessagePart, PreviewMessage } from "../types/conversation";
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
 const INITIAL_CONVERSATION_ROW_COUNT = 120;
 const CONVERSATION_ROW_BATCH_SIZE = 80;
@@ -43,7 +48,7 @@ SyntaxHighlighter.registerLanguage("tsx", tsx);
 SyntaxHighlighter.registerLanguage("typescript", typescript);
 SyntaxHighlighter.registerLanguage("ts", typescript);
 
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+function CodeBlock({ code, language, t }: { code: string; language?: string; t: TranslateFn }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -57,7 +62,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
       <div className="code-block-toolbar">
         <span className="code-block-language">{language || "text"}</span>
         <button className="code-block-copy-button" type="button" onClick={handleCopy}>
-          {copied ? "已复制" : "复制"}
+          {copied ? tt(t, "common.copied", "Copied") : tt(t, "common.copy", "Copy")}
         </button>
       </div>
       <SyntaxHighlighter
@@ -83,7 +88,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
   );
 }
 
-function MarkdownBlock({ content, className }: { content: string; className?: string }) {
+function MarkdownBlock({ content, className, t }: { content: string; className?: string; t: TranslateFn }) {
   return (
     <div className={className}>
       <ReactMarkdown
@@ -98,7 +103,7 @@ function MarkdownBlock({ content, className }: { content: string; className?: st
             if (!isBlock) {
               return <code className="inline-code" {...rest}>{children}</code>;
             }
-            return <CodeBlock code={value} language={language} />;
+            return <CodeBlock code={value} language={language} t={t} />;
           },
         }}
       >
@@ -116,12 +121,24 @@ function normalizeImageSrc(data: string, mimeType?: string) {
   return `data:${mime};base64,${data}`;
 }
 
+function formatMessageTime(timestamp?: number) {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return "";
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function MessageBubbleWithCopy({
   text,
   imageVariant,
+  t,
 }: {
   text: string;
   imageVariant: "user" | "assistant" | "tool";
+  t: TranslateFn;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -139,7 +156,7 @@ function MessageBubbleWithCopy({
             className="message-copy-button"
             type="button"
             onClick={handleCopy}
-            title={copied ? "已复制" : "复制内容"}
+            title={copied ? tt(t, "common.copied", "Copied") : tt(t, "common.copyContent", "Copy content")}
           >
             {copied ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -154,9 +171,9 @@ function MessageBubbleWithCopy({
           </button>
         ) : null}
         {text.includes("```") ? (
-          <MarkdownBlock content={text} className="markdown-body" />
+          <MarkdownBlock content={text} className="markdown-body" t={t} />
         ) : (
-          <MarkdownBlock content={text} className="markdown-body" />
+          <MarkdownBlock content={text} className="markdown-body" t={t} />
         )}
       </div>
     </div>
@@ -168,11 +185,13 @@ function StructuredMessageContent({
   conversationId,
   onOpenImage,
   imageVariant = "assistant",
+  t,
 }: {
   parts: MessagePart[];
   conversationId: string;
   onOpenImage: (src: string) => void;
   imageVariant?: "user" | "assistant" | "tool";
+  t: TranslateFn;
 }) {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [openFileError, setOpenFileError] = useState<string | null>(null);
@@ -189,15 +208,15 @@ function StructuredMessageContent({
     const key = `${conversationId}-tools-${elements.length}`;
     const failedCount = toolList.filter((item) => item.status === "failed").length;
     const runningCount = toolList.filter((item) => item.status === "running").length;
-    const statusLabel = failedCount > 0 ? `${failedCount} 项失败` : runningCount > 0 ? `${runningCount} 项进行中` : "已完成";
+    const statusLabel = failedCount > 0 ? `${failedCount} ${tt(t, "tool.failedItems", "failed")}` : runningCount > 0 ? `${runningCount} ${tt(t, "tool.runningItems", "running")}` : tt(t, "tool.completed", "Completed");
     elements.push(
       <div className="tool-call-box" key={key}>
         <button className="tool-call-summary" type="button" onClick={() => setToolsExpanded((v) => !v)}>
           <span className={`tool-call-status-dot ${failedCount > 0 ? "failed" : runningCount > 0 ? "running" : "completed"}`} aria-hidden="true" />
-          <span className="tool-call-summary-label">{toolList.length} 项工具操作</span>
+          <span className="tool-call-summary-label">{toolList.length} {tt(t, "tool.operations", "tool operations")}</span>
           <span className="tool-call-summary-items">{Array.from(new Set(toolList.map((item) => item.tool))).slice(0, 3).join(" · ")}</span>
           <span className={`tool-call-summary-status ${failedCount > 0 ? "failed" : runningCount > 0 ? "running" : "completed"}`}>{statusLabel}</span>
-          <span className="tool-call-summary-toggle">{toolsExpanded ? "收起" : "展开"}</span>
+          <span className="tool-call-summary-toggle">{toolsExpanded ? tt(t, "common.collapse", "Collapse") : tt(t, "common.expand", "Expand")}</span>
         </button>
         {toolsExpanded ? (
           <ol className="tool-call-detail-list">
@@ -207,23 +226,23 @@ function StructuredMessageContent({
                   <span className="tool-call-step-index">{index + 1}</span>
                   <span className="tool-call-detail-name">{item.tool}</span>
                   <span className={`tool-call-detail-status ${item.status}`}>
-                    {item.status === "running" ? "进行中" : item.status === "failed" ? "失败" : "完成"}
+                    {item.status === "running" ? tt(t, "tool.running", "Running") : item.status === "failed" ? tt(t, "tool.failed", "Failed") : tt(t, "tool.done", "Done")}
                   </span>
                 </div>
-                {item.argSummary ? <div className="tool-call-plain-summary">输入：{item.argSummary}</div> : null}
-                {item.outputSummary ? <div className="tool-call-plain-summary">结果：{item.outputSummary}</div> : null}
+                {item.argSummary ? <div className="tool-call-plain-summary">{tt(t, "tool.input", "Input")}: {item.argSummary}</div> : null}
+                {item.outputSummary ? <div className="tool-call-plain-summary">{tt(t, "tool.result", "Result")}: {item.outputSummary}</div> : null}
                 {item.args || item.result ? (
                   <details className="tool-call-raw-details">
-                    <summary>原始详情</summary>
+                    <summary>{tt(t, "tool.rawDetails", "Raw details")}</summary>
                     {item.args ? (
                       <>
-                        <div className="tool-call-detail-caption">输入参数</div>
+                        <div className="tool-call-detail-caption">{tt(t, "tool.inputArgs", "Input args")}</div>
                         <pre className="tool-call-detail-args">{item.args}</pre>
                       </>
                     ) : null}
                     {item.result ? (
                       <>
-                        <div className="tool-call-detail-caption">返回内容</div>
+                        <div className="tool-call-detail-caption">{tt(t, "tool.returnContent", "Return content")}</div>
                         <pre className="tool-call-detail-args">{item.result}</pre>
                       </>
                     ) : null}
@@ -247,13 +266,13 @@ function StructuredMessageContent({
     flushToolTimeline();
     if (part.kind === "text") {
       if (!part.text?.trim()) continue;
-      elements.push(<MessageBubbleWithCopy key={`${conversationId}-text-${i}`} text={part.text} imageVariant={imageVariant} />);
+      elements.push(<MessageBubbleWithCopy key={`${conversationId}-text-${i}`} text={part.text} imageVariant={imageVariant} t={t} />);
     } else if (part.kind === "image") {
       const src = normalizeImageSrc(part.data, part.mime_type);
       elements.push(
         <button className={`message-image-card ${imageVariant}`} key={`${conversationId}-image-${i}`} type="button" onClick={() => onOpenImage(src)}>
-          <img className="message-image" src={src} alt={part.alt ?? "图片内容"} />
-          <span className="message-image-badge">{imageVariant === "user" ? "用户图片" : "图片"}</span>
+          <img className="message-image" src={src} alt={part.alt ?? tt(t, "conversation.imageContent", "Image content")} />
+          <span className="message-image-badge">{imageVariant === "user" ? tt(t, "conversation.userImage", "User image") : tt(t, "conversation.image", "Image")}</span>
         </button>,
       );
     } else if (part.kind === "file") {
@@ -263,7 +282,7 @@ function StructuredMessageContent({
           key={`${conversationId}-file-${i}`}
           type="button"
           disabled={!part.path}
-          title={part.path ? `打开 ${part.path}` : part.name}
+          title={part.path ? `${tt(t, "common.open", "Open")} ${part.path}` : part.name}
           onClick={async () => {
             if (!part.path) return;
             try {
@@ -279,6 +298,24 @@ function StructuredMessageContent({
           <span className="message-file-meta">{[part.mime_type, formatFileSize(part.size)].filter(Boolean).join(" · ")}</span>
         </button>,
       );
+    } else if (part.kind === "rich") {
+      const labelKey = part.type === "presentation"
+        ? "conversation.presentationContent"
+        : part.type === "button" || part.type === "buttons" || part.type === "control" || part.type === "interactive"
+          ? "conversation.interactiveContent"
+          : "conversation.structuredContent";
+      const labelFallback = part.type === "presentation"
+        ? "Presentation content"
+        : part.type === "button" || part.type === "buttons" || part.type === "control" || part.type === "interactive"
+          ? "Interactive content"
+          : "Structured content";
+      elements.push(
+        <div className={`message-rich-card ${imageVariant}`} key={`${conversationId}-rich-${i}`}>
+          <span className="message-rich-type">{tt(t, labelKey, labelFallback)}</span>
+          {part.title ? <strong className="message-rich-title">{part.title}</strong> : null}
+          {part.text ? <span className="message-rich-text">{part.text}</span> : null}
+        </div>,
+      );
     }
   }
   flushToolTimeline();
@@ -286,7 +323,7 @@ function StructuredMessageContent({
   return (
     <>
       {elements}
-      {openFileError ? <div className="message-file-error">无法打开附件：{openFileError}</div> : null}
+      {openFileError ? <div className="message-file-error">{tt(t, "conversation.openAttachmentFailed", "Failed to open attachment")}: {openFileError}</div> : null}
     </>
   );
 }
@@ -305,16 +342,18 @@ function MessageMeta({
   message,
   formatTokenCount,
   role,
+  t,
 }: {
   message: PreviewMessage;
   formatTokenCount: (value?: number) => string;
   role: "user" | "assistant";
+  t: TranslateFn;
 }) {
   if (role !== "assistant" || !hasMessageMeta(message)) return null;
 
   return (
     <div className="message-meta">
-      <span className="message-meta-model">{message.model || "模型未返回"}</span>
+      <span className="message-meta-model">{message.model || tt(t, "models.notReturned", "Model not returned")}</span>
       <span className="message-meta-divider">·</span>
       <span className="message-meta-tokens">
         <span className="token-item">↑{formatTokenCount(message.output_tokens)}</span>
@@ -327,6 +366,7 @@ function MessageMeta({
 }
 
 type ConversationMessageListBaseProps = {
+  t: TranslateFn;
   messages: PreviewMessage[];
   conversationId: string;
   onOpenImage: (src: string) => void;
@@ -338,6 +378,7 @@ type ConversationMessageListInternalProps = ConversationMessageListBaseProps & {
 };
 
 function ConversationMessageListInternal({
+  t,
   messages,
   conversationId,
   onOpenImage,
@@ -381,6 +422,30 @@ function ConversationMessageListInternal({
       if (parts.length === 0) return true;
       return parts.every((part) => part.kind === "text");
     };
+    const compactText = (value: string) => value.replace(/\s+/g, " ").trim();
+    const messageRichnessScore = (msg: PreviewMessage) => {
+      const parts = msg.parts ?? [];
+      const nonTextParts = parts.filter((part) => part.kind !== "text").length;
+      const tokenFields = [msg.input_tokens, msg.output_tokens, msg.cache_read_tokens, msg.cache_write_tokens]
+        .filter((value) => typeof value === "number" && value > 0).length;
+      return nonTextParts * 10 + tokenFields * 3 + (msg.model ? 2 : 0) + parts.length;
+    };
+    const mergeDuplicateAssistantMessage = (previous: PreviewMessage, next: PreviewMessage) => {
+      const preferred = messageRichnessScore(next) >= messageRichnessScore(previous) ? next : previous;
+      const fallback = preferred === next ? previous : next;
+      return {
+        ...preferred,
+        model: preferred.model ?? fallback.model,
+        provider: preferred.provider ?? fallback.provider,
+        api: preferred.api ?? fallback.api,
+        input_tokens: preferred.input_tokens ?? fallback.input_tokens,
+        output_tokens: preferred.output_tokens ?? fallback.output_tokens,
+        cache_read_tokens: preferred.cache_read_tokens ?? fallback.cache_read_tokens,
+        cache_write_tokens: preferred.cache_write_tokens ?? fallback.cache_write_tokens,
+        timestamp: Math.max(preferred.timestamp ?? 0, fallback.timestamp ?? 0) || preferred.timestamp || fallback.timestamp,
+        displayRepeatCount: undefined,
+      };
+    };
     const collapsedMessages = normalizedMessages.reduce<PreviewMessage[]>((acc, message) => {
       const previous = acc[acc.length - 1];
       const role = message.role?.toLowerCase();
@@ -404,6 +469,10 @@ function ConversationMessageListInternal({
         const nextText = cleanText(message.text);
         const previousHasTools = (previous.parts ?? []).some((part) => part.kind === "tool_call");
         const nextHasTools = (message.parts ?? []).some((part) => part.kind === "tool_call");
+        if (previousText && nextText && compactText(previousText) === compactText(nextText)) {
+          acc[acc.length - 1] = mergeDuplicateAssistantMessage(previous, message);
+          return acc;
+        }
         if (!previousHasTools && !nextHasTools && previousText && nextText) {
           if (previousText === nextText) {
             acc[acc.length - 1] = {
@@ -469,8 +538,8 @@ function ConversationMessageListInternal({
           type="button"
           onClick={() => setVisibleRowCount((current) => current + CONVERSATION_ROW_BATCH_SIZE)}
         >
-          加载更早消息
-          <span>还有 {hiddenEarlierRowCount} 条未显示</span>
+          {tt(t, "conversation.loadEarlier", "Load earlier messages")}
+          <span>{tt(t, "conversation.hiddenCountPrefix", "Still")} {hiddenEarlierRowCount} {tt(t, "conversation.hiddenCountSuffix", "hidden")}</span>
         </button>
       ) : null}
       {displayedRows.map((row) => {
@@ -484,6 +553,7 @@ function ConversationMessageListInternal({
                 conversationId={`${conversationId}-tool-group-${groupKey}`}
                 onOpenImage={onOpenImage}
                 imageVariant="tool"
+                t={t}
               />
             </div>
           );
@@ -492,10 +562,11 @@ function ConversationMessageListInternal({
         const { message } = row;
         const messageRole = message.role?.toLowerCase() === "user" ? "user" : "assistant";
         const parts = message.parts?.length ? message.parts : [{ kind: "text", text: message.text } as MessagePart];
+        const messageTime = mode === "conversation" ? formatMessageTime(message.timestamp) : "";
         return (
           <div className={`message-stack ${messageRole}`} key={`${conversationId}-message-${row.index}`}>
             {message.displayRepeatCount && message.displayRepeatCount > 1 ? (
-              <div className="message-repeat-badge" title={`连续重复相同文本 ${message.displayRepeatCount} 条，已合并展示`}>
+              <div className="message-repeat-badge" title={`${tt(t, "conversation.repeatMergedPrefix", "Merged")} ${message.displayRepeatCount} ${tt(t, "conversation.repeatMergedSuffix", "repeated messages")}`}>
                 ×{message.displayRepeatCount}
               </div>
             ) : null}
@@ -504,8 +575,14 @@ function ConversationMessageListInternal({
               conversationId={`${conversationId}-${row.index}`}
               onOpenImage={onOpenImage}
               imageVariant={messageRole}
+              t={t}
             />
-            <MessageMeta message={message} formatTokenCount={formatTokenCount} role={messageRole} />
+            <MessageMeta message={message} formatTokenCount={formatTokenCount} role={messageRole} t={t} />
+            {messageTime ? (
+              <time className="message-time-badge conversation-message-time" dateTime={new Date(message.timestamp as number).toISOString()}>
+                {messageTime}
+              </time>
+            ) : null}
           </div>
         );
       })}

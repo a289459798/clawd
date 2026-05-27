@@ -1,11 +1,11 @@
 # OpenClaw Gateway Alignment Development Guide
 
 > Last updated: 2026-04-28
-> Scope: clawx desktop workbench integration with local OpenClaw.
+> Scope: clawkit desktop workbench integration with local OpenClaw.
 
 ## Goal
 
-clawx should behave as a local desktop workbench for OpenClaw, not as a parallel
+clawkit should behave as a local desktop workbench for OpenClaw, not as a parallel
 implementation of OpenClaw session, agent, skill, or channel logic. The primary
 integration contract is OpenClaw Gateway RPC/events. Local file reads are useful
 for bootstrap and fallback, but they should not become the long-term source of
@@ -34,7 +34,7 @@ Useful source anchors:
 
 ## Current State
 
-clawx already has a working Tauri + React shell with real Gateway messaging:
+clawkit already has a working Tauri + React shell with real Gateway messaging:
 
 - Gateway WebSocket connect and request/response proxy exist in
   `src-tauri/src/gateway_proxy.rs`.
@@ -45,7 +45,7 @@ clawx already has a working Tauri + React shell with real Gateway messaging:
 - The list page and realtime watcher still rely heavily on
   `load_openclaw_snapshot`, which reads local config/session files directly.
 
-The main mismatch is that session state is now partly implemented by clawx
+The main mismatch is that session state is now partly implemented by clawkit
 itself. OpenClaw docs say session state is owned by the Gateway and UI clients
 should query the Gateway for session data. That matters because OpenClaw's
 session store resolution supports custom `session.store`, `{agentId}` templates,
@@ -147,7 +147,7 @@ should be additive, so regressions can fall back cleanly.
 Success criteria:
 
 - Conversation list comes from canonical Gateway rows when Gateway is available.
-- Custom and templated session stores are no longer invisible to clawx.
+- Custom and templated session stores are no longer invisible to clawkit.
 - Hidden/visible local UI state is preserved across refreshes.
 
 ### Phase 3: Replace Polling Realtime Watcher
@@ -184,7 +184,7 @@ Success criteria:
 
 - Do not remove file fallback until Gateway RPC parity is verified.
 - Do not duplicate OpenClaw key normalization or session store discovery in
-  clawx. Treat Gateway rows as canonical.
+  clawkit. Treat Gateway rows as canonical.
 - Do not add `model` to `chat.send`; OpenClaw schema does not accept it. Use
   `sessions.patch` before sending.
 - Do not rely on config paths only. OpenClaw supports `OPENCLAW_CONFIG_PATH` and
@@ -219,4 +219,4 @@ Implement Phase 1 with the smallest possible patch:
 3. Keep existing UI behavior unchanged.
 4. Verify both builds.
 
-This gives clawx the canonical Gateway surfaces before changing list rendering.
+This gives clawkit the canonical Gateway surfaces before changing list rendering.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractTextFromGatewayMessage, mapGatewayContentToParts, stripInboundWrapperText } from "./gatewayMessages";
+import { extractGatewayDeltaFrame, extractTextFromGatewayMessage, mapGatewayContentToParts, stripInboundWrapperText } from "./gatewayMessages";
 
 describe("stripInboundWrapperText", () => {
   it("removes leading inbound metadata blocks and keeps user text", () => {
@@ -79,6 +79,33 @@ describe("stripInboundWrapperText", () => {
         size: 2048,
       },
     ]);
+  });
+
+  it("keeps rich-only gateway content renderable", () => {
+    const message = {
+      content: [
+        { type: "presentation" as const, title: "月度总结" },
+        { type: "button" as const, label: "打开报告" },
+      ],
+    };
+
+    expect(extractTextFromGatewayMessage(message)).toBe("");
+    expect(mapGatewayContentToParts(message)).toEqual([
+      { kind: "rich", type: "presentation", title: "月度总结", text: undefined },
+      { kind: "rich", type: "button", title: "打开报告", text: undefined },
+    ]);
+  });
+
+  it("extracts v4 explicit delta text and replace flag", () => {
+    expect(extractGatewayDeltaFrame({
+      deltaText: "新文本",
+      replace: true,
+      message: { text: "旧快照" },
+    })).toEqual({ deltaText: "新文本", replace: true });
+
+    expect(extractGatewayDeltaFrame({
+      data: { deltaText: "增量", replace: false },
+    })).toEqual({ deltaText: "增量", replace: false });
   });
 
   it("treats metadata-only gateway-client messages as internal", async () => {

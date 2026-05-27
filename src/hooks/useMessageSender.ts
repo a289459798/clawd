@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Agent, ComposerAttachment, GatewayCreateSessionResult, ModelOption, QueuedComposerMessage } from "../types/app";
 import type { MessagePart } from "../types/conversation";
 import { patchConversation } from "../lib/agentsSnapshot";
-import { canonicalizeModelRef } from "../lib/modelOptions";
+import { canonicalizeModelRef, isUnconfiguredModelRef, normalizeModelKey } from "../lib/modelOptions";
+import { measureAsync } from "../lib/perfDebug";
 
 interface UseMessageSenderProps {
   agents: Agent[];
@@ -140,16 +141,18 @@ export function useMessageSender({
     // If draft, create real session first
     let realSessionKey = conversationId;
     try {
-      await invoke("gateway_connect");
+      await measureAsync("send.gateway_connect", () => invoke("gateway_connect"), 300);
 
       if (isDraft && draftAgentId) {
-        const result = await invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
-          params: {
-            agentId: draftAgentId,
-            model: composerModel || null,
-            message: "",
-          },
-        });
+        const result = await measureAsync("send.sessions_create", () =>
+          invoke<GatewayCreateSessionResult>("gateway_sessions_create", {
+            params: {
+              agentId: draftAgentId,
+              model: composerModel || null,
+              message: "",
+            },
+          }),
+        );
         if (!result.key) {
           throw new Error("创建会话失败，未返回 session key");
         }
@@ -195,17 +198,24 @@ export function useMessageSender({
         ?.provider;
       const selectedModel = canonicalizeModelRef(options?.model ?? composerModel, modelOptions, lastAssistantProvider);
       const selectedThinking = options?.thinking ?? (composerThinking || "off");
+      const currentModel = canonicalizeModelRef(updatedConversation?.model ?? "", modelOptions, lastAssistantProvider);
       const patchParams: Record<string, unknown> = { sessionKey: realSessionKey };
-      if (selectedModel && selectedModel !== "未配置") {
+      if (
+        selectedModel
+        && !isUnconfiguredModelRef(selectedModel)
+        && normalizeModelKey(selectedModel) !== normalizeModelKey(currentModel)
+      ) {
         patchParams.model = selectedModel;
       }
       if (selectedThinking !== (updatedConversation?.thinkingDefault ?? "off")) {
         patchParams.thinkingLevel = selectedThinking;
       }
       if (Object.keys(patchParams).length > 1) {
-        await invoke("gateway_sessions_patch", {
-          params: patchParams,
-        });
+        await measureAsync("send.sessions_patch", () =>
+          invoke("gateway_sessions_patch", {
+            params: patchParams,
+          }),
+        );
         onAgentsChange((current) => current.map((agent) => ({
           ...agent,
           conversations: agent.conversations.map((conversation) => {
@@ -219,7 +229,7 @@ export function useMessageSender({
         })));
       }
 
-      const runId = `clawx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const runId = `clawkit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       onActiveRunIdChange(runId);
       optimisticStarted = true;
 
@@ -249,19 +259,21 @@ export function useMessageSender({
         }),
       })));
 
-      const chatSendResult = await invoke<unknown>("gateway_chat_send", {
-        params: {
-          sessionKey: realSessionKey,
-          message,
-          idempotencyKey: runId,
-          attachments: attachments.map((item) => ({
-            dataUrl: item.dataUrl,
-            mimeType: item.mimeType,
-            fileName: item.name,
-            type: item.mimeType.startsWith("image/") ? "image" : "file",
-          })),
-        },
-      });
+      const chatSendResult = await measureAsync("send.chat_send", () =>
+        invoke<unknown>("gateway_chat_send", {
+          params: {
+            sessionKey: realSessionKey,
+            message,
+            idempotencyKey: runId,
+            attachments: attachments.map((item) => ({
+              dataUrl: item.dataUrl,
+              mimeType: item.mimeType,
+              fileName: item.name,
+              type: item.mimeType.startsWith("image/") ? "image" : "file",
+            })),
+          },
+        }),
+      );
       const started = assertGatewayChatSendStarted(chatSendResult);
       if (started.runId && started.runId !== runId) {
         onActiveRunIdChange(started.runId);
@@ -279,7 +291,7 @@ export function useMessageSender({
           }),
         })));
       }
-      await refreshGatewayStatus();
+      await measureAsync("send.refresh_gateway_status", refreshGatewayStatus, 300);
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
 
@@ -332,7 +344,7 @@ export function useMessageSender({
             }),
           })));
         }
-        await refreshGatewayStatus();
+        await measureAsync("send.conflict_refresh_gateway_status", refreshGatewayStatus, 300);
         return;
       }
 
@@ -375,7 +387,7 @@ export function useMessageSender({
           [realSessionKey]: [options.requeueOnError!, ...(current[realSessionKey] ?? [])],
         }));
       }
-      await refreshGatewayStatus();
+      await measureAsync("send.error_refresh_gateway_status", refreshGatewayStatus, 300);
     }
   }, [agents, composerModel, composerThinking, modelOptions, onAgentsChange, onGatewayError, onGatewayStatusTextChange, onSendingChange, onActiveRunIdChange, onComposerValueChange, onComposerAttachmentsChange, onConversationSendError, onQueuedMessagesChange, refreshGatewayStatus, setActiveConversationId, setExpandedConversationId]);
 

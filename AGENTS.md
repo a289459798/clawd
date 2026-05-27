@@ -1,10 +1,10 @@
-# clawx 开发规范
+# ClawKit 开发规范
 
 本文档是后续 AI / 开发者接手本仓库时必须优先遵守的工程约束。改动代码前先读本文件，再按需阅读 `README.md`、`PROJECT_STATUS.md` 和 `docs/plans/`。
 
 ## 项目定位
 
-clawx 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，也不是 OpenClaw 的平行实现。
+ClawKit 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，也不是 OpenClaw 的平行实现。
 
 开发时保持这个方向：
 
@@ -13,9 +13,23 @@ clawx 是 OpenClaw 的本地桌面工作台，不是新的聊天机器人 UI，�
 - 隐藏对话只是从主工作区隐藏，不是删除，也不能让会话从可检索数据源消失。
 - 设计应克制、耐用、适合长期工作，不要改回营销页、大 dashboard、超大标题或装饰性展示页。
 
+## 普通用户产品原则
+
+ClawKit 更多面向普通用户，而不是只面向熟悉 OpenClaw CLI、Gateway RPC、cron、配置文件和开发者术语的技术用户。
+
+新增或修改功能时默认按以下原则设计：
+
+- 先给出普通用户能理解的入口，再把高级配置收进「高级」「更多选项」「调试信息」等二级入口。
+- 页面主路径应使用用户语言，例如“让 AI 做什么”“什么时候执行”“由谁来做”，不要把 `cron`、`RRULE`、`Gateway payload`、`session key`、`schema` 等术语直接放在主流程里。
+- 能通过模板、预设、推荐默认值降低理解成本的功能，应优先提供模板/预设，并允许用户套用后继续手动修改。
+- 创建 Agent、定时任务、模型配置、技能安装、通道连接等流程，应尽量是“填少量必要信息即可完成”的向导式体验；高级用户需要的原始配置可以保留，但不应压在新手主路径上。
+- 错误信息必须告诉用户下一步该做什么，例如“升级 OpenClaw 后可启用此功能”“请先连接 Gateway”“请用管理员权限重试或改用前台运行”，不要只展示底层异常。
+- 不能因为面向普通用户就隐藏风险：涉及代码执行、zip 技能安装、覆盖配置、删除/重置、外部命令时，必须用清楚的人话说明风险并要求确认。
+- 普通用户路径仍必须尊重 OpenClaw 的数据来源和 schema；产品化包装只能发生在 ClawKit UI/转换层，不能绕过 Gateway 或写入 OpenClaw 不接受的字段。
+
 ## 平台兼容
 
-clawx 是桌面应用，核心交付平台必须同时兼容：
+ClawKit 是桌面应用，核心交付平台必须同时兼容：
 
 - macOS
 - Windows
@@ -61,6 +75,22 @@ OpenClaw Gateway RPC/events 是运行态和规范数据的第一来源。
 - Gateway 事件不是完整历史回放；UI 遇到断线、切换会话、final/error/abort 后，应通过 `chat.history` 或对应列表 RPC 做 reconciliation。
 - 本地 optimistic UI 状态要和 Gateway canonical rows 分开，刷新时不能擦掉正在发送或流式生成中的本地消息。
 
+## OpenClaw 版本与能力门槛
+
+部分 ClawKit 功能依赖本地 OpenClaw CLI / Gateway 的最低版本。不能假设用户已经安装最新 OpenClaw，也不能让低版本用户在不知情的情况下进入必然失败的功能路径。
+
+开发守则：
+
+- 需要新版 OpenClaw 的功能必须声明明确的最低版本或能力条件，并集中到版本/能力判断 helper 中，不要在多个页面散落硬编码判断。
+- 推荐版本和功能最低版本要分开：推荐版本用于升级提示，最低版本用于决定某个功能是否可启用。
+- 版本过低时，默认不阻断整个应用；应禁用或降级具体功能，并给出普通用户可理解的升级说明和可操作按钮/入口。
+- 如果功能可以 fallback 到旧能力，应优先降级使用旧 RPC 或只读展示；如果无法安全 fallback，必须禁用入口而不是让用户提交后失败。
+- 检测不到版本或 Gateway 不可用时，功能门槛应走保守策略：避免启用依赖新版 schema 的写操作，并提示“连接/检测后可用”。
+- 新增 Gateway RPC、event 字段、配置键或 CLI 能力时，必须先核对本机 OpenClaw / `clawdbot` schema；前端不得向旧版本 `chat.send`、`agents.create`、`cron.add` 等 payload 塞 schema 不接受的字段。
+- 对普通用户展示的是“升级 OpenClaw 后可使用某功能”，不是“缺少 RPC / schema mismatch”；调试详情可以放到展开区或复制诊断信息里。
+- 设置页和信息弹层应能显示当前 OpenClaw CLI 路径、当前版本、最新版本、是否可更新，以及更新失败的可读原因。
+- 与版本门槛相关的纯函数应放在 `src/lib/` 并补测试；涉及功能启用/禁用的 UI 应覆盖 i18n、深浅色和禁用态。
+
 ## 模型管理原则
 
 模型页是 OpenClaw provider / model 配置的友好入口，不是独立模型注册中心。
@@ -72,9 +102,9 @@ OpenClaw Gateway RPC/events 是运行态和规范数据的第一来源。
   - Provider 配置承载 `baseUrl`、`apiKey`、OAuth 状态等连接信息。
   - Model 配置只承载模型名称、别名、是否默认等使用层信息。
 - 未配置 provider 时，右侧模型列表应禁用并提示“请先配置 Provider”，不要让用户误以为模型可直接使用。
-- 默认模型通过配置 patch 保存到 OpenClaw 配置，例如 `agents.defaults.model.primary`，并维护对应 allowlist；不要把默认模型只存在 clawx 前端状态里。
+- 默认模型通过配置 patch 保存到 OpenClaw 配置，例如 `agents.defaults.model.primary`，并维护对应 allowlist；不要把默认模型只存在 ClawKit 前端状态里。
 - 写 OpenClaw 配置时必须走 `config.get` + `baseHash` + `config.patch`，避免覆盖用户或 Gateway 同时写入的配置。
-- 支持 OAuth 的 provider 应打开外部浏览器或可见系统终端执行授权流程，例如 `openclaw models auth login --provider <providerId>`；不要在 clawx 内嵌不透明授权 WebView。
+- 支持 OAuth 的 provider 应打开外部浏览器或可见系统终端执行授权流程，例如 `openclaw models auth login --provider <providerId>`；不要在 ClawKit 内嵌不透明授权 WebView。
 - API Key 不要在界面里回显真实值。后续接入 SecretRef 时，应优先使用 OpenClaw 的 secret/schema 能力，而不是自建一套密钥存储。
 - 发送消息时不要往 `chat.send` 追加 OpenClaw schema 不接受的模型字段；模型切换如果需要落到会话配置，应先通过 Gateway 的 session/config 方法保存。
 
@@ -102,7 +132,7 @@ OpenClaw Gateway RPC/events 是运行态和规范数据的第一来源。
 - macOS / Linux fallback: `curl -fsSL https://openclaw.ai/install-cli.sh | bash`
 - Windows: `iwr -useb https://openclaw.ai/install.ps1 | iex`
 
-安装过程不应静默隐藏。应让用户看到终端输出、onboarding 提示和错误信息。安装完成后由用户回到 clawx 点击重新检测。
+安装过程不应静默隐藏。应让用户看到终端输出、onboarding 提示和错误信息。安装完成后由用户回到 ClawKit 点击重新检测。
 
 macOS 上常见失败场景是 npm 全局目录指向 root-owned `/usr/local`，导致 `npm install -g openclaw@latest` 失败。安装逻辑必须为这种情况保留 local-prefix fallback，不要只依赖全局 npm 安装。
 
@@ -110,13 +140,15 @@ local-prefix 安装后，OpenClaw CLI 通常位于 `~/.openclaw/bin/openclaw`。
 
 ## Gateway 设备身份
 
-clawx 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw 要求：
+ClawKit 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw 要求：
 
 - `device.id` 必须等于 Ed25519 raw public key 的 SHA-256 hex 指纹。
 - `device.publicKey` 是 Ed25519 raw public key 的 base64url-no-padding 表示。
 - `device.signature` 必须按 OpenClaw v3 connect payload 规则签名。
 
 不要生成随机 `deviceId`。如果旧版本已保存随机 `deviceId`，应在读取 identity 时自动迁移为 public key 指纹，否则 Gateway 会返回 `device identity mismatch` / `device-id-mismatch`。
+
+Gateway 设备密钥与 `device_identity.json` 默认存放在 `~/.openclaw/clawkit/`；若仅有旧版 `~/.openclaw/clawx/device_identity.json`，首次连接前应自动复制到新目录，避免用户升级后身份漂移。
 
 ## OpenClaw 文档与源码
 
@@ -132,6 +164,11 @@ clawx 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw �
 
 - 首屏应是可用的工作台，不做 landing page。
 - 对话、模型、技能、连接、用量等页面应保持工具型桌面软件气质，避免装饰性卡片堆叠。
+- 普通用户主流程应优先使用模板卡片、分步向导、清晰默认值和自然语言预览；高级字段收起到二级入口。
+- 新建 Agent 应支持「Agent 说明」字段，并优先提供常用模板；模板应能自动填充 ID、名称、工作目录建议和说明文本，用户套用后仍可修改。
+- Agent 说明不能随意写入 OpenClaw 不支持的 create/update 字段；若 Gateway schema 不支持，应通过 OpenClaw 提供的 agent identity/files API 落地。
+- 新建定时任务应避免把 cron 表达式作为默认入口；默认以“做什么、由谁做、什么时候做”组织，并提供每天、每周、每隔、指定时间等可理解选项。
+- Cron/RRULE、Webhook、静默运行、独立会话等概念应属于高级选项；提交前应给出自然语言执行摘要。
 - 资源侧栏应保留 agent + session 的结构。
 - 对话详情要支持低摩擦发送、停止生成、附件、模型/思考参数、流式状态和历史 reconciliation。
 - 对话模式下，工具调用应作为消息流的一部分展示；模型和 token 用量跟随对应 assistant 消息展示，不要固定在页面底部。
@@ -150,6 +187,18 @@ clawx 作为 Gateway 客户端连接时必须携带 device identity。OpenClaw �
 - Gateway WebSocket 代理优先集中在 `src-tauri/src/gateway_proxy.rs`。
 
 保持变更小而聚焦。不要在功能改动里夹带无关重构、格式化或样式大清洗。
+
+## 前端开发新增约束
+
+- 所有用户可见文案必须兼容多语言：按钮、标题、提示、错误、空态、弹窗、表单标签、placeholder、tooltip、toast、确认框、模板内容、自然语言预览、`title`、`aria-label` 等，都必须接入 i18n key，不允许在组件 JSX/TS 里写死中文或英文作为正式文案。
+- 修改现有功能时，如果触达区域仍有写死文案，应一并迁移到 i18n（至少覆盖本次改动所影响的 UI 路径），避免继续扩大硬编码范围。
+- 新增 i18n key 时，至少同步维护 `zh-CN` 和 `en-US`；其他语言包如果暂未完整翻译，也应有可回退的英文或中文内容，不能让界面直接显示 key。
+- 普通用户模板（例如 Agent 模板、定时任务模板）也属于用户可见文案，模板标题、说明、默认任务描述、Agent 说明示例都必须走 i18n 数据结构，不要把行业模板文案硬编码在组件里。
+- 错误兜底可以保留底层异常字符串，但面向用户的前置说明必须走 i18n，例如先显示“操作失败，请按提示处理”，再附上原始错误详情。
+- 样式风格必须同时适配深色和浅色模式：新增或修改 UI 时需确保在 `dark` / `light` 两种主题下均可读、可用、对比度达标，不允许只在单一主题下可用。
+- 主题相关样式优先复用现有 design token / 主题变量（如颜色变量、语义 class），避免写死颜色值导致主题切换失效。
+- `App.tsx` 必须尽量保持最小：禁止继续堆叠页面级业务逻辑、长 JSX、复杂状态拼装；可拆分的内容优先拆到 `components`、`hooks`、`lib`。
+- 新增页面或模块时，默认在 `App.tsx` 只保留路由/装配职责（state wiring + props 透传），将具体行为、数据获取与视图渲染下沉到独立模块。
 
 ## 跨平台实现细节
 
@@ -192,7 +241,7 @@ pnpm test
 
 ## 禁止事项
 
-- 不要把 clawx 做成 OpenClaw 的平行 session/agent/skill/channel 实现。
+- 不要把 ClawKit 做成 OpenClaw 的平行 session/agent/skill/channel 实现。
 - 不要移除本地 snapshot fallback，除非 Gateway RPC parity 已经验证并有明确迁移计划。
 - 不要把开发者机器路径写入 runtime 代码。
 - 不要直接扫描 OpenClaw 源码目录作为产品数据来源。

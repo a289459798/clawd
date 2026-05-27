@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Move clawx conversation data loading from direct OpenClaw session file reads to canonical Gateway session RPCs while preserving the current fallback behavior.
+**Goal:** Move clawkit conversation data loading from direct OpenClaw session file reads to canonical Gateway session RPCs while preserving the current fallback behavior.
 
 **Architecture:** Add a thin adapter layer that converts Gateway `agents.list` and `sessions.list` rows into the existing `OpenClawSnapshot` shape, then switch the frontend loader to try Gateway first and fall back to `load_openclaw_snapshot`. Keep UI rendering and message sending unchanged until the new data path is verified.
 
@@ -37,7 +37,7 @@ Progress as of 2026-04-28:
 - [x] Task 5: Local skills/connections are preserved as fallback metadata.
 - [x] Task 6: `sessions.preview` is merged into conversation previews.
 - [x] Task 7: `sessions.subscribe`/`sessions.unsubscribe` wrappers added and
-  `clawx://sessions-changed` refreshes the Gateway snapshot.
+  `clawkit://sessions-changed` refreshes the Gateway snapshot.
 - [ ] Task 8: Move skills and channels to dedicated Gateway methods.
 
 Verification:
@@ -506,9 +506,9 @@ Add a generic wrapper or dedicated command for:
 - `sessions.subscribe`
 - `sessions.unsubscribe`
 
-**Step 2: Listen for `clawx://sessions-changed`**
+**Step 2: Listen for `clawkit://sessions-changed`**
 
-`gateway_proxy.rs` already emits `clawx://sessions-changed` for Gateway
+`gateway_proxy.rs` already emits `clawkit://sessions-changed` for Gateway
 `sessions.changed` events. Use that event to refresh Gateway snapshot instead of
 polling local disk every 900ms.
 

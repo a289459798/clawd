@@ -10,31 +10,37 @@ interface OpenClawUiDiagnosticsProps {
   entries: UiSlowFrameEntry[];
   capabilities: UiFrameDiagnosticsCapabilities;
   onClear: () => void;
+  t: (key: string) => string;
 }
 
-export function OpenClawUiDiagnostics({ entries, capabilities, onClear }: OpenClawUiDiagnosticsProps) {
+const tt = (t: (key: string) => string, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
+
+export function OpenClawUiDiagnostics({ entries, capabilities, onClear, t }: OpenClawUiDiagnosticsProps) {
   const nowMs = Date.now();
   const capsLine = useMemo(() => {
     const parts: string[] = [];
-    if (capabilities.longAnimationFrame) parts.push("慢动画帧 LoAF");
+    if (capabilities.longAnimationFrame) parts.push(tt(t, "diagnostics.loaf", "Long animation frame (LoAF)"));
     if (capabilities.longTask) parts.push("Long Task");
-    return parts.length ? parts.join("、") : "未启用（当前 WebView 可能不支持相关 API）";
-  }, [capabilities.longAnimationFrame, capabilities.longTask]);
+    return parts.length ? parts.join(" / ") : tt(t, "diagnostics.notEnabled", "Not enabled (current WebView may not support these APIs)");
+  }, [capabilities.longAnimationFrame, capabilities.longTask, t]);
 
   return (
     <details className="openclaw-ui-diagnostics">
-      <summary className="openclaw-ui-diagnostics-summary">渲染诊断（调试）</summary>
+      <summary className="openclaw-ui-diagnostics-summary">{tt(t, "diagnostics.title", "Rendering diagnostics (debug)")}</summary>
       <p className="openclaw-ui-diagnostics-hint">
-        记录主线程阻塞较长的帧与任务，仅供排查卡顿；数据来源 PerformanceObserver（{capsLine}）。
+        {tt(t, "diagnostics.hint", "Records slow frames/tasks on main thread for troubleshooting; source: PerformanceObserver")} ({capsLine}).
       </p>
       <div className="openclaw-ui-diagnostics-toolbar">
         <button type="button" className="ghost-link-button" onClick={onClear} disabled={entries.length === 0}>
-          清空记录
+          {tt(t, "diagnostics.clear", "Clear records")}
         </button>
-        <span className="openclaw-ui-diagnostics-count">{entries.length} 条</span>
+        <span className="openclaw-ui-diagnostics-count">{entries.length} {tt(t, "diagnostics.records", "records")}</span>
       </div>
       {entries.length === 0 ? (
-        <p className="openclaw-ui-diagnostics-empty">暂无记录；切换页面或滚动对话后再查看。</p>
+        <p className="openclaw-ui-diagnostics-empty">{tt(t, "diagnostics.empty", "No records yet. Try again after switching pages or scrolling conversations.")}</p>
       ) : (
         <ul className="openclaw-ui-diagnostics-list">
           {entries.map((item) => (

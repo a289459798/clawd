@@ -10,7 +10,7 @@ describe("buildSnapshotFromGateway", () => {
           {
             id: "codex",
             name: "Codex",
-            workspace: "/workspace/clawx",
+            workspace: "/workspace/clawkit",
             model: { primary: "gpt-5.3-codex" },
           },
         ],
@@ -49,7 +49,7 @@ describe("buildSnapshotFromGateway", () => {
       {
         id: "codex",
         name: "Codex",
-        workspace: "/workspace/clawx",
+        workspace: "/workspace/clawkit",
         model: "gpt-5.3-codex",
         agent_dir: undefined,
       },

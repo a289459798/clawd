@@ -3,11 +3,20 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getLatestUserMessage } from "../lib/conversationDetailState";
+import { isConversationRunning } from "../lib/conversationRunState";
 import { fileKindLabel, formatFileSize } from "../lib/fileDisplay";
 import { isInternalOpenClawMessage } from "../lib/gatewayMessages";
 import type { Conversation, ConversationStatus, MessagePart } from "../types/conversation";
+import type { ConversationAutoScrollMode } from "../types/settings";
+
+type TranslateFn = (key: string) => string;
+const tt = (t: TranslateFn, key: string, fallback: string) => {
+  const value = t(key);
+  return value === key ? fallback : value;
+};
 
 type ConversationDetailProps = {
+  t: TranslateFn;
   activeConversation: Conversation;
   agentName: string;
   statusLabel: Record<ConversationStatus, string>;
@@ -15,6 +24,8 @@ type ConversationDetailProps = {
   resetUserExpanded: () => void;
   conversationMessageList: React.ReactNode;
   gatewayError: string | null;
+  historyLoading?: boolean;
+  historyCanLoadMore?: boolean;
   aiResponseScrollRef: React.RefObject<HTMLDivElement | null>;
   /** Called when user scrolls transcript substantially above bottom (away=true) or back near bottom (false). */
   onTranscriptScrollAwayFromBottom?: (away: boolean) => void;
@@ -23,8 +34,10 @@ type ConversationDetailProps = {
   onUserExpandedChange: (expanded: boolean) => void;
   showJumpToBottom: boolean;
   displayMode: "focus" | "conversation";
+  autoScrollMode: ConversationAutoScrollMode;
   onDisplayModeChange: (mode: "focus" | "conversation") => void;
   onJumpToBottom: () => void;
+  onLoadMoreHistory?: (conversationId: string) => Promise<void> | void;
   onUpdateTitle?: (conversationId: string, newTitle: string) => Promise<void>;
   sessionActionBusy?: string | null;
   sessionActionError?: string | null;
@@ -50,17 +63,18 @@ function normalizeImageSrc(data: string, mimeType?: string) {
   return `data:${mimeType || "image/png"};base64,${data}`;
 }
 
-function compactionReasonLabel(reason: string) {
+function compactionReasonLabel(reason: string, t: TranslateFn) {
   const map: Record<string, string> = {
-    manual: "手动",
-    "auto-threshold": "自动阈值",
-    "overflow-retry": "溢出重试",
-    "timeout-retry": "超时重试",
+    manual: tt(t, "conversation.compaction.manual", "Manual"),
+    "auto-threshold": tt(t, "conversation.compaction.autoThreshold", "Auto threshold"),
+    "overflow-retry": tt(t, "conversation.compaction.overflowRetry", "Overflow retry"),
+    "timeout-retry": tt(t, "conversation.compaction.timeoutRetry", "Timeout retry"),
   };
   return map[reason] ?? reason;
 }
 
 export function ConversationDetail({
+  t,
   activeConversation,
   agentName,
   statusLabel,
@@ -68,6 +82,8 @@ export function ConversationDetail({
   resetUserExpanded,
   conversationMessageList,
   gatewayError,
+  historyLoading,
+  historyCanLoadMore,
   aiResponseScrollRef,
   onTranscriptScrollAwayFromBottom,
   parseSenderMeta,
@@ -75,8 +91,10 @@ export function ConversationDetail({
   onUserExpandedChange,
   showJumpToBottom,
   displayMode,
+  autoScrollMode,
   onDisplayModeChange,
   onJumpToBottom,
+  onLoadMoreHistory,
   onUpdateTitle,
   sessionActionBusy,
   sessionActionError,
@@ -164,10 +182,15 @@ export function ConversationDetail({
     };
   }, [activeConversation.id, aiResponseScrollRef, displayMode]);
 
-  // Keep new incoming messages pinned to the latest reply by default.
+  // Manual mode leaves incoming replies in place and lets the jump button carry the update.
   useEffect(() => {
+    if (autoScrollMode === "manual") return;
     const scrollContainer = aiResponseScrollRef.current;
     if (!scrollContainer) return;
+    if (autoScrollMode === "nearBottom") {
+      const distanceFromBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+      if (distanceFromBottom > 120) return;
+    }
     const frame = requestAnimationFrame(() => {
       scrollContainer.scrollTo({
         top: scrollContainer.scrollHeight,
@@ -175,12 +198,12 @@ export function ConversationDetail({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef]);
+  }, [activeConversation.id, activeConversation.previewMessages?.length, aiResponseScrollRef, autoScrollMode]);
 
   return (
     <div className="conversation-detail-shell">
       <div className="conversation-detail-statusbar">
-        <button className="back-icon-button" onClick={() => onBack(resetUserExpanded)} type="button" title="返回列表">
+        <button className="back-icon-button" onClick={() => onBack(resetUserExpanded)} type="button" title={tt(t, "conversation.backToList", "Back to list")}>
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <path d="M12.5 15L7.5 10L12.5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
@@ -223,7 +246,7 @@ export function ConversationDetail({
           <span
             className="statusbar-title"
             onClick={() => setIsEditingTitle(true)}
-            title="点击编辑"
+            title={tt(t, "conversation.clickToEdit", "Click to edit")}
             style={{ cursor: "pointer" }}
           >
             {activeConversation.title}
@@ -235,13 +258,13 @@ export function ConversationDetail({
             role="status"
             aria-live="polite"
           >
-            {titleFeedback === "saving" ? "保存中…" : null}
-            {titleFeedback === "saved" ? "已保存" : null}
-            {titleFeedback === "error" ? "保存失败" : null}
+            {titleFeedback === "saving" ? tt(t, "common.saving", "Saving...") : null}
+            {titleFeedback === "saved" ? tt(t, "common.saved", "Saved") : null}
+            {titleFeedback === "error" ? tt(t, "common.saveFailed", "Save failed") : null}
           </span>
         ) : null}
         <span className="statusbar-divider">·</span>
-        <span className="statusbar-tokens">总: {activeConversation.tokens}</span>
+        <span className="statusbar-tokens">{tt(t, "conversation.totalTokens", "Total")}: {activeConversation.tokens}</span>
         {activeConversation.agentRuntime ? (
           <>
             <span className="statusbar-divider">·</span>
@@ -252,14 +275,14 @@ export function ConversationDetail({
         ) : null}
         <span className="statusbar-divider">·</span>
         <span className={`statusbar-badge ${activeConversation.status}`}>{statusLabel[activeConversation.status]}</span>
-        <div className="detail-mode-toggle" role="group" aria-label="详情展示模式">
+        <div className="detail-mode-toggle" role="group" aria-label={tt(t, "conversation.detailMode", "Detail display mode")}>
           <button
             className={displayMode === "focus" ? "active" : ""}
             type="button"
             onClick={() => onDisplayModeChange("focus")}
             aria-pressed={displayMode === "focus"}
           >
-            专注
+            {tt(t, "settings.option.focus", "Focus")}
           </button>
           <button
             className={displayMode === "conversation" ? "active" : ""}
@@ -267,11 +290,11 @@ export function ConversationDetail({
             onClick={() => onDisplayModeChange("conversation")}
             aria-pressed={displayMode === "conversation"}
           >
-            对话
+            {tt(t, "settings.option.conversation", "Conversation")}
           </button>
         </div>
         <details className="session-action-menu">
-          <summary aria-label="会话操作" title="会话操作">
+          <summary aria-label={tt(t, "conversation.actions", "Conversation actions")} title={tt(t, "conversation.actions", "Conversation actions")}>
             <span className="session-action-menu-icon" aria-hidden="true">
               <span />
               <span />
@@ -284,17 +307,17 @@ export function ConversationDetail({
               onClick={() => void onCopySessionKey?.(activeConversation.id)}
               disabled={!onCopySessionKey || Boolean(sessionActionBusy)}
             >
-              <span>复制会话 ID</span>
-              <small>用于排查问题或在 CLI 中定位这段对话</small>
+              <span>{tt(t, "conversation.copySessionId", "Copy session ID")}</span>
+              <small>{tt(t, "conversation.copySessionIdHint", "For troubleshooting or locating this session in CLI")}</small>
             </button>
-            {activeConversation.status === "working" || activeConversation.runtime?.activeRunId ? (
+            {isConversationRunning(activeConversation) ? (
               <button
                 type="button"
                 onClick={() => void onAbortSession?.()}
                 disabled={!onAbortSession || Boolean(sessionActionBusy)}
               >
-                <span>{sessionActionBusy === "abort" ? "停止中…" : "停止当前运行"}</span>
-                <small>只停止正在生成的回复，不删除对话内容</small>
+                <span>{sessionActionBusy === "abort" ? tt(t, "conversation.stopping", "Stopping...") : tt(t, "conversation.stopCurrentRun", "Stop current run")}</span>
+                <small>{tt(t, "conversation.stopCurrentRunHint", "Stops only ongoing generation, keeps conversation content")}</small>
               </button>
             ) : null}
             <button
@@ -302,16 +325,16 @@ export function ConversationDetail({
               onClick={() => void onCompactSession?.(activeConversation.id)}
               disabled={!onCompactSession || Boolean(sessionActionBusy)}
             >
-              <span>{sessionActionBusy === "compact" ? "整理中…" : "整理上下文"}</span>
-              <small>让长对话变轻，保留会话入口和可见历史</small>
+              <span>{sessionActionBusy === "compact" ? tt(t, "conversation.compacting", "Compacting...") : tt(t, "conversation.compactContext", "Compact context")}</span>
+              <small>{tt(t, "conversation.compactContextHint", "Lighten long conversations while keeping entry and visible history")}</small>
             </button>
             <button
               type="button"
               onClick={() => void onResetSession?.(activeConversation.id)}
               disabled={!onResetSession || Boolean(sessionActionBusy)}
             >
-              <span>{sessionActionBusy === "reset" ? "处理中…" : "重新开始"}</span>
-              <small>清空这段会话的上下文，保留会话入口</small>
+              <span>{sessionActionBusy === "reset" ? tt(t, "conversation.processing", "Processing...") : tt(t, "conversation.restart", "Restart")}</span>
+              <small>{tt(t, "conversation.restartHint", "Clear this session context while keeping the entry")}</small>
             </button>
             <button
               className="danger"
@@ -319,8 +342,8 @@ export function ConversationDetail({
               onClick={() => void onDeleteSession?.(activeConversation.id)}
               disabled={!onDeleteSession || Boolean(sessionActionBusy)}
             >
-              <span>{sessionActionBusy === "delete" ? "删除中…" : "删除会话"}</span>
-              <small>从 OpenClaw 会话列表移除，删除前会再次确认</small>
+              <span>{sessionActionBusy === "delete" ? tt(t, "conversation.deleting", "Deleting...") : tt(t, "conversation.deleteSession", "Delete session")}</span>
+              <small>{tt(t, "conversation.deleteSessionHint", "Remove from OpenClaw session list with confirmation")}</small>
             </button>
             {sessionActionError ? (
               <div className="session-action-error" role="alert">
@@ -342,23 +365,23 @@ export function ConversationDetail({
         const cp = activeConversation.latestCompactionCheckpoint;
         const compactionTitle =
           cp &&
-          `checkpoint ${cp.checkpointId} · ${new Date(cp.createdAt).toLocaleString("zh-CN")} · ${compactionReasonLabel(cp.reason)}`;
+          `checkpoint ${cp.checkpointId} · ${new Date(cp.createdAt).toLocaleString()} · ${compactionReasonLabel(cp.reason, t)}`;
         return (
           <div className="conversation-detail-maintenance" role="status">
             {transcriptIssue ? (
               <div className="conversation-detail-maintenance-item transcript-issue">
                 {activeConversation.transcriptPreviewStatus === "missing"
-                  ? "Gateway：transcript 可能缺失（会话索引仍存在）。如需对齐会话存储与磁盘，请使用 OpenClaw CLI／文档中的会话维护命令。"
-                  : "Gateway：读取会话预览失败，请稍后重试或查看 Gateway 日志。"}
+                  ? tt(t, "conversation.transcriptMissing", "Gateway: transcript may be missing while session index still exists.")
+                  : tt(t, "conversation.transcriptReadFailed", "Gateway: failed to read session preview, please retry later or check Gateway logs.")}
               </div>
             ) : null}
             {compactionVisible ? (
               <div className="conversation-detail-maintenance-item compaction-info" title={compactionTitle ?? undefined}>
-                上下文曾压缩
+                {tt(t, "conversation.compactionOccurred", "Context was compacted")}
                 {typeof activeConversation.compactionCheckpointCount === "number"
-                  ? `（${activeConversation.compactionCheckpointCount} 个检查点）`
+                  ? ` (${activeConversation.compactionCheckpointCount} ${tt(t, "conversation.checkpoints", "checkpoints")})`
                   : cp
-                    ? ` · ${compactionReasonLabel(cp.reason)}`
+                    ? ` · ${compactionReasonLabel(cp.reason, t)}`
                     : null}
               </div>
             ) : null}
@@ -378,7 +401,7 @@ export function ConversationDetail({
               const label = lastUserMsg?.senderLabel ?? parsed.label;
               // Format timestamp from message or parsed time
               const time = lastUserMsg?.timestamp
-                ? new Date(lastUserMsg.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+                ? new Date(lastUserMsg.timestamp).toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
                 : parsed.time;
               const cleanText = parsed.cleanText;
               const userImages = (lastUserMsg?.parts ?? []).filter((part): part is Extract<MessagePart, { kind: "image" }> => part.kind === "image");
@@ -399,8 +422,8 @@ export function ConversationDetail({
                   {userImages.length > 0 ? (
                     <div className="top-user-images">
                       {userImages.map((image, index) => (
-                        <button className="top-user-image-card" type="button" key={`${lastUserMsg.timestamp ?? "user"}-image-${index}`} title={image.alt ?? "图片"}>
-                          <img src={normalizeImageSrc(image.data, image.mime_type)} alt={image.alt ?? "用户发送的图片"} />
+                        <button className="top-user-image-card" type="button" key={`${lastUserMsg.timestamp ?? "user"}-image-${index}`} title={image.alt ?? tt(t, "conversation.image", "Image")}>
+                          <img src={normalizeImageSrc(image.data, image.mime_type)} alt={image.alt ?? tt(t, "conversation.userImageAlt", "User image")} />
                         </button>
                       ))}
                     </div>
@@ -413,7 +436,7 @@ export function ConversationDetail({
                           key={`${lastUserMsg.timestamp ?? "user"}-file-${index}`}
                           type="button"
                           disabled={!file.path}
-                          title={file.path ? `打开 ${file.path}` : file.name}
+                          title={file.path ? `${tt(t, "common.open", "Open")} ${file.path}` : file.name}
                           onClick={async () => {
                             if (!file.path) return;
                             try {
@@ -431,9 +454,9 @@ export function ConversationDetail({
                       ))}
                     </div>
                   ) : null}
-                  {openFileError ? <div className="top-user-file-error">无法打开附件：{openFileError}</div> : null}
+                  {openFileError ? <div className="top-user-file-error">{tt(t, "conversation.openAttachmentFailed", "Failed to open attachment")}: {openFileError}</div> : null}
                   {shouldShowExpand ? (
-                    <button className="top-user-expand" type="button" onClick={() => onUserExpandedChange(!userExpanded)} title={userExpanded ? "收起" : "展开"}>
+                    <button className="top-user-expand" type="button" onClick={() => onUserExpandedChange(!userExpanded)} title={userExpanded ? tt(t, "common.collapse", "Collapse") : tt(t, "common.expand", "Expand")}>
                       {userExpanded ? "⌃" : "⌄"}
                     </button>
                   ) : null}
@@ -451,16 +474,26 @@ export function ConversationDetail({
                 onTranscriptScrollAwayFromBottom(distanceFromBottom > thresholdPx);
               }}
             >
+              {historyCanLoadMore ? (
+                <button
+                  className="conversation-load-earlier-button"
+                  type="button"
+                  disabled={historyLoading}
+                  onClick={() => void onLoadMoreHistory?.(activeConversation.id)}
+                >
+                  {historyLoading ? tt(t, "conversation.loadingEarlier", "Loading earlier messages...") : tt(t, "conversation.loadEarlier", "Load earlier messages")}
+                </button>
+              ) : null}
               {conversationMessageList}
               {gatewayError ? (
                 <div className="conversation-bottom-error" role="alert">
-                  <strong>发送失败</strong>
+                  <strong>{tt(t, "conversation.sendFailed", "Send failed")}</strong>
                   <span>{gatewayError}</span>
                 </div>
               ) : null}
             </div>
             {showJumpToBottom ? (
-              <button className="jump-to-bottom-button" type="button" onClick={onJumpToBottom} title="回到底部">
+              <button className="jump-to-bottom-button" type="button" onClick={onJumpToBottom} title={tt(t, "conversation.backToBottom", "Back to bottom")}>
                 ↓
               </button>
             ) : null}

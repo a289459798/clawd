@@ -144,6 +144,7 @@ const normalizePartForContentKey = (part: MessagePart) => {
   if (part.kind === "tool_call") return { kind: part.kind, tool: part.tool, args: part.args ?? "" };
   if (part.kind === "tool_result") return { kind: part.kind, tool: part.tool ?? "", text: part.text ?? "" };
   if (part.kind === "image") return { kind: part.kind, data: part.data, mime_type: part.mime_type ?? "", alt: part.alt ?? "" };
+  if (part.kind === "rich") return { kind: part.kind, type: part.type ?? "", title: part.title ?? "", text: part.text ?? "" };
   return { kind: part.kind, name: part.name, path: part.path ?? "", mime_type: part.mime_type ?? "", size: part.size ?? 0 };
 };
 
@@ -167,6 +168,16 @@ const shouldReplaceWithSnapshotMessage = (current: PreviewMessage, snapshot: Pre
   return true;
 };
 
+const isTextOnlySnapshotCoveredByCurrent = (current: PreviewMessage, snapshot: PreviewMessage) => {
+  const snapshotParts = snapshot.parts ?? [];
+  const snapshotIsTextOnly = snapshotParts.length === 0 || snapshotParts.every((part) => part.kind === "text");
+  if (!snapshotIsTextOnly) return false;
+  if ((current.role?.toLowerCase() ?? "") !== (snapshot.role?.toLowerCase() ?? "")) return false;
+  if (normalizeMessageText(current.text) !== normalizeMessageText(snapshot.text)) return false;
+  if (!timestampsCompatibleForReplacement(current.timestamp, snapshot.timestamp)) return false;
+  return (current.parts ?? []).some((part) => part.kind !== "text");
+};
+
 export const mergeSnapshotMessagesPreservingCurrentOrder = (currentMessages: PreviewMessage[] = [], snapshotMessages: PreviewMessage[] = []) => {
   if (currentMessages.length === 0) return snapshotMessages;
   if (snapshotMessages.length === 0) return currentMessages;
@@ -183,6 +194,8 @@ export const mergeSnapshotMessagesPreservingCurrentOrder = (currentMessages: Pre
       seen.add(key);
       continue;
     }
+    const coveredByRicherCurrent = next.some((item) => isTextOnlySnapshotCoveredByCurrent(item.message, message));
+    if (coveredByRicherCurrent) continue;
     seen.add(key);
     next.push({ message, index: next.length });
   }

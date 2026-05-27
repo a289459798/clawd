@@ -1,6 +1,8 @@
 mod gateway_proxy;
+mod unsigned_update;
 
-use serde::Serialize;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -11,7 +13,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::utils::config::Color;
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
 #[derive(Serialize, Clone)]
 struct AgentSummary {
@@ -121,7 +127,7 @@ struct GatewayAuthInfo {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ClawxBootstrapStatus {
+struct ClawKitBootstrapStatus {
     openclaw_installed: bool,
     openclaw_path: Option<String>,
     config_exists: bool,
@@ -146,6 +152,17 @@ struct WeixinPluginStatus {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct QqbotPluginStatus {
+    installed: bool,
+    enabled: bool,
+    installed_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: bool,
+    latest_check_error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenClawCliStatus {
     installed: bool,
     path: Option<String>,
@@ -153,6 +170,62 @@ struct OpenClawCliStatus {
     latest_version: Option<String>,
     update_available: bool,
     latest_check_error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PetSummary {
+    id: String,
+    name: String,
+    species: String,
+    description: String,
+    status: String,
+    source: String,
+    path: Option<String>,
+    icon: Option<String>,
+    image: Option<String>,
+    spritesheet: Option<String>,
+    spritesheet_data_url: Option<String>,
+    atlas: Option<PetAtlas>,
+    animations: Option<HashMap<String, PetAnimation>>,
+    compatible_with: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PetAtlas {
+    columns: u32,
+    rows: u32,
+    cell_width: u32,
+    cell_height: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PetAnimation {
+    row: u32,
+    frames: u32,
+    frame_ms: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PetManifestDraft {
+    id: Option<String>,
+    #[serde(alias = "displayName")]
+    name: Option<String>,
+    species: Option<String>,
+    description: Option<String>,
+    status: Option<String>,
+    icon: Option<String>,
+    image: Option<String>,
+    spritesheet_path: Option<String>,
+    spritesheet: Option<String>,
+    atlas: Option<PetAtlas>,
+    #[serde(default, alias = "states")]
+    animations: HashMap<String, PetAnimation>,
+    #[serde(default)]
+    compatible_with: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -193,6 +266,22 @@ fn openclaw_config_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".openclaw").join("openclaw.json"))
 }
 
+fn codex_pets_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".codex").join("pets"))
+}
+
+fn clawkit_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".clawkit"))
+}
+
+fn clawkit_settings_path() -> Result<PathBuf, String> {
+    Ok(clawkit_dir()?.join("clawkit.json"))
+}
+
+fn clawkit_pets_dir() -> Result<PathBuf, String> {
+    Ok(clawkit_dir()?.join("pets"))
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -200,7 +289,273 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|error| format!("home directory not found: {error}"))
 }
 
-fn clawx_recommended_origin() -> String {
+fn ensure_clawkit_home() -> Result<(), String> {
+    let root = clawkit_dir()?;
+    fs::create_dir_all(root.join("pets"))
+        .map_err(|error| format!("failed to create {}: {error}", root.join("pets").display()))?;
+    fs::create_dir_all(root.join("skills")).map_err(|error| {
+        format!(
+            "failed to create {}: {error}",
+            root.join("skills").display()
+        )
+    })?;
+    let config_path = root.join("clawkit.json");
+    if !config_path.exists() {
+        fs::write(&config_path, "{\n  \"version\": 1\n}\n")
+            .map_err(|error| format!("failed to create {}: {error}", config_path.display()))?;
+    }
+    Ok(())
+}
+
+fn default_clawkit_settings() -> Value {
+    serde_json::json!({
+        "version": 1,
+        "general": {
+            "defaultConversationMode": "focus",
+            "conversationAutoScrollMode": "nearBottom",
+            "language": "auto",
+            "sendShortcut": "enterToSend",
+            "restoreLastConversation": false,
+            "rememberConversationFilters": true,
+            "showSystemConversations": false,
+            "autoCheckUpdates": true,
+            "confirmDestructiveActions": true
+        },
+        "appearance": {
+            "theme": "system",
+            "fontSize": 15,
+            "density": "comfortable",
+            "codeWrap": false,
+            "messageWidth": "normal"
+        },
+        "notifications": {
+            "conversationFinished": true,
+            "onlyWhenUnfocused": true,
+            "notifyOnSuccess": true,
+            "notifyOnFailure": true,
+            "includeReplySummary": true,
+            "privacyMode": false
+        },
+        "openclaw": {
+            "autoStartGateway": true
+        }
+    })
+}
+
+fn merge_value_with_defaults(raw: &Value, defaults: &Value) -> Value {
+    match (raw, defaults) {
+        (Value::Object(raw_object), Value::Object(default_object)) => {
+            let mut merged = raw_object.clone();
+            for (key, default_value) in default_object {
+                let next_value = raw_object
+                    .get(key)
+                    .map(|raw_value| merge_value_with_defaults(raw_value, default_value))
+                    .unwrap_or_else(|| default_value.clone());
+                merged.insert(key.clone(), next_value);
+            }
+            Value::Object(merged)
+        }
+        (Value::Null, default_value) => default_value.clone(),
+        (raw_value, _) => raw_value.clone(),
+    }
+}
+
+fn merge_clawkit_settings_value(raw: Value) -> Value {
+    let mut merged = merge_value_with_defaults(&raw, &default_clawkit_settings());
+    sanitize_clawkit_settings_value(&mut merged);
+    merged
+}
+
+fn sanitize_string_enum(
+    section: &mut serde_json::Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+    fallback: &str,
+) {
+    let valid = section
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|value| allowed.contains(&value))
+        .unwrap_or(false);
+    if !valid {
+        section.insert(key.to_string(), Value::String(fallback.to_string()));
+    }
+}
+
+fn sanitize_bool(section: &mut serde_json::Map<String, Value>, key: &str, fallback: bool) {
+    if !section.get(key).is_some_and(Value::is_boolean) {
+        section.insert(key.to_string(), Value::Bool(fallback));
+    }
+}
+
+fn sanitize_clawkit_settings_value(settings: &mut Value) {
+    if !settings.get("version").is_some_and(Value::is_number) {
+        settings["version"] = Value::from(1);
+    }
+    if let Some(general) = settings.get_mut("general").and_then(Value::as_object_mut) {
+        sanitize_string_enum(
+            general,
+            "defaultConversationMode",
+            &["focus", "conversation"],
+            "focus",
+        );
+        sanitize_string_enum(
+            general,
+            "conversationAutoScrollMode",
+            &["nearBottom", "always", "manual"],
+            "nearBottom",
+        );
+        sanitize_string_enum(
+            general,
+            "language",
+            &["auto", "zh-CN", "zh-TW", "en-US", "ja-JP", "fr-FR", "ru-RU"],
+            "auto",
+        );
+        sanitize_string_enum(
+            general,
+            "sendShortcut",
+            &["enterToSend", "modEnterToSend"],
+            "enterToSend",
+        );
+        sanitize_bool(general, "restoreLastConversation", false);
+        sanitize_bool(general, "rememberConversationFilters", true);
+        sanitize_bool(general, "showSystemConversations", false);
+        sanitize_bool(general, "autoCheckUpdates", true);
+        sanitize_bool(general, "confirmDestructiveActions", true);
+    }
+    if let Some(appearance) = settings
+        .get_mut("appearance")
+        .and_then(Value::as_object_mut)
+    {
+        sanitize_string_enum(appearance, "theme", &["system", "dark", "light"], "system");
+        let font_size = appearance
+            .get("fontSize")
+            .and_then(Value::as_i64)
+            .map(|value| value.clamp(12, 20))
+            .unwrap_or(15);
+        appearance.insert("fontSize".to_string(), Value::from(font_size));
+        sanitize_string_enum(
+            appearance,
+            "density",
+            &["comfortable", "compact"],
+            "comfortable",
+        );
+        sanitize_bool(appearance, "codeWrap", false);
+        sanitize_string_enum(appearance, "messageWidth", &["normal", "wide"], "normal");
+    }
+    if let Some(notifications) = settings
+        .get_mut("notifications")
+        .and_then(Value::as_object_mut)
+    {
+        sanitize_bool(notifications, "conversationFinished", true);
+        sanitize_bool(notifications, "onlyWhenUnfocused", true);
+        sanitize_bool(notifications, "notifyOnSuccess", true);
+        sanitize_bool(notifications, "notifyOnFailure", true);
+        sanitize_bool(notifications, "includeReplySummary", true);
+        sanitize_bool(notifications, "privacyMode", false);
+    }
+    if let Some(openclaw) = settings.get_mut("openclaw").and_then(Value::as_object_mut) {
+        sanitize_bool(openclaw, "autoStartGateway", true);
+    }
+}
+
+fn merge_patch_value(target: &mut Value, patch: Value) {
+    match (target, patch) {
+        (Value::Object(target_object), Value::Object(patch_object)) => {
+            for (key, patch_value) in patch_object {
+                if let Some(target_value) = target_object.get_mut(&key) {
+                    merge_patch_value(target_value, patch_value);
+                } else {
+                    target_object.insert(key, patch_value);
+                }
+            }
+        }
+        (target_value, patch_value) => {
+            *target_value = patch_value;
+        }
+    }
+}
+
+fn read_clawkit_settings_file() -> Result<Value, String> {
+    ensure_clawkit_home()?;
+    let path = clawkit_settings_path()?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn write_clawkit_settings_file(settings: &Value) -> Result<(), String> {
+    ensure_clawkit_home()?;
+    let path = clawkit_settings_path()?;
+    let pretty = serde_json::to_string_pretty(settings)
+        .map_err(|error| format!("failed to serialize ClawKit settings: {error}"))?;
+    fs::write(&path, format!("{pretty}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn push_existing_pet_resource_dir(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !path.is_dir() {
+        return;
+    }
+    let duplicate = candidates.iter().any(|candidate| {
+        candidate == &path
+            || (candidate.canonicalize().ok().is_some()
+                && candidate.canonicalize().ok() == path.canonicalize().ok())
+    });
+    if !duplicate {
+        candidates.push(path);
+    }
+}
+
+fn resource_pet_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push_existing_pet_resource_dir(&mut candidates, resource_dir.join("pets"));
+        push_existing_pet_resource_dir(
+            &mut candidates,
+            resource_dir.join("resources").join("pets"),
+        );
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        push_existing_pet_resource_dir(
+            &mut candidates,
+            current_dir.join("src-tauri").join("resources").join("pets"),
+        );
+        push_existing_pet_resource_dir(&mut candidates, current_dir.join("resources").join("pets"));
+    }
+    candidates
+}
+
+fn sync_resource_pets_to_clawkit(app: &AppHandle) -> Result<(), String> {
+    let target_pets_dir = clawkit_pets_dir()?;
+    fs::create_dir_all(&target_pets_dir)
+        .map_err(|error| format!("failed to create {}: {error}", target_pets_dir.display()))?;
+
+    for resource_pets_dir in resource_pet_dirs(app) {
+        for entry in fs::read_dir(&resource_pets_dir)
+            .map_err(|error| format!("failed to read {}: {error}", resource_pets_dir.display()))?
+        {
+            let entry =
+                entry.map_err(|error| format!("failed to read resource pet entry: {error}"))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("failed to inspect resource pet entry: {error}"))?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let target = target_pets_dir.join(entry.file_name());
+            if target.exists() {
+                continue;
+            }
+            copy_dir_all(&entry.path(), &target)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn clawkit_recommended_origin() -> String {
     "tauri://localhost".to_string()
 }
 
@@ -1291,7 +1646,7 @@ fn load_session_record(session_key: String) -> Result<SessionRecordResult, Strin
 }
 
 #[tauri::command]
-fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
+fn get_clawkit_bootstrap_status() -> Result<ClawKitBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
     let openclaw_path = resolve_openclaw_command()
         .filter(|path| {
@@ -1328,7 +1683,7 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let recommended_origin = clawx_recommended_origin();
+        let recommended_origin = clawkit_recommended_origin();
         binding_configured = allowed_origins
             .iter()
             .any(|item| item == &recommended_origin);
@@ -1338,8 +1693,8 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
             .and_then(Value::as_u64);
     }
 
-    let recommended_origin = clawx_recommended_origin();
-    Ok(ClawxBootstrapStatus {
+    let recommended_origin = clawkit_recommended_origin();
+    Ok(ClawKitBootstrapStatus {
         openclaw_installed: openclaw_path.is_some(),
         openclaw_path,
         config_exists,
@@ -1355,7 +1710,7 @@ fn get_clawx_bootstrap_status() -> Result<ClawxBootstrapStatus, String> {
 }
 
 #[tauri::command]
-fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
+fn ensure_clawkit_binding() -> Result<ClawKitBootstrapStatus, String> {
     let config_path = openclaw_config_path()?;
     let parent = config_path
         .parent()
@@ -1376,7 +1731,7 @@ fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
         json = serde_json::json!({});
     }
 
-    let recommended_origin = clawx_recommended_origin();
+    let recommended_origin = clawkit_recommended_origin();
     let root = json
         .as_object_mut()
         .ok_or_else(|| "invalid config root".to_string())?;
@@ -1419,7 +1774,7 @@ fn ensure_clawx_binding() -> Result<ClawxBootstrapStatus, String> {
     fs::write(&config_path, format!("{pretty}\n"))
         .map_err(|error| format!("failed to write {}: {error}", config_path.display()))?;
 
-    get_clawx_bootstrap_status()
+    get_clawkit_bootstrap_status()
 }
 
 #[tauri::command]
@@ -1529,9 +1884,17 @@ fn openclaw_terminal_command(args: &[&str]) -> Result<String, String> {
         shell_quote
     };
     let mut parts = if cfg!(windows) {
-        vec![format!("{}& {}", openclaw_terminal_env_prefix(&command_path), quote(&command_path.to_string_lossy()))]
+        vec![format!(
+            "{}& {}",
+            openclaw_terminal_env_prefix(&command_path),
+            quote(&command_path.to_string_lossy())
+        )]
     } else {
-        vec![format!("{}{}", openclaw_terminal_env_prefix(&command_path), quote(&command_path.to_string_lossy()))]
+        vec![format!(
+            "{}{}",
+            openclaw_terminal_env_prefix(&command_path),
+            quote(&command_path.to_string_lossy())
+        )]
     };
     parts.extend(args.iter().map(|arg| quote(arg)));
     Ok(parts.join(" "))
@@ -1860,6 +2223,50 @@ async fn weixin_plugin_status() -> Result<WeixinPluginStatus, String> {
         .map_err(|error| format!("failed to check WeChat plugin status: {error}"))
 }
 
+fn qqbot_plugin_status_blocking() -> QqbotPluginStatus {
+    const PACKAGE_NAME: &str = "@openclaw/qqbot";
+    const PLUGIN_ID: &str = "qqbot";
+
+    let installed = installed_plugin_from_registry(PLUGIN_ID, PACKAGE_NAME);
+    let (latest_version, latest_check_error) = if installed.is_some() {
+        match latest_npm_package_version(PACKAGE_NAME) {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
+
+    let installed_version = installed
+        .as_ref()
+        .map(|(version, _)| version.clone())
+        .filter(|version| !version.is_empty());
+    let update_available = installed_version
+        .as_deref()
+        .zip(latest_version.as_deref())
+        .map(|(installed, latest)| compare_semver(installed, latest) == std::cmp::Ordering::Less)
+        .unwrap_or(false);
+
+    QqbotPluginStatus {
+        installed: installed.is_some(),
+        enabled: installed
+            .as_ref()
+            .map(|(_, enabled)| *enabled)
+            .unwrap_or(false),
+        installed_version,
+        latest_version,
+        update_available,
+        latest_check_error,
+    }
+}
+
+#[tauri::command]
+async fn qqbot_plugin_status() -> Result<QqbotPluginStatus, String> {
+    tauri::async_runtime::spawn_blocking(qqbot_plugin_status_blocking)
+        .await
+        .map_err(|error| format!("failed to check QQ Bot plugin status: {error}"))
+}
+
 fn ensure_weixin_plugin_enabled_blocking() -> Result<String, String> {
     let enable_output = run_openclaw_command(&[
         "config",
@@ -1913,9 +2320,9 @@ fn open_weixin_plugin_install_terminal() -> Result<String, String> {
     ])?;
     let restart = openclaw_terminal_command(&["gateway", "restart"])?;
     let command_line = if cfg!(windows) {
-        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {enable}; {restart}; Write-Host 'WeChat plugin installed. Return to clawx and refresh connections.' }}")
+        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {enable}; {restart}; Write-Host 'WeChat plugin installed. Return to ClawKit and refresh connections.' }}")
     } else {
-        format!("{install} && {enable} && {restart}; echo 'WeChat plugin install flow finished. Return to clawx and refresh connections.'")
+        format!("{install} && {enable} && {restart}; echo 'WeChat plugin install flow finished. Return to ClawKit and refresh connections.'")
     };
     open_terminal_command(&command_line, "openclaw-weixin install")?;
     Ok("已打开终端安装 WeChat 插件。安装完成后请回到连接页刷新状态。".to_string())
@@ -1927,12 +2334,45 @@ fn open_weixin_plugin_update_terminal() -> Result<String, String> {
         openclaw_terminal_command(&["plugins", "update", "@tencent-weixin/openclaw-weixin"])?;
     let restart = openclaw_terminal_command(&["gateway", "restart"])?;
     let command_line = if cfg!(windows) {
-        format!("{update}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'WeChat plugin updated. Return to clawx and refresh connections.' }}")
+        format!("{update}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'WeChat plugin updated. Return to ClawKit and refresh connections.' }}")
     } else {
-        format!("{update} && {restart}; echo 'WeChat plugin update flow finished. Return to clawx and refresh connections.'")
+        format!("{update} && {restart}; echo 'WeChat plugin update flow finished. Return to ClawKit and refresh connections.'")
     };
     open_terminal_command(&command_line, "openclaw-weixin update")?;
     Ok("已打开终端更新 WeChat 插件。更新完成后请回到连接页刷新状态。".to_string())
+}
+
+#[tauri::command]
+fn open_qqbot_plugin_install_terminal() -> Result<String, String> {
+    if installed_plugin_from_registry("qqbot", "@openclaw/qqbot").is_some() {
+        let restart_output = run_openclaw_command(&["gateway", "restart"])?;
+        if restart_output.status.success() {
+            return Ok("QQ Bot 插件已安装，已尝试重启 Gateway。请回到连接页刷新状态。".to_string());
+        }
+        let stderr = String::from_utf8_lossy(&restart_output.stderr)
+            .trim()
+            .to_string();
+        return Ok(if stderr.is_empty() {
+            "QQ Bot 插件已安装。Gateway 重启状态未知，请手动执行 openclaw gateway restart。"
+                .to_string()
+        } else {
+            format!(
+                "QQ Bot 插件已安装，但 Gateway 重启失败：{stderr}。请手动执行 openclaw gateway restart。"
+            )
+        });
+    }
+
+    let install = openclaw_terminal_command(&["plugins", "install", "npm:@openclaw/qqbot"])?;
+    let restart = openclaw_terminal_command(&["gateway", "restart"])?;
+    let command_line = if cfg!(windows) {
+        format!("{install}; if ($LASTEXITCODE -eq 0) {{ {restart}; Write-Host 'QQ Bot plugin install finished. Return to ClawKit and refresh connections.' }}")
+    } else {
+        format!(
+            "{install} && {restart}; echo 'QQ Bot plugin install finished. Return to ClawKit and refresh connections.'"
+        )
+    };
+    open_terminal_command(&command_line, "openclaw-qqbot install")?;
+    Ok("已打开终端安装 QQ Bot 插件（@openclaw/qqbot）。完成后请回到连接页刷新状态。".to_string())
 }
 
 #[tauri::command]
@@ -1940,24 +2380,24 @@ fn open_openclaw_install_terminal() -> Result<String, String> {
     let install_command = if cfg!(windows) {
         "iwr -useb https://openclaw.ai/install.ps1 | iex"
     } else {
-        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw install finished. Return to clawx and click re-detect.'; else echo 'Standard installer failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
+        "if curl -fsSL https://openclaw.ai/install.sh | bash; then echo 'OpenClaw install finished. Return to ClawKit and click re-detect.'; else echo 'Standard installer failed. Retrying with the local prefix installer to avoid global npm permission issues...'; curl -fsSL https://openclaw.ai/install-cli.sh | bash; fi"
     };
     open_terminal_command(install_command, "OpenClaw install")?;
-    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 Clawx 重新检测。".to_string())
+    Ok("已打开终端开始安装 OpenClaw。安装完成后，请回到 ClawKit 重新检测。".to_string())
 }
 
 #[tauri::command]
 fn open_openclaw_update_terminal() -> Result<String, String> {
     let update = openclaw_terminal_command(&["update"])?;
     let command_line = if cfg!(windows) {
-        format!("{update}; Write-Host 'OpenClaw update flow finished. Return to clawx and refresh status.'")
+        format!("{update}; Write-Host 'OpenClaw update flow finished. Return to ClawKit and refresh status.'")
     } else {
         format!(
-            "{update}; echo 'OpenClaw update flow finished. Return to clawx and refresh status.'"
+            "{update}; echo 'OpenClaw update flow finished. Return to ClawKit and refresh status.'"
         )
     };
     open_terminal_command(&command_line, "OpenClaw update")?;
-    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 Clawx 刷新状态。".to_string())
+    Ok("已打开终端更新 OpenClaw。更新完成后，请回到 ClawKit 刷新状态。".to_string())
 }
 
 fn openclaw_gateway_service_command(action: &'static str) -> Result<String, String> {
@@ -1976,6 +2416,382 @@ fn openclaw_gateway_service_command(action: &'static str) -> Result<String, Stri
         };
         Err(detail)
     }
+}
+
+fn pet_manifest_path(path: &Path) -> Option<PathBuf> {
+    if path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("json") {
+        return Some(path.to_path_buf());
+    }
+    ["pet.json", "manifest.json", "codex-pet.json"]
+        .iter()
+        .map(|file_name| path.join(file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn slugify_pet_id(value: &str) -> String {
+    let mut slug = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if (ch == '-' || ch == '_' || ch.is_whitespace()) && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "pet".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn codex_pet_atlas() -> PetAtlas {
+    PetAtlas {
+        columns: 8,
+        rows: 9,
+        cell_width: 192,
+        cell_height: 208,
+    }
+}
+
+fn codex_pet_animations() -> HashMap<String, PetAnimation> {
+    [
+        ("idle", 0, vec![280, 110, 110, 140, 140, 320]),
+        (
+            "running-right",
+            1,
+            vec![120, 120, 120, 120, 120, 120, 120, 220],
+        ),
+        (
+            "running-left",
+            2,
+            vec![120, 120, 120, 120, 120, 120, 120, 220],
+        ),
+        ("waving", 3, vec![140, 140, 140, 280]),
+        ("jumping", 4, vec![140, 140, 140, 140, 280]),
+        ("failed", 5, vec![140, 140, 140, 140, 140, 140, 140, 240]),
+        ("waiting", 6, vec![150, 150, 150, 150, 150, 260]),
+        ("running", 7, vec![120, 120, 120, 120, 120, 220]),
+        ("review", 8, vec![150, 150, 150, 150, 150, 280]),
+    ]
+    .into_iter()
+    .map(|(state, row, frame_ms)| {
+        (
+            state.to_string(),
+            PetAnimation {
+                row,
+                frames: frame_ms.len() as u32,
+                frame_ms,
+            },
+        )
+    })
+    .collect()
+}
+
+fn resolve_pet_asset(root_path: &Path, value: Option<String>) -> Option<String> {
+    value.map(|asset| root_path.join(asset).to_string_lossy().to_string())
+}
+
+fn pet_asset_data_url(path: Option<&str>) -> Option<String> {
+    let path = path?;
+    let bytes = fs::read(path).ok()?;
+    let mime = match Path::new(path).extension().and_then(|value| value.to_str()) {
+        Some("webp") => "image/webp",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        _ => "application/octet-stream",
+    };
+    Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+fn read_pet_summary(path: &Path, source: &str) -> Option<PetSummary> {
+    let manifest_path = pet_manifest_path(path)?;
+    let raw = fs::read_to_string(&manifest_path).ok()?;
+    let draft = serde_json::from_str::<PetManifestDraft>(&raw).ok()?;
+    let base_name = path
+        .file_stem()
+        .or_else(|| path.file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or("pet");
+    let id = draft
+        .id
+        .as_deref()
+        .map(slugify_pet_id)
+        .unwrap_or_else(|| slugify_pet_id(base_name));
+    let name = draft.name.unwrap_or_else(|| id.clone());
+    let species = draft.species.unwrap_or_else(|| "pet".to_string());
+    let description = draft
+        .description
+        .unwrap_or_else(|| "从 Codex pets 目录导入的宠物。".to_string());
+    let status = draft.status.unwrap_or_else(|| "idle".to_string());
+    let root_path = if path.is_file() {
+        path.parent().unwrap_or(path).to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+    let spritesheet = resolve_pet_asset(
+        &root_path,
+        draft.spritesheet_path.or(draft.spritesheet.clone()),
+    );
+    let image = resolve_pet_asset(&root_path, draft.image).or_else(|| spritesheet.clone());
+    let has_spritesheet = spritesheet.is_some();
+    let animations = if draft.animations.is_empty() && has_spritesheet {
+        Some(codex_pet_animations())
+    } else if draft.animations.is_empty() {
+        None
+    } else {
+        Some(draft.animations)
+    };
+    Some(PetSummary {
+        id,
+        name,
+        species,
+        description,
+        status,
+        source: source.to_string(),
+        path: Some(root_path.to_string_lossy().to_string()),
+        icon: draft.icon,
+        image,
+        spritesheet_data_url: pet_asset_data_url(spritesheet.as_deref()),
+        spritesheet,
+        atlas: draft
+            .atlas
+            .or_else(|| has_spritesheet.then(codex_pet_atlas)),
+        animations,
+        compatible_with: if draft.compatible_with.is_empty() {
+            vec!["codex".to_string(), "clawkit".to_string()]
+        } else {
+            draft.compatible_with
+        },
+    })
+}
+
+fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("failed to read {}: {error}", source.display()))?
+    {
+        let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to inspect file type: {error}"))?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &target)
+                .map_err(|error| format!("failed to copy {}: {error}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn position_pet_window_bottom_right(window: &WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let Ok(window_size) = window.outer_size() else {
+        return;
+    };
+    let margin_x = 114_i32;
+    let margin_y = 176_i32;
+    let x = monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - margin_x;
+    let y = monitor_position.y + monitor_size.height as i32 - window_size.height as i32 - margin_y;
+    let _ = window.set_position(PhysicalPosition::new(
+        x.max(monitor_position.x),
+        y.max(monitor_position.y),
+    ));
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn resize_pet_window(
+    window: &WebviewWindow,
+    expanded: bool,
+    reply_count: Option<usize>,
+) -> Result<(), String> {
+    let (width, height) = if expanded {
+        let count = reply_count.unwrap_or(1).clamp(1, 6) as f64;
+        (420.0, 156.0 + count * 66.0)
+    } else {
+        (124.0, 138.0)
+    };
+
+    let anchor = window
+        .outer_position()
+        .ok()
+        .zip(window.outer_size().ok())
+        .map(|(position, size)| (position.x + size.width as i32, position.y + size.height as i32));
+
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| format!("failed to resize pet window: {error}"))?;
+
+    if let Some((anchor_x, anchor_y)) = anchor {
+        if let Ok(new_size) = window.outer_size() {
+            let _ = window.set_position(PhysicalPosition::new(
+                anchor_x - new_size.width as i32,
+                anchor_y - new_size.height as i32,
+            ));
+        }
+        let delayed_window = window.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            if let Ok(new_size) = delayed_window.outer_size() {
+                let _ = delayed_window.set_position(PhysicalPosition::new(
+                    anchor_x - new_size.width as i32,
+                    anchor_y - new_size.height as i32,
+                ));
+            }
+        });
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_codex_pets(app: AppHandle) -> Result<Vec<PetSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_clawkit_home()?;
+        sync_resource_pets_to_clawkit(&app)?;
+        let mut pets = Vec::new();
+        for (source, pets_dir) in [
+            ("codex", codex_pets_dir()?),
+            ("clawkit", clawkit_pets_dir()?),
+        ] {
+            if !pets_dir.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&pets_dir)
+                .map_err(|error| format!("failed to read {}: {error}", pets_dir.display()))?
+            {
+                let entry = entry.map_err(|error| format!("failed to read pet entry: {error}"))?;
+                if let Some(summary) = read_pet_summary(&entry.path(), source) {
+                    if !pets.iter().any(|pet: &PetSummary| pet.id == summary.id) {
+                        pets.push(summary);
+                    }
+                }
+            }
+        }
+        Ok(pets)
+    })
+    .await
+    .map_err(|error| format!("failed to list pets: {error}"))?
+}
+
+#[tauri::command]
+async fn import_codex_pet() -> Result<PetSummary, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        ensure_clawkit_home()?;
+        let picked = rfd::FileDialog::new()
+            .set_title("选择宠物目录或 pet.json")
+            .add_filter("Pet manifest", &["json"])
+            .pick_folder()
+            .or_else(|| rfd::FileDialog::new().set_title("选择 pet.json").add_filter("Pet manifest", &["json"]).pick_file())
+            .ok_or_else(|| "未选择宠物文件或目录。".to_string())?;
+        let summary = read_pet_summary(&picked, "clawkit").ok_or_else(|| {
+            "未找到可识别的宠物清单。请导入包含 pet.json、manifest.json 或 codex-pet.json 的目录。".to_string()
+        })?;
+        let pets_dir = clawkit_pets_dir()?;
+        fs::create_dir_all(&pets_dir).map_err(|error| format!("failed to create {}: {error}", pets_dir.display()))?;
+        let target_dir = pets_dir.join(slugify_pet_id(&summary.id));
+        if target_dir.exists() {
+            return Err(format!("宠物 {} 已存在。", summary.id));
+        }
+        if picked.is_dir() {
+            copy_dir_all(&picked, &target_dir)?;
+        } else {
+            let source_dir = picked.parent().ok_or_else(|| "无效的宠物文件路径。".to_string())?;
+            copy_dir_all(source_dir, &target_dir)?;
+        }
+        read_pet_summary(&target_dir, "clawkit").ok_or_else(|| "宠物已导入，但无法重新读取清单。".to_string())
+    })
+    .await
+    .map_err(|error| format!("failed to import pet: {error}"))?
+}
+
+#[tauri::command]
+async fn open_pet_window(app: AppHandle, pet_id: String) -> Result<(), String> {
+    let label = "pet";
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_always_on_top(true);
+        let _ = window.emit("clawkit://pet-selected", pet_id);
+        return Ok(());
+    }
+    let url =
+        WebviewUrl::App(format!("index.html?window=pet&petId={}", slugify_pet_id(&pet_id)).into());
+    let window = WebviewWindowBuilder::new(&app, label, url)
+        .title("ClawKit Pet")
+        .inner_size(124.0, 138.0)
+        .min_inner_size(112.0, 120.0)
+        .resizable(true)
+        .decorations(false)
+        .focusable(false)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .build()
+        .map_err(|error| format!("failed to open pet window: {error}"))?;
+    position_pet_window_bottom_right(&window);
+    let _ = window.set_always_on_top(true);
+    let _ = window.show();
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_pet_window_expanded(
+    app: AppHandle,
+    expanded: bool,
+    reply_count: Option<usize>,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("pet") {
+        resize_pet_window(&window, expanded, reply_count)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_clawkit_settings() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let raw = read_clawkit_settings_file()?;
+        let merged = merge_clawkit_settings_value(raw.clone());
+        if merged != raw {
+            write_clawkit_settings_file(&merged)?;
+        }
+        Ok(merged)
+    })
+    .await
+    .map_err(|error| format!("failed to read ClawKit settings: {error}"))?
+}
+
+#[tauri::command]
+async fn patch_clawkit_settings(patch: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = merge_clawkit_settings_value(read_clawkit_settings_file()?);
+        merge_patch_value(&mut settings, patch);
+        settings = merge_clawkit_settings_value(settings);
+        write_clawkit_settings_file(&settings)?;
+        Ok(settings)
+    })
+    .await
+    .map_err(|error| format!("failed to patch ClawKit settings: {error}"))?
 }
 
 #[tauri::command]
@@ -2008,16 +2824,26 @@ async fn openclaw_gateway_stop() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(Arc::new(RealtimeState::default()))
         .manage(Arc::new(gateway_proxy::GatewayProxyState::default()))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            if let Err(error) = ensure_clawkit_home() {
+                eprintln!("failed to initialize .clawkit: {error}");
+            }
+            if let Err(error) = sync_resource_pets_to_clawkit(app.handle()) {
+                eprintln!("failed to sync resource pets: {error}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             resolve_dashboard_url,
             load_openclaw_snapshot,
             load_session_record,
-            get_clawx_bootstrap_status,
-            ensure_clawx_binding,
+            get_clawkit_bootstrap_status,
+            ensure_clawkit_binding,
             resolve_gateway_auth,
             gateway_proxy::gateway_status,
             gateway_proxy::gateway_connect,
@@ -2031,6 +2857,7 @@ pub fn run() {
             gateway_proxy::gateway_update_status,
             gateway_proxy::gateway_cron_list,
             gateway_proxy::gateway_cron_runs,
+            gateway_proxy::gateway_cron_get,
             gateway_proxy::gateway_cron_add,
             gateway_proxy::gateway_cron_run,
             gateway_proxy::gateway_cron_update,
@@ -2039,6 +2866,10 @@ pub fn run() {
             gateway_proxy::gateway_models_auth_status,
             gateway_proxy::gateway_skills_status,
             gateway_proxy::gateway_skills_update,
+            gateway_proxy::gateway_skills_upload_begin,
+            gateway_proxy::gateway_skills_upload_chunk,
+            gateway_proxy::gateway_skills_upload_commit,
+            gateway_proxy::gateway_skills_install_upload,
             gateway_proxy::gateway_channels_status,
             gateway_proxy::gateway_web_login_start,
             gateway_proxy::gateway_web_login_wait,
@@ -2065,17 +2896,40 @@ pub fn run() {
             openclaw_cli_status,
             open_model_auth_terminal,
             weixin_plugin_status,
+            qqbot_plugin_status,
             ensure_weixin_plugin_enabled,
             open_weixin_login_terminal,
             open_weixin_plugin_install_terminal,
             open_weixin_plugin_update_terminal,
+            open_qqbot_plugin_install_terminal,
             open_openclaw_install_terminal,
             open_openclaw_update_terminal,
+            list_codex_pets,
+            import_codex_pet,
+            open_pet_window,
+            set_pet_window_expanded,
+            get_clawkit_settings,
+            patch_clawkit_settings,
+            unsigned_update::clawkit_cargo_pkg_version,
+            unsigned_update::clawkit_unsigned_update_probe,
+            unsigned_update::clawkit_unsigned_update_download,
+            unsigned_update::clawkit_unsigned_update_install,
             openclaw_gateway_start,
             openclaw_gateway_stop,
             subscribe_gateway_realtime,
             unsubscribe_gateway_realtime
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(desktop)]
+        if matches!(event, tauri::RunEvent::Ready) {
+            show_main_window(app_handle);
+        }
+        #[cfg(target_os = "macos")]
+        if matches!(event, tauri::RunEvent::Reopen { .. }) {
+            show_main_window(app_handle);
+        }
+    });
 }
